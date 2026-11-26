@@ -3,7 +3,15 @@ title: 快速开始
 description: 启动 Lens、部署模型并发送第一个请求。
 ---
 
-按这条路径获得模型回复：**安装 Lens → 添加集群 → 部署模型 → 发布服务 → 发送请求**。
+## 选择使用方式
+
+| 如果你想…… | 使用方式 | 下一步 |
+| --- | --- | --- |
+| 使用可视化控制台、Model Catalog 与多集群治理 | **Web 控制台** | 按下方步骤完成演练 |
+| 无需 Lens 服务器，在单个命名空间内部署与滚动升级 llm-d 栈 | **独立 `llmd` CLI**（`apps/lens`） | 通过 `pip install -e ./apps/lens` 安装并参阅 [CLI 参考](/cli-reference)（`llmd` 为完整 CLI，`lens` 当前仅是 `--version`/`--help` 存根） |
+| 让 `opencode`、Claude Code、Cursor 或 Codex 驱动 Lens | **Agent Tools（Lens MCP）**（`POST /api/mcp`） | 创建 `lens-pat-*` 令牌并参阅 [MCP 集成](/mcp)（与内部 `/api/assistant/mcp` 区分） |
+
+下方演练以 **Web 控制台** 路径为例：**安装 Lens → 添加集群 → 部署模型 → 发布服务 → 发送请求**。
 
 ## 1. 安装并打开 Lens
 
@@ -20,32 +28,34 @@ VERSION=main && curl -fsSL "https://raw.githubusercontent.com/llm-d-incubation/l
 VERSION=main && wget -qO- "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" | bash
 ```
 
-接受安装器默认值，或填写自己的安装目录和端口。
-完成后打开安装器打印的地址，使用自动生成的管理员凭据登录。
+接受安装器默认值（安装目录 `$HOME/llm-d-lens`，统一应用/API 端口 `3000`），或填写自己的目录和端口。
+完成后打开安装器打印的地址（默认 `https://localhost:3000`），使用自动生成的管理员凭据登录。
 安装器会打印保存凭据的 mode-600 文件路径；修改密码后该文件会被删除。
 提示从终端读取，校验源码后在当前目录保存安装器副本。安装目录必须是新建或空目录。
-从源码运行的方式见[安装指南](/installation)。
+从源码运行或仅安装独立 `llmd` CLI 的方式见[安装指南](/installation)。
 
 ## 2. 添加集群并部署模型
 
-1. 在 **Clusters（集群）**中点击 **Add**，上传集群的 kubeconfig。
+1. 在 **Clusters（集群）** 中点击 **Add**，上传集群的 kubeconfig。
+   - **非管理员集群接入：** 支持命名空间作用域的 `edit` kubeconfig——在 **Preflight** 阶段，Lens 会将集群级前置操作拆分为编排管理员交接脚本。请管理员执行后点击 **Re-check**，再点击 **Execute**。
+   - **自定义集群 vLLM 镜像：** 在 **llm-d stack** 向导步骤中，可选填写自定义的 **vLLM image** OCI 镜像引用，用于覆盖硬件配置默认镜像。详见[集群](/user-guide/clusters)。
 2. 完成代理、网关、加速器、软件准备和模型缓存步骤，再按 **Review → Preflight → Execute → Complete → Done** 操作。
-3. 在 **Model cache（模型缓存）**中将模型下载到缓存卷，等待就绪。
-4. 在 **Model Market（模型市场）**中选择模型和集群，点击 **Manual → Configure deployment**，使用 llm-d Guide 部署。
+3. 在 **Model Cache（模型缓存）** 中将模型下载到缓存卷，等待就绪。
+4. 在 **Model Catalog** 中选择内置模型（或点击 **Add custom model** 注册自定义目录条目）并选择目标集群，点击 **Manual → Configure deployment** 使用 llm-d Guide 部署（也可使用 **Agentic** 规划生成按负载引导的推荐方案）。
 5. 选择 **optimized-baseline**，检查推荐资源，再点击 **Generate YAML → Confirm & generate → Next**。
-6. 在 **Deployments（部署）**中等待 **Ready（就绪）**。
+6. 在 **Deployments（部署）** 中等待 **Ready（就绪）**。
 
-逐项填写方法见[添加集群并部署模型](/tutorials/bootstrap-and-deploy)。
+逐项填写方法见[添加集群并部署模型](/tutorials/bootstrap-and-deploy)与 [Model Catalog](/user-guide/model-market)。
 
 ## 3. 发布并调用模型
 
-1. 在 **Model services（模型服务）**中点击 **Add model service**，选择集群、填写公开模型名称，点击 **Create**。
-2. 点击 **Add model server**，依次选择集群、模型服务和部署，再点击 **Add provider**。
-3. 在 **API keys** 中点击 **New key**，创建并立即保存密钥。
-4. 在 **My services（我的服务）**中找到模型，点击 **cURL**。
+1. 在 **Model Services（模型服务）** 的 **Service Flow** 中点击 **Add model**。
+2. 选择集群，挑选已有服务或输入供调用方使用的公开模型名称，选择就绪的部署，然后点击 **Add**。
+3. 在 **My Resources → API Keys** 中点击 **New key**，创建密钥（`lens-mk-...`）并立即保存。
+4. 在 **My Resources → Services**（页面标题为 *My services*）中找到模型，点击 **cURL**。
 5. 复制请求，将 `lens-mk-...` 替换成自己的密钥，在终端运行。
 
-**收到模型回复即表示调用成功。**网关未就绪时，按[发布模型服务](/tutorials/publish-a-model-service)完成安装和检查。
+**收到模型回复即表示调用成功。** 网关未就绪时，按[发布模型服务](/tutorials/publish-a-model-service)完成安装和检查。
 
 ## 4. 测量性能
 

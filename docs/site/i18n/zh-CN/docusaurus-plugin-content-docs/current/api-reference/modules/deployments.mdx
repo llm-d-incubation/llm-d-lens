@@ -3,8 +3,12 @@ title: 部署
 description: Lens 部署功能背后的主要部署运行、执行和用例 API。
 ---
 
+模型选择和本次部署参数覆盖使用 [Model Catalog](/user-guide/model-market)。自定义条目和 API 字段参见[目录 API](/api-reference/modules/model-market)。
+
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
+
+新建 Router 部署默认解析为 `standalone_router`，不依赖共享 Gateway 是否就绪。渲染 Router 时根据集群 provider 统一配置 EPP/Proxy 协议。发布或解绑 Model Service 单独管理路由，不改变已记录的部署数据平面；显式选择或历史记录中的 Gateway-only 配置仍受支持。
 
 ## DisaggregatedSet 审核计划
 
@@ -621,7 +625,65 @@ def simulation_projection(execution: DeploymentExecution) -> SimulationDeploymen
     return execution.simulation_input()
 ```
 
+## 硬件渲染契约
+
+部署能力元数据描述的是提供方行为；其 `variants` 数组为空，因为变体归属于所选的源码目录。
+渲染与评估使用解析后的硬件 profile 来确定镜像、加速器资源和调度策略。旧版配置可以从其渲染出的 DRA 或扩展资源请求中解析硬件；相互冲突的硬件证据将被拒绝。
+
+Python 调用方也可以在渲染前检查相同的源码入口：
+
+```python
+from pathlib import Path
+from llm_d_lens.deploy.providers.hardware_profile import guide_overlays
+
+variants = guide_overlays(
+    Path("/path/to/llm-d"), "optimized-baseline", accelerator="nvidia",
+)
+print(sorted(variants))
+```
+
 ## 后端 API
+
+### 部署检查
+
+| 方法及路径（前缀 `/api/v1/deployments`） | 权限 | 结果 |
+| --- | --- | --- |
+| `POST /executions/{execution_id}/verifications` | `deployment:execution:connect` | `202`，已持久化的 queued 检查 |
+| `GET /executions/{execution_id}/verifications` | `deployment:run:read` | `{items: [...]}`，最近 20 条，最新在前 |
+| `GET /executions/{execution_id}/verifications/{verification_id}` | `deployment:run:read` | 单条已保存记录，不存在则 `404` |
+
+三个入口均校验部署资源范围。POST 接受 `checks`（`chat`、`prefix_cache`
+的非空无重复子集，默认 `["chat"]`）和严格整数
+`requests`（1–20，默认 10）。prefix cache 要求总预算至少 10，其中六次用于重复前缀。
+非法请求体返回 `422`；部署未 ready、缺少 model 或已有活跃检查时返回 `409`。
+
+记录包括 `id`、`execution_id`、`request`、`status`（`queued|running|succeeded|failed`）、
+时间戳、`requests_sent`、`requests_completed`、`requests_succeeded`、`output_tokens`、
+`max_output_tokens`；完成后包含 `verdict`、`evidence_sufficient` 和 `checks[].evidence`。
+已尝试数在 HTTP 发出前计数，completed 指收到 HTTP 响应，不等于成功 completion。
+不暴露模型回复文本或 owner 身份。任务完成和证据判定分开；新任务不接受 KV/rank/routing
+检查，旧记录仍可读取。零值或缺失缓存计数保持 inconclusive；其他请求的网络错误不会掩盖
+已经观察到的 chat 失败。单个请求超时为 10 秒，整个检查超时为 120 秒，超时后标记失败并保留已达到的计数；后端重启时遗留的未完成任务在下次启动时标记失败，不自动重放（这假定只有一个 Lens 后端进程，与 Lens 其他后台任务一致）。
+`prefix_cache` 检查只证明单个模型服务器复用了重复的 prompt 前缀，不测试 llm-d 的前缀感知路由；vLLM 只有在使用 `--enable-prompt-tokens-details` 启动时才返回 `cached_tokens`，否则结论保持 `inconclusive`。
+读取无生命周期副作用。记录位于现有 diagnostics JSON，stop/clean 后保留，删除 execution
+历史时移除；活跃检查注册为部署消费者。
+
+```python
+from llm_d_lens.deploy.verification import start_verification, get_verification
+from llm_d_lens.deploy.verification_checks import VerificationRequest
+
+# Inside an authorized async request/task on the Lens host:
+task = start_verification("execution-1", VerificationRequest(checks=["chat"], requests=2))
+saved = get_verification("execution-1", task["id"])  # persisted-only read
+```
+
+服务函数要求调用者先完成资源鉴权；公共 REST 路由为 Web 和 MCP 执行相同校验。无需数据库迁移。
+
+停止、清理、重启及删除操作会先检查 Deploy 注册的 usage probe，再修改工作负载或删除记录。
+活跃 evaluation 消费者及已发布的 model-service member 会以 HTTP `409` 和
+`deployment_in_use` 阻止操作；销毁前需先取消发布 member。probe 失败时保守拒绝操作。
+删除 run 会在开始清理前检查所有 case。Python worker 调用者收到
+`deploy.usage.DeploymentInUseError`（`ValueError` 子类）。这些状态检查不提供针对并发启动消费者的原子预留锁。
 
 Guide 兼容端点保留 `{ "error": "..." }` 响应结构。
 预期的校验失败保留可操作的错误提示及状态码。
@@ -647,6 +709,13 @@ Guide 兼容端点保留 `{ "error": "..." }` 响应结构。
 [存储环境设置](/environment-variables)。旧 `.llm-d-bench/deploy` 和主机专属的
 `/root/.llm_d_lens/run_store` 不再是当前存储契约。
 执行发现使用 `execution_id` 作为跨模块引用，列表查询不会建立端口转发。
+
+execution 列表与详情 REST 响应还返回 `run_id`、`case_id`、`ownership`（`self`、`other`、`unknown`）
+和 `capabilities`（`update`、`stop`、`delete`）。能力按当前调用者及写操作相同的 RBAC 规则计算，
+仅供提示，写操作仍会重新鉴权；不会返回 owner 用户/组 ID。来源 run 存在时，详情中的
+`configuration` 是按 case 的 `source_configuration_ordinal` 选出的完整 `DeployableConfiguration`。
+这是保存的配置，不是从手动扩缩容后的现场状态重建的配置。
+Python `ExecutionContext.api_payload()` 保持中立运行时投影；调用者相关字段由 REST router 添加。
 需要主机可达地址时应调用执行端点连接操作，不能假定持久化的集群内地址或旧隧道仍然可达。
 
 | 记录 | 生命周期状态 |
@@ -902,6 +971,29 @@ Python 开发接口，尚未接入 HTTP、MCP、配置页面或 Agentic 调度�
 `execution_diagnostics` 按配置指纹保留失败执行元数据。原生 stderr 仅是诊断文本，
 不是结构化容量结论；未知进程失败继续保持 failed／unknown，不根据内存相关措辞
 静默判定配置不可行。
+
+### 列出部署节点标签
+
+列出调用方有权限访问的集群节点上的不重复键/值标签。高级放置（Advanced placement）使用这些值来填充其可选的节点标签选择器。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/deployments/node-labels?cluster_id=cluster-a`**
+
+    查询参数：`cluster_id`（必需的集群 ID）。响应：
+
+    ```json
+    {"items": [{"key": "pool", "value": "accelerator"}]}
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_lens.deploy.router import list_deployment_node_labels
+
+    labels = await list_deployment_node_labels(cluster_id="cluster-a", request=authenticated_request)
+    ```
+  </TabItem>
+</Tabs>
 
 ### 启动一次部署运行
 
@@ -2281,7 +2373,7 @@ SSH 传输和远程命令失败返回 `502` 及
 需认证的 SSH 操作要求 `target.host`、`username`、`hostFingerprint`
 以及非空、由数字 ID 字符串构成的 `cards` 数组。`port` 默认 22；
 `authMethod` 默认 `agent`，还支持 `key`、`password`。
-Agent 模式要求 BFF 有 `SSH_AUTH_SOCK`；key 模式要求服务端 `keyPath`
+Agent 模式要求后端有 `SSH_AUTH_SOCK`；key 模式要求服务端 `keyPath`
 位于 `PRISM_SSH_KEY_DIR` 下，默认 `$HOME/.ssh`。
 Password 模式在每次请求的 `credentials.password` 中提供密码，不保存也不返回。
 指纹发现不执行认证，也不要求 cards。使用前应通过可信渠道确认指纹；
@@ -2293,7 +2385,7 @@ SSH／命令失败通常为 `502`。网关认证和权限错误使用网关的 P
 
 ### Remote 操作的 Python HTTP 客户端
 
-这些 Node 端点**没有 Python 服务层等价方法**，下方 Python 页签使用此 HTTP helper。
+这些兼容 HTTP 路由**没有独立的 Python 服务层调用封装**，下方 Python 页签使用此 HTTP helper。
 示例环境变量只是客户端输入，不是新增的 Lens 服务端配置。
 从已登录的 Lens 会话取得值，切勿提交其内容。
 
@@ -2342,7 +2434,7 @@ target = {
 }
 ```
 
-值来自 BFF 环境：repository 优先 `LLM_D_ROOT`，然后 `LLM_D_REPOSITORY`，
+值来自后端环境：repository 优先 `LLM_D_ROOT`，然后 `LLM_D_REPOSITORY`，
 否则为空，没有主机专属的默认 checkout；branch 来自 `LLM_D_BRANCH`。
 代理优先 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`，其次是对应的 `LLM_D_` 变量。
 挂载字段来自 `LLM_D_MOUNT_PATH`、`LLM_D_MOUNT_MODEL_NAME`。
@@ -3110,6 +3202,17 @@ payload = request.model_dump(mode="json")
 清理中断任务时，取消端点接受可选查询参数 `cluster_session_id`，必须指向原测试集群；其他集群会返回 HTTP 409。
 
 `guideComposition.nativeCpuCacheGiB` 支持两种角色均使用内置 NixlConnector/kv_both 的 `pd-disaggregation`。适配器生成有序 MultiConnector 子连接器及相同镜像的能力检查初始化容器，保存的清单必须保留两者。实测优化中的 `native_cpu_cache_gib` 也会添加 P/D 变体。缺少适配器、镜像不匹配、角色缺失或缓存预算被修改均会校验失败。能力检查不能替代负载正确性测试和基准测试。
+
+`GET /api/guide-planning/catalog?clusterId=...` 还返回 `rdmaAccelerators`，列出该集群
+已公布 RDMA DeviceClass 的硬件配置变体 ID。缺少对应资源或发现不可用时返回空列表。
+配置编辑器仅在新建 PD 配置且来源提供 RDMA 变体时使用此默认值；已保存或手动选择的变体
+会保留。这表示能力发现，并不保证网络健康或部署就绪。
+
+AIC 结果解析会在序列化前规范化缺失的可选数据值，并拒绝非有限值或无效的拓扑数量。
+无效原生结果转换为受控的 AIC 错误，不再作为未捕获的服务器错误。
+候选兼容接口可返回经过明确标记的初始化或依赖诊断；未分类的异常细节仍仅记录在后端日志中。
+
+`manual` 等实验名称仅为标签，不代表服务模式。适配器根据结果的拓扑列识别聚合或 PD 模式，也适用于带延迟目标的精确估算。
 
 ## 按命名空间的权限预检与编排平台管理员脚本交接
 

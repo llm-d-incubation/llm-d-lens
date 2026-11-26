@@ -31,7 +31,7 @@ export function hasPermission(permissions = [], required) {
 export const VIEW_PERMISSIONS = {
     welcome: ['cluster:cluster:read'],
     'welcome/issues': ['cluster:cluster:read'],
-    'model-market': ['deployment:run:read'],
+    'model-market': ['model-catalog:entry:read', 'deployment:run:read'],
     'optimization-deployments': ['deployment:run:read'],
     'optimization-evaluate': ['evaluate:run:read'],
     // New-evaluation wizard: create a deploy-and-benchmark workflow, deploy an

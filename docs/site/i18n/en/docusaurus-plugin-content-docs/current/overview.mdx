@@ -1,39 +1,49 @@
 ---
 title: Overview
-description: Find the steps for deploying, calling and evaluating models with Lens.
+description: Choose how to operate Lens and find the steps for deploying, calling and evaluating models.
 ---
 
-Lens is a web console for running large language models on Kubernetes with
-[llm-d](https://llm-d.ai/). Use it to deploy a model, publish an API endpoint,
-and measure its performance.
+Lens operates [llm-d](https://llm-d.ai/) on Kubernetes through **three usage paths**. Choose the path that matches your workflow — or combine them across teams:
 
-## First time using Lens?
+## Choose your path
+
+| Usage path | Choose this when you want... | Runtime & auth | Start here |
+| --- | --- | --- | --- |
+| **1. Web GUI** | Multi-cluster governance, visual Manual/Agentic deployment planning, Model Catalog, guided Evaluation, Trace Replayer, Model Services, Observability, and built-in Lens Assistant | Browser console (`apps/frontend`) served by the unified Python FastAPI backend (`apps/backend`, `llm_d_lens :3000`) + PostgreSQL; session + RBAC | [Quickstart](/quickstart) |
+| **2. Standalone `llmd` CLI** | Cluster-admin-free, namespace-scoped GitOps or terminal deployments directly against Kubernetes/OpenShift without running a Lens server | `apps/lens` (`llm-d-lens-engine`), pure Python 3.11+ & `PyYAML` only (`kubectl`/`oc`, `helm`, `git`, `kustomize`); user kubeconfig (`-n <namespace>`) | [CLI reference](/cli-reference) |
+| **3. Agent Tools via MCP** | Coding or ops agents (`opencode`, Claude Code, Cursor, OpenAI Codex CLI) driving deployments, verification, benchmarks, and Model Services through Lens | Stateless Streamable HTTP `POST /api/mcp` (`Bearer lens-pat-*`, `46` task tools across `6` profiles; separate from internal `/api/assistant/mcp`) | [MCP integration](/mcp) |
+
+> **`llmd` vs `lens`:** Always run `llmd` for standalone CLI operations (`llmd` maps to `lens.cli:main` with all 12 top-level subcommands); `lens` (`lens.__main__:main`) is currently a `--version`/`--help` stub only.
+
+Once a model service is published, inference clients (OpenAI/Anthropic SDKs or `curl`) call the cluster's Shared Gateway directly with `Authorization: Bearer lens-mk-*`.
+
+## First time using the Web GUI?
 
 Follow [Quickstart](/quickstart) to install Lens and get your first model response.
 The normal path is:
 
-1. [Add a cluster](/user-guide/clusters).
+1. [Add a cluster](/user-guide/clusters) (full admin or non-admin handoff, with optional custom cluster vLLM image).
 2. [Prepare storage](/user-guide/storage) and [download model weights](/user-guide/model-cache).
-3. [Deploy a model](/user-guide/model-market) and wait for it to be ready.
+3. [Deploy a model](/user-guide/model-market) from **Model Catalog** and wait for it to be ready.
 4. [Publish a service and create an API key](/tutorials/publish-a-model-service).
 5. [Run an evaluation](/tutorials/evaluate-a-deployment).
 
-## Find your task
+## Find your task in the Web GUI
 
 | I want to... | Open |
 | --- | --- |
-| Choose and deploy a model | [Model Market](/user-guide/model-market) |
-| Check deployment status or read pod logs | [Deployments](/user-guide/deployments) |
-| Call a model or manage API keys | [Model services](/user-guide/model-services) |
+| Choose, customize, and deploy a model | [Model Catalog](/user-guide/model-market) |
+| Check deployment status, scale, or read pod logs | [Deployments](/user-guide/deployments) |
+| Call a model or manage API keys | [Model Services](/user-guide/model-services) |
 | Compare latency and throughput | [Evaluation](/user-guide/evaluation) |
-| Replay a request trace | [Simulation](/user-guide/simulation) |
+| Replay a request trace | [Trace Replayer](/user-guide/simulation) |
 | Connect a cluster or maintain its nodes | [Clusters](/user-guide/clusters) |
 | Create or remove a storage volume | [Storage](/user-guide/storage) |
-| Download models or free cache space | [Model cache](/user-guide/model-cache) |
+| Download models or free cache space | [Model Cache](/user-guide/model-cache) |
 | Open monitoring dashboards | [Observability](/user-guide/observability) |
-| Connect an external AI provider | [External providers](/user-guide/external-providers) |
-| Ask the assistant about resources | [Lens Assistant](/user-guide/lens-assistant) |
-| Manage users and access | [Administration](/user-guide/administration) |
+| Connect an external AI provider | [External Providers](/user-guide/external-providers) |
+| Ask the in-product assistant about resources | [Lens Assistant](/user-guide/lens-assistant) |
+| Manage users, groups, roles, and access | [Administration](/user-guide/administration) |
 
 ## Get help
 
@@ -41,5 +51,6 @@ For a failed operation, read its error message and logs, then check
 [Troubleshooting](/troubleshooting). If a resource or action is missing, ask an
 administrator to check your permissions.
 
-For automation, use the [API reference](/api-reference). Implementation details
-are in [Architecture](/architecture), separate from the operating instructions.
+For programmatic or agent automation, use [MCP integration](/mcp) (`POST /api/mcp`)
+or the [API reference](/api-reference). Implementation details are in
+[Architecture](/architecture), separate from the operating instructions.

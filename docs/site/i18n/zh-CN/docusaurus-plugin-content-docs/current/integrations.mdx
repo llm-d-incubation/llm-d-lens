@@ -1,22 +1,32 @@
 ---
 title: 集成
-description: 将兼容 OpenAI 的客户端和工具指向一个已发布的模型服务。
+description: 连接兼容 OpenAI 的推理客户端、通过 Lens MCP 接入编程与运维智能体，以及配置出站 LLM 提供方。
 ---
 
-一个已发布的[模型服务](/user-guide/model-services)是一个标准的、
-兼容 OpenAI 的端点，因此任何支持该 API 的客户端或框架都可以
-通过设置其基础 URL 和 API 密钥来调用它——无需任何 Lens 专属客户端。
+Lens 在三个方向上与外部工具和应用集成：
 
-## curl
+| 方向 | 调用关系 | 凭据 | 参考文档 |
+| --- | --- | --- | --- |
+| **1. 已发布的模型服务** | 应用 / SDK 调用集群的共享 Gateway（`HTTPRoute` / `InferencePool`） | 模型 API 令牌（`lens-mk-...`） | [调用已发布的模型服务](#调用已发布的模型服务) |
+| **2. 编程与运维智能体** | `opencode`、Claude Code、Cursor、Codex CLI 或 MCP 客户端通过 `POST /api/mcp` 驱动 Lens | 个人访问令牌（`lens-pat-...`） | [Lens MCP 集成](/mcp) |
+| **3. 出站 LLM 提供方** | Lens Assistant 与智能体部署规划器调用 OpenAI、Anthropic、Azure OpenAI 或自托管端点 | 已保存的[外部服务提供方](/user-guide/external-providers)凭据 | [Lens Assistant 自己的提供方](#lens-assistant-自己的提供方) |
+
+---
+
+## 调用已发布的模型服务
+
+一个已发布的[模型服务](/user-guide/model-services)通过集群共享 Gateway 暴露标准的兼容 OpenAI 端点（`/v1/chat/completions`、`/v1/models`）以及兼容 Anthropic 端点（`/v1/messages`，使用 `x-api-key: lens-mk-...`），因此任何兼容的客户端或框架都可以通过设置其基础 URL 和模型 API 令牌（`lens-mk-...`，在 **My Resources → API Keys** 页面创建）直接调用它——无需任何 Lens 专属客户端。
+
+### curl
 
 ```bash
 curl http://<edge-host>:<edge-port>/v1/chat/completions \
-  -H "Authorization: ******" \
+  -H "Authorization: Bearer lens-mk-..." \
   -H "Content-Type: application/json" \
   -d '{"model":"Qwen/Qwen3-8B","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
-## OpenAI Python SDK
+### OpenAI Python SDK
 
 ```python
 from openai import OpenAI
@@ -31,17 +41,20 @@ response = client.chat.completions.create(
 )
 ```
 
-## LangChain / LlamaIndex / 其他兼容 OpenAI 的框架
+### LangChain / LlamaIndex / 其他兼容 OpenAI 的框架
 
-任何接受为"兼容 OpenAI"的提供方自定义 `base_url` 和 `api_key` 的框架，
-使用方式都是一样的——将它指向 `http://<edge-host>:<edge-port>/v1`，
-并使用一个 Lens API 令牌（`lens-mk-...`，从
-[模型服务](/user-guide/model-services)页面签发）。
+任何接受为“兼容 OpenAI”的提供方自定义 `base_url` 和 `api_key` 的框架，使用方式都是一样的——将它指向 `http://<edge-host>:<edge-port>/v1`，并使用一个 Lens 模型 API 令牌（`lens-mk-...`）。
+
+---
+
+## 通过编程与运维智能体驱动 Lens（Lens MCP）
+
+外部编程与运维智能体（`opencode`、Claude Code、Cursor、OpenAI Codex CLI、MCP Inspector 或自定义 Streamable HTTP 客户端）可以使用个人访问令牌（`lens-pat-...`，在 **Account → Personal access tokens** 创建），通过 **`POST /api/mcp`** 端到端驱动 Lens——包括查看 GPU/PCIe 拓扑、规划和创建部署、运行校验检查、执行基准测试、对比结果以及发布模型服务。
+
+客户端配置标签页、profile 控制（`LENS_MCP_PROFILES`）以及全部 46 个工具的说明参见 [MCP 集成](/mcp)。
+
+---
 
 ## Lens Assistant 自己的提供方
 
-[Lens Assistant](/user-guide/lens-assistant) 和智能体部署规划走的是
-相反的方向：此时 Lens 是*客户端*，它会调用你所配置的
-[外部服务提供方](/user-guide/external-providers)（OpenAI、
-Azure OpenAI、Anthropic，或一台自托管的兼容 OpenAI 的服务器——
-而这台服务器本身也可以是另一个 Lens 模型服务）。
+[Lens Assistant](/user-guide/lens-assistant) 和智能体部署规划走的是相反的方向：此时 Lens 是*客户端*，它会调用你所配置的[外部服务提供方](/user-guide/external-providers)（OpenAI、Azure OpenAI、Anthropic，或一台自托管的兼容 OpenAI 的服务器——而这台服务器本身也可以是另一个 Lens 模型服务）。

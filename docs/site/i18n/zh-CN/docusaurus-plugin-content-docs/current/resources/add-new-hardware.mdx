@@ -12,6 +12,18 @@ slug: /resources/add-new-hardware
 
 ---
 
+## 部署与评估配置
+
+针对 Deploy 与 Evaluation，请扩展现有 profile，而不是在领域代码中添加厂商分支。`deployment.overlay_root` 接受 `{guide}`、`{variant}`（即 profile 的 `upstream_variant`）以及 `{model_server}`。实际的 Guide 变体会自动从所选源码的 Kustomization 文件中发现；请勿在 JSON 中枚举它们。嵌套的 overlay 路径会被保留。
+
+配置 `deployment.runtime_image`、`managed_image_repositories`、`runtime_class_matchers`、`node_selector` 与 `modes`。每个模式需声明 `request_model`，以及 DRA 的 `device_class` / `claim_request_name` 或扩展资源的 `resource_names`。PCI 过滤还需要 `supports_pci_allowlist`、`pci_attribute_domain` 与 `pci_attribute`。默认值不会覆盖自定义镜像。
+
+在 `telemetry` 中声明 `device_metric_sources`，包含指标名称、匹配器、单位、缩放比例、`output_unit`、`aggregation` 与 `tile_aggregation`。配置 `label_schema`、`allocation_join`、`allocation`（驱动、PCI 属性、节点标签以及可选的设备名称模式）、`source_label`，以及用于直接快照的可选 `scrape_path`。保持 `device_metrics` 中的 Prometheus 表达式与这些数据源一致。`planning.discovery` 负责发现命令与解析器设置；`planning.memory_models` 包含特定硬件的容量回退值。
+
+当 DRA 驱动发布 PCIe 根（PCIe-root）拓扑时，可添加可选的 `placement` 块。`root_attribute` 指定将设备分组到各根的 ResourceSlice 属性；`nic_driver`、`nic_rdma_attribute` 与 `nic_numa_attribute` 描述每个根上的 RDMA 网卡。Lens 使用它来计算每个根的可用容量以及放置探针（placement probe）；未配置该块时，硬件仅报告总容量。
+
+修改 profile 后请运行 hardware/deploy/evaluate 测试。新增 profile 还必须通过 `schema.json` 校验，并对照其目标 llm-d 版本验证 Guide 渲染。
+
 ## AIC 硬件身份与数据覆盖
 
 `planning.aic_system_models` 将具体设备名称映射到 AISimulate system。
@@ -39,11 +51,11 @@ NVIDIA profile 将明确的 A100/H100 PCIe 名称映射为 `a100_pcie`/`h100_pci
 | 目的 | 随 Lens 一起发布的第一方支持 | 单独分发的厂商/附加组件 |
 | Profile JSON | `llm_d_lens/hardware/profiles/<id>.json`（作为数据打包，自动加载） | **你的**包内的 JSON，由你的 `load_profiles()` 返回 |
 | Provider 代码 | `llm_d_lens/hardware/providers/<id>.py` | **你的**包内的一个模块 |
-| 入口点 | 在**本仓库**的 `pyproject.toml` 中声明 | 在**你的**包的 `pyproject.toml` 中声明 |
+| 入口点 | 在**本仓库**的 `apps/backend/pyproject.toml` 中声明 | 在**你的**包的 `pyproject.toml` 中声明 |
 | 发现来源 | 内置的 `profiles/*.json` **以及** `llm_d_lens.hardware.*` 入口点组 | 仅 `llm_d_lens.hardware.*` 入口点组 |
 | 安装方式 | 随 Lens 一起发布（无需额外安装） | 在后端的 Python 环境中 `pip install <你的包>`，然后重启 |
 | 发布耦合 | 随 Lens 一起发布 | 自有版本——新增/更新它**不会**改动任何 Lens 源码 |
-| 测试 | `llm_d_lens/hardware/test_*.py` | 你的包自身的测试（镜像同一契约） |
+| 测试 | `apps/backend/tests/unit/hardware/test_*.py` | 你的包自身的测试（镜像同一契约） |
 | 上游 overlay | 必需（共享） | 必需（共享） |
 
 这两种模式都不会触及任何领域：profile + provider 是唯一的厂商接触面。只有当 Lens 打算第一方支持某种硬件时才选择**内置**；否则就发布一个**外部插件**，让本仓库保持不变。
@@ -63,10 +75,10 @@ NVIDIA profile 将明确的 A100/H100 PCIe 名称映射为 `a100_pcie`/`h100_pci
 | 制品 | 内置位置 | 外部插件位置 | 是否必需？ |
 |---|---|---|---|
 | 硬件 profile（JSON） | `llm_d_lens/hardware/profiles/<id>.json` | 你的包（由 `load_profiles()` 返回） | 是 |
-| 入口点声明 | 本仓库的 `pyproject.toml` | 你的包的 `pyproject.toml` | 是 |
+| 入口点声明 | 本仓库的 `apps/backend/pyproject.toml` | 你的包的 `pyproject.toml` | 是 |
 | Python provider | `llm_d_lens/hardware/providers/<id>.py` | 你的包 | 可选（用于驱动自动安装 / 遥测时需要） |
 | 部署 overlay | 上游 llm-d 的 `guides/*/modelserver/<variant>/...` | 相同（共享） | 是（通常已经存在） |
-| 测试 | `llm_d_lens/hardware/test_*.py` | 你的包的测试 | 是 |
+| 测试 | `apps/backend/tests/unit/hardware/test_*.py` | 你的包的测试 | 是 |
 
 ---
 
@@ -185,17 +197,17 @@ ls "$LLM_D_ROOT/guides/optimized-baseline/modelserver"
 
 | 字段 | 用途 | 使用方 |
 |---|---|---|
-| `accelerator_keys` | Lens/AIC 中的硬件键 | `server/candidateSearch.ts`、`deploy/capabilities.py` |
-| `benchmark_profile` / `evaluation_profile` | 基准测试中 `accelerator.profile` 的值 | `evaluate/router.py` |
+| `accelerator_keys` | Lens/AIC 中的硬件键 | `estimate_tools/aic/service.py`、`deploy/capabilities.py` |
+| `benchmark_profile` / `evaluation_profile` | 基准测试中 `accelerator.profile` 的值 | `evaluation/router.py` |
 | `upstream_variant` / `upstream_vendor` | 定位 overlay、解析身份标识 | `deploy/runtime/composition.py`、解析器 |
-| `request_model` | DRA 还是扩展资源 | `deploy/providers/*`、`server/guidePlanning.ts` |
+| `request_model` | DRA 还是扩展资源 | `deploy/providers/*`、`apps/frontend/src/pages/optimization/ui/OptimizationWorkspace/guidePlanningBackend.js` |
 | `device_classes` / `resource_prefixes` | 设备计数、DRA/扩展资源检测 | `cluster/service.py` |
 | `node_label_selector` | 节点过滤、GPU 计数 | `cluster/service.py`、驱动 |
 | `driver` | 驱动/插件安装来源 | `monitoring/gpu_driver/` |
 | `presence` | 阻塞型硬件存在性预检 | `gpu_driver` + `accelerator` 预检 |
-| `telemetry` | 指标查询与归因 | `monitoring/profiling/`、`evaluate/router.py` |
-| `planning.aic_system_patterns` | AIC 系统名称匹配 | `configuration/capability.py`、`server/candidateSearch.ts` |
-| `ui` | 厂商选项卡、面板、图表标题 | `src/components/**` |
+| `telemetry` | 指标查询与归因 | `monitoring/profiling/`、`evaluation/router.py` |
+| `planning.aic_system_patterns` | AIC 系统名称匹配 | `configuration/capability.py`、`estimate_tools/aic/service.py` |
+| `ui` | 厂商选项卡、面板、图表标题 | `apps/frontend/src/**` |
 
 ---
 
@@ -203,7 +215,7 @@ ls "$LLM_D_ROOT/guides/optimized-baseline/modelserver"
 
 两种模式声明相同的两个入口点组；区别仅在于声明它们的文件不同。入口点的**名称**必须与 profile 的 `id` 相同。
 
-**内置** —— 添加到**本仓库**的 `pyproject.toml` 中（JSON 已经自动从 `profiles/` 加载；入口点使 provider 可被解析）：
+**内置** —— 添加到**本仓库**的 `apps/backend/pyproject.toml` 中（JSON 已经自动从 `profiles/` 加载；入口点使 provider 可被解析）：
 
 ```toml
 [project.entry-points."llm_d_lens.hardware.profiles"]
@@ -232,7 +244,7 @@ myvendor_lens_hardware = ["profiles/*.json"]
 - `profiles/` 下的内置 profile JSON 会被自动加载；每个 **provider** 以及每个**外部 profile** 都是通过这些入口点组被发现的。
   没有其他隐式注册方式——**未注册的硬件一旦被显式使用就会被拒绝。**
 - 将插件安装到**后端**的 Python 环境中；更改入口点后需要重新安装/重启
-  （内置使用 `pip install -e .`，外部插件使用 `pip install <你的包>`），否则不会被发现。
+  （内置使用 `pip install -e ./apps/backend`，外部插件使用 `pip install <你的包>`），否则不会被发现。
 
 ---
 
@@ -287,20 +299,20 @@ class MyVendorProvider:
 
 ## 7. 测试
 
-在 `llm_d_lens/hardware/`（内置）或你的插件包（外部）下添加测试，覆盖以下内容：
+在 `apps/backend/tests/unit/hardware/`（内置）或你的插件包（外部）下添加测试，覆盖以下内容：
 
 - **契约：** profile 通过 JSON Schema 校验；`id` 唯一；`device_classes`/`resource_prefixes` 不与其他 profile 冲突；每个别名都能解析到这个 profile。
 - **发现：** 使用 `importlib.metadata` fixture 模拟一个入口点；验证加载、校验以及失败隔离。
 - **解析：** 上游标签（`accelerator-variant`/`vendor`）、设备类、扩展资源前缀和 `accelerator_keys` 都能被正确解析。
 - **request_model：** `dra` 需要一个 ResourceClaimTemplate；`extended-resource` 会跳过 claim，转而解析容器的 `resources`。
 - **存在性预检：** 没有标签时快速失败；有标签时通过。
-- **驱动/遥测：** 使用一个伪造的 `kubectl`/`helm` runner（参见 `monitoring/accelerator/test_accelerator.py` 中的 `FakeRunner`）。
+- **驱动/遥测：** 使用一个伪造的 `kubectl`/`helm` runner（参见 `apps/backend/tests/unit/monitoring/accelerator/test_accelerator.py` 中的 `FakeRunner`）。
 
 运行：
 
 ```bash
-.venv/bin/python -m pytest llm_d_lens/hardware -q
-npm run build   # 如果你改动了前端/网关的消费方代码
+.venv/bin/python -m pytest apps/backend/tests/unit/hardware -q
+npm run build   # 如果你改动了前端消费方代码
 ```
 
 ---
@@ -322,7 +334,7 @@ npm run build   # 如果你改动了前端/网关的消费方代码
 | 现象 | 原因 | 解决方法 |
 |---|---|---|
 | 启动时出现“registration conflict” | 两个 profile 声明了相同的 `device_classes`/前缀 | 使 `id` 及身份字段唯一 |
-| 硬件没有出现 | 入口点未安装/未重新安装，或外部插件不在后端环境中 | 执行 `pip install -e .`（内置）或 `pip install <插件>`（外部），然后重启 |
+| 硬件没有出现 | 入口点未安装/未重新安装，或外部插件不在后端环境中 | 执行 `pip install -e ./apps/backend`（内置）或 `pip install <插件>`（外部），然后重启 |
 | 显式使用时出现 `ACCELERATOR_NOT_REGISTERED` | 没有注册 profile，或 `accelerator_keys` 缺少对应的键 | 添加 profile 或别名 |
 | 部署卡在 0 个就绪 | overlay 目录缺失 / `arch` 不对（例如写了 `cuda` 但实际目录是 `gpu`） | 使用 `upstream_variant` |
 | `ResourceClaimTemplate is missing` | 该硬件本是扩展资源却被当作 DRA 处理 | 设置 `request_model="extended-resource"` |
@@ -335,3 +347,11 @@ npm run build   # 如果你改动了前端/网关的消费方代码
 
 - 现有实现示例：`llm_d_lens/monitoring/accelerator/intel_gpu.py`、`llm_d_lens/monitoring/gpu_driver/`
 - 贡献流程与校验：[CONTRIBUTING.md](https://github.com/llm-d-incubation/llm-d-lens/blob/main/CONTRIBUTING.md)
+
+## 部署与遥测访问模式
+
+在 `deployment.modes` 中声明每种受支持的访问模式，包括其 `request_model` 以及 DRA 的 `device_class` / `claim_request_name` 或扩展资源的 `resource_names`。消费方会解析所选模式，而不是假设顶层部署默认值适用于所有驱动。
+
+`telemetry.modes` 将相同的模式名称映射到其 `allocation_join` 策略。对于没有 Pod 标签的导出器，`pod-status` 会使用 kubelet 的 `status.containerStatuses[].allocatedResourcesStatus` 以及 `telemetry.allocation.resource_id_pattern`（一个包含命名 `pci` 捕获组的正则表达式）。资源 ID 必须实际包含该设备身份标识；不透明的卡索引无法猜测为 PCI 地址。缺失身份标识以及命名空间中存在重复归属的情况将被视为不可用，而不会回退为节点级样本。请将此策略用于独占式插件设备资源。DRA 继续使用 ResourceClaims 和 ResourceSlices。混合请求模型保持未归因状态。
+
+Guide 变体会从所选 llm-d 源码下 `deployment.overlay_root` 中的 Kustomization 入口点自动发现。请勿在部署元数据中维护第二份特定硬件的运行时或变体白名单。

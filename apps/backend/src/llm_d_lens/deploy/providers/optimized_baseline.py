@@ -96,11 +96,7 @@ class OptimizedBaselineGuideAdapter(GuideAdapter):
         return self._definition
 
     def _gateway_mode_args(self, execution_context: Mapping[str, Any] | None) -> list[str]:
-        """Extra Helm args that switch the chart to the shared Gateway.
-
-        Delegates to the shared data-plane helper; evaluation-owned deployments
-        keep their own proxy and get nothing here.
-        """
+        """Keep the standalone proxy with provider-compatible EPP transport."""
         return router_data_plane_args(execution_context)
 
     def register_restored_namespace(self, namespace: str) -> None:

@@ -776,3 +776,320 @@ def test_protected_namespaces_includes_cluster_storage_and_volume_namespaces(mon
         caps.validate_deployment_namespace("llm-d-bench-other-cluster-cache", cluster_id="cluster-a")
         == "llm-d-bench-other-cluster-cache"
     )
+
+
+def test_verify_prepared_bootstrap_marker_accepts_empty_and_matching_prepared_request(tmp_path):
+    import asyncio
+    import json
+
+    from llm_d_lens.deploy import capabilities as caps
+    from llm_d_lens.deploy.providers import configuration_manifest as cm_module
+
+    expected = {"metadata": {"name": "llmd-ns", "labels": {"lens.io/prepared-request": "req-fresh"}}}
+
+    def make_adapter(marker_data: dict, *, namespace_obj: dict | None = None):
+        async def runner(cmd):
+            if cmd[:3] == ["kubectl", "get", "namespace"]:
+                if namespace_obj is None:
+                    return 1, "", "Error from server (Forbidden): is forbidden"
+                return 0, json.dumps(namespace_obj), ""
+            if cmd[:4] == ["kubectl", "get", "configmap", "lens-deployment-bootstrap"]:
+                return 0, json.dumps({"data": marker_data}), ""
+            return 1, "", "unexpected"
+
+        return cm_module.ConfigurationManifestAdapter(None, runner, "llmd-", 30, output_root=tmp_path)
+
+    # Admin bootstrapped BEFORE prepare(): ConfigMap has empty preparedRequest
+    assert (
+        asyncio.run(
+            make_adapter(
+                {"status": "completed", "clusterId": "cluster-a", "namespace": "llmd-ns", "preparedRequest": ""}
+            )._verify_prepared_bootstrap_marker("llmd-ns", expected, cluster_id="cluster-a")
+        )
+        is True
+    )
+    # Absent preparedRequest key is also accepted
+    assert (
+        asyncio.run(
+            make_adapter(
+                {"status": "completed", "clusterId": "cluster-a", "namespace": "llmd-ns"}
+            )._verify_prepared_bootstrap_marker("llmd-ns", expected, cluster_id="cluster-a")
+        )
+        is True
+    )
+    # Exact matching preparedRequest is accepted
+    assert (
+        asyncio.run(
+            make_adapter(
+                {
+                    "status": "completed",
+                    "clusterId": "cluster-a",
+                    "namespace": "llmd-ns",
+                    "preparedRequest": "req-fresh",
+                }
+            )._verify_prepared_bootstrap_marker("llmd-ns", expected, cluster_id="cluster-a")
+        )
+        is True
+    )
+    # Non-empty mismatched preparedRequest is rejected
+    assert (
+        asyncio.run(
+            make_adapter(
+                {
+                    "status": "completed",
+                    "clusterId": "cluster-a",
+                    "namespace": "llmd-ns",
+                    "preparedRequest": "req-stale",
+                }
+            )._verify_prepared_bootstrap_marker("llmd-ns", expected, cluster_id="cluster-a")
+        )
+        is False
+    )
+    # Mismatched clusterId is rejected
+    assert (
+        asyncio.run(
+            make_adapter(
+                {"status": "completed", "clusterId": "cluster-b", "namespace": "llmd-ns", "preparedRequest": ""}
+            )._verify_prepared_bootstrap_marker("llmd-ns", expected, cluster_id="cluster-a")
+        )
+        is False
+    )
+    # _check_prepared_namespace accepts a pre-bootstrapped namespace without lens.io/prepared-request label
+    pre_bootstrapped_artifact = cm_module.GuideDeploymentArtifact(
+        guide_id="pd-disaggregation",
+        artifact_hash="hash",
+        deployment_contract={"preparedNamespace": expected},
+    )
+    asyncio.run(
+        make_adapter(
+            {"status": "completed", "clusterId": "cluster-a", "namespace": "llmd-ns", "preparedRequest": ""},
+            namespace_obj={"metadata": {"name": "llmd-ns", "labels": {}}},
+        )._check_prepared_namespace(
+            {"namespace": "llmd-ns", "provenance": {"cluster_server_id": "cluster-a"}}, pre_bootstrapped_artifact
+        )
+    )
+
+    # _check_prepared_namespace accepts prepared_plan_id match in marker & label (post-prepare bootstrap fallback)
+    asyncio.run(
+        make_adapter(
+            {"status": "completed", "clusterId": "cluster-a", "namespace": "llmd-ns", "preparedRequest": "plan-99"},
+            namespace_obj={"metadata": {"name": "llmd-ns", "labels": {"lens.io/prepared-request": "plan-99"}}},
+        )._check_prepared_namespace(
+            {
+                "namespace": "llmd-ns",
+                "provenance": {"cluster_server_id": "cluster-a", "_prepared_plan_id": "plan-99"},
+            },
+            pre_bootstrapped_artifact,
+        )
+    )
+
+    # peek_verified_namespace reads without popping; prepared_plan_id takes precedence over agentic_run
+    caps.clear_verified_namespaces()
+    caps.record_verified_namespace("cluster-a", "llmd-ns-run", owner_user_id="alice", agentic_deployment_run_id="run-1")
+    caps.record_verified_namespace("cluster-a", "llmd-ns-plan", owner_user_id="alice", prepared_plan_id="plan-1")
+    assert (
+        caps.peek_verified_namespace(
+            "cluster-a", owner_user_id="alice", agentic_deployment_run_id="run-1", prepared_plan_id="plan-1"
+        )
+        == "llmd-ns-plan"
+    )
+    assert (
+        caps.consume_verified_namespace("cluster-a", owner_user_id="alice", prepared_plan_id="plan-1") == "llmd-ns-plan"
+    )
+    assert (
+        caps.peek_verified_namespace("cluster-a", owner_user_id="alice", agentic_deployment_run_id="run-1")
+        == "llmd-ns-run"
+    )
+    assert (
+        caps.consume_verified_namespace("cluster-a", owner_user_id="alice", agentic_deployment_run_id="run-1")
+        == "llmd-ns-run"
+    )
+    assert caps.peek_verified_namespace("cluster-a", owner_user_id="alice", agentic_deployment_run_id="run-1") is None
+
+
+def test_generate_bootstrap_script_resolves_prepared_request_from_prepared_plan(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    from llm_d_lens.db.dao.deployment_plan import DeploymentPlanDao
+    from llm_d_lens.deploy import capabilities as caps
+    from llm_d_lens.deploy.contracts import DeploymentPreparedPlan
+
+    monkeypatch.setenv("LLM_D_BENCH_NAMESPACE_PREFIX", "llmd-")
+    plan = DeploymentPlanDao().create(
+        DeploymentPreparedPlan(
+            cluster_id="cluster-a",
+            digest="sha256:test",
+            payload={
+                "artifacts": [
+                    {
+                        "context": {"namespace": "llmd-pd-target"},
+                        "artifact": {
+                            "deployment_contract": {
+                                "preparedNamespace": {
+                                    "metadata": {
+                                        "name": "llmd-pd-target",
+                                        "labels": {"lens.io/prepared-request": "req-case-uuid-1"},
+                                    }
+                                }
+                            }
+                        },
+                    }
+                ]
+            },
+            preflight={},
+        )
+    )
+
+    async def fake_check(req, runner=None):
+        return {
+            "status": "admin_required",
+            "sufficient": False,
+            "clusterId": req.cluster_id,
+            "namespace": req.namespace,
+            "namespaceLabels": {},
+            "identity": {
+                "kind": "ServiceAccount",
+                "name": "sa",
+                "namespace": "lens",
+                "subject": "system:serviceaccount:lens:sa",
+            },
+            "adminOperations": [{"id": "deploy.namespace"}],
+            "eppServiceAccounts": [],
+            "usesRouter": False,
+            "usesLws": True,
+            "usesStorage": False,
+            "satelliteStorage": None,
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(caps, "check_deployment_permissions", fake_check)
+    monkeypatch.setattr(caps, "_resolve_prepared_plan_request_id", caps._resolve_prepared_plan_request_id)
+    script_payload = asyncio.run(
+        caps.generate_deployment_bootstrap_script(
+            caps.DeploymentPermissionCheckRequest(
+                cluster_id="cluster-a",
+                namespace="llmd-pd-target",
+                prepared_plan_id=plan.id,
+            ),
+            runner=SimpleNamespace(),
+        )
+    )
+    assert "PREPARED_REQUEST=req-case-uuid-1" in script_payload["script"]
+    assert "lens.io/prepared-request: req-case-uuid-1" in script_payload["script"]
+
+    # Another user must NOT resolve the victim plan's lens.io/prepared-request label
+    other_user_script = asyncio.run(
+        caps.generate_deployment_bootstrap_script(
+            caps.DeploymentPermissionCheckRequest(
+                cluster_id="cluster-a",
+                namespace="llmd-pd-target",
+                prepared_plan_id=plan.id,
+            ),
+            owner_user_id="attacker",
+            runner=SimpleNamespace(),
+        )
+    )
+    assert "req-case-uuid-1" not in other_user_script["script"]
+    assert f"PREPARED_REQUEST={plan.id}" in other_user_script["script"]
+
+
+def test_deployment_service_and_adapter_propagate_provenance_to_check_prepared_namespace(tmp_path):
+    import asyncio
+    import json
+    from types import SimpleNamespace
+
+    import pytest
+
+    from llm_d_lens.deploy.contracts import (
+        ConfigurationArtifact,
+        DeploymentArtifact,
+        DeploymentEndpoint,
+        DeploymentExecution,
+        DeploymentStatus,
+        VersionedPayload,
+    )
+    from llm_d_lens.deploy.providers import configuration_manifest as cm_module
+    from llm_d_lens.deploy.service import GuideAdapterDeploymentService
+
+    manifest_file = tmp_path / "workload.yaml"
+    manifest_file.write_text("apiVersion: v1\nkind: Service\nmetadata:\n  name: svc\n", encoding="utf-8")
+    expected_ns = {"metadata": {"name": "llmd-owned", "labels": {"lens.io/prepared-request": "req-1"}}}
+    artifact = cm_module.GuideDeploymentArtifact(
+        guide_id="source-composition",
+        artifact_hash="hash-1",
+        manifest_ref=str(manifest_file),
+        deployment_contract={"readinessDeployments": [], "endpoint": {"port": 80}, "preparedNamespace": expected_ns},
+    )
+
+    async def runner(cmd):
+        if cmd[:2] == ["kubectl", "apply"]:
+            return 0, "applied", ""
+        if cmd[:3] == ["kubectl", "get", "namespace"]:
+            return 1, "", "Error from server (Forbidden): is forbidden"
+        if cmd[:4] == ["kubectl", "get", "configmap", "lens-deployment-bootstrap"]:
+            # Marker belongs to foreign-cluster -> must be rejected once provenance.cluster_server_id is propagated!
+            return (
+                0,
+                json.dumps(
+                    {
+                        "data": {
+                            "status": "completed",
+                            "clusterId": "foreign-cluster",
+                            "namespace": "llmd-owned",
+                            "preparedRequest": "",
+                        }
+                    }
+                ),
+                "",
+            )
+        return 1, "", "unexpected"
+
+    adapter = cm_module.ConfigurationManifestAdapter(None, runner, "llmd-", 30, output_root=tmp_path)
+    provider_exec = asyncio.run(
+        adapter.deploy(
+            artifact,
+            {
+                "namespace": "llmd-owned",
+                "provenance": {"cluster_server_id": "cluster-a", "_prepared_plan_id": "plan-1"},
+            },
+            namespace_created=True,
+        )
+    )
+    assert provider_exec["provenance"] == {"cluster_server_id": "cluster-a", "_prepared_plan_id": "plan-1"}
+    with pytest.raises(ValueError, match="not owned by this prepared execution"):
+        asyncio.run(adapter.cleanup(provider_exec, artifact))
+
+    # Restored execution state in GuideAdapterDeploymentService also preserves execution.provenance
+    svc = GuideAdapterDeploymentService(SimpleNamespace(get_adapter=lambda _ref: adapter), lambda _req: "llmd-owned")
+    cfg_art = ConfigurationArtifact(
+        schema_version="v1",
+        kind="pd",
+        provider_ref="pd-disaggregation",
+        media_type="application/json",
+        content="{}",
+        checksum="sum",
+    )
+    restored_exec = DeploymentExecution(
+        execution_id="exec-1",
+        request_id="req-1",
+        status=DeploymentStatus.READY,
+        artifact=DeploymentArtifact(
+            artifact_hash="hash-1",
+            configuration_artifact_ids=[cfg_art.artifact_id],
+            manifest_ref=str(manifest_file),
+            rendered_payload=VersionedPayload(
+                schema_version="v1",
+                value={"deployment_contract": {"preparedNamespace": expected_ns}},
+            ),
+        ),
+        namespace="llmd-owned",
+        endpoint=DeploymentEndpoint(url="http://svc.llmd-owned.svc.cluster.local:8000"),
+        configuration_artifacts=[cfg_art],
+        provenance={"cluster_server_id": "cluster-a", "_prepared_plan_id": "plan-1"},
+        diagnostics=VersionedPayload(schema_version="v1", value={}),
+    )
+    _adp, _art, restored_state = svc._restored_provider_state(restored_exec)
+    assert restored_state["provenance"] == {"cluster_server_id": "cluster-a", "_prepared_plan_id": "plan-1"}
+    with pytest.raises(ValueError, match="not owned by this prepared execution"):
+        asyncio.run(adapter.cleanup(restored_state, artifact))

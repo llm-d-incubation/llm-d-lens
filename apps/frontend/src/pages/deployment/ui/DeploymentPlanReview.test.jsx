@@ -813,3 +813,389 @@ test('DeploymentWorkflow deploy passes checked namespace to approve and opens ad
         },
     );
 });
+
+test('DeploymentWorkflow executeApprove auto-confirms prepared plan when preflight status is pass', async (t) => {
+    const planRun = makeRestoredPlanRun();
+    const approvePayloads = [];
+    const startedRuns = [];
+    await withWorkflowDom(
+        t,
+        async (url, options = {}) => {
+            if (url === '/api/agentic-deployments/run-plan-1') return jsonResponse(planRun);
+            if (url === '/api/v1/deployments/permission-check') {
+                return jsonResponse({
+                    sufficient: true,
+                    status: 'sufficient',
+                    namespace: 'llmd-pass-1',
+                });
+            }
+            if (url === '/api/agentic-deployments/run-plan-1/approve') {
+                const payload = JSON.parse(options.body);
+                approvePayloads.push(payload);
+                if (!payload.prepared_plan_id) {
+                    return jsonResponse({
+                        ...planRun,
+                        configuration_plan: {
+                            ...planRun.configuration_plan,
+                            validation: {
+                                ...planRun.configuration_plan.validation,
+                                preparedDeployment: {
+                                    id: 'prep-pass-1',
+                                    digest: 'sha256:prep-pass-1',
+                                    preflight: { status: 'pass', errors: [], unmodeled: [] },
+                                    cases: [{ namespace: 'llmd-pass-1' }],
+                                },
+                            },
+                        },
+                    });
+                }
+                return jsonResponse({ ...planRun, status: 'deploying', deployment_run_id: 'exec-pass-1' }, 202);
+            }
+            throw new Error(`Unexpected fetch: ${url}`);
+        },
+        async ({ root, clickButton }) => {
+            await act(async () => {
+                root.render(
+                    <AuthContext.Provider value={{ can: () => true }}>
+                        <DeploymentWorkflow
+                            draft={workflowDraft}
+                            mode="manual"
+                            embedded
+                            onDeploymentStarted={(result) => startedRuns.push(result)}
+                        />
+                    </AuthContext.Provider>,
+                );
+            });
+            await clickButton(/Review & deploy/);
+            await clickButton(/^Confirm deployment$/);
+
+            assert.equal(approvePayloads.length, 2);
+            assert.deepEqual(approvePayloads[0], {
+                configuration_checksum: 'checksum-1',
+                endpoint: 'inference-gateway:80',
+                namespace: 'llmd-pass-1',
+            });
+            assert.deepEqual(approvePayloads[1], {
+                configuration_checksum: 'checksum-1',
+                endpoint: 'inference-gateway:80',
+                namespace: 'llmd-pass-1',
+                prepared_plan_id: 'prep-pass-1',
+                expected_plan_digest: 'sha256:prep-pass-1',
+                acknowledge_unknown: false,
+            });
+            assert.equal(startedRuns.length, 1);
+            assert.equal(startedRuns[0].deployment_run_id, 'exec-pass-1');
+        },
+    );
+});
+
+test('DeploymentWorkflow Non-Admin Re-check & Deploy clears adminHandoff on unknown preflight and completes step 2 with frozen namespace', async (t) => {
+    const planRun = makeRestoredPlanRun();
+    const permissionCheckPayloads = [];
+    const approvePayloads = [];
+    const startedRuns = [];
+    await withWorkflowDom(
+        t,
+        async (url, options = {}) => {
+            if (url === '/api/agentic-deployments/run-plan-1') return jsonResponse(planRun);
+            if (url === '/api/v1/deployments/permission-check') {
+                const payload = JSON.parse(options.body);
+                permissionCheckPayloads.push(payload);
+                if (payload.prepared_plan_id === 'prep-unk-1') {
+                    return jsonResponse({
+                        sufficient: true,
+                        status: 'sufficient',
+                        namespace: 'llmd-frozen-1',
+                    });
+                }
+                return jsonResponse({
+                    sufficient: false,
+                    status: 'admin_required',
+                    namespace: 'llmd-bootstrapped-1',
+                    identity: { kind: 'ServiceAccount', name: 'deployer', namespace: 'team-ns', overrideRequired: false },
+                    adminOperations: [{ id: 'ns.create', title: 'Create namespace' }],
+                });
+            }
+            if (url === '/api/v1/deployments/permission-remediation') {
+                return jsonResponse({
+                    script: '#!/usr/bin/env bash\nkubectl apply -f -',
+                    namespace: 'llmd-bootstrapped-1',
+                    bootstrapDigest: 'digest-unk-1',
+                });
+            }
+            if (url === '/api/v1/deployments/admin-handoff/verify') {
+                return jsonResponse({
+                    verified: true,
+                    status: 'verified',
+                    namespace: 'llmd-bootstrapped-1',
+                });
+            }
+            if (url === '/api/agentic-deployments/run-plan-1/approve') {
+                const payload = JSON.parse(options.body);
+                approvePayloads.push(payload);
+                if (!payload.prepared_plan_id) {
+                    return jsonResponse({
+                        ...planRun,
+                        configuration_plan: {
+                            ...planRun.configuration_plan,
+                            validation: {
+                                ...planRun.configuration_plan.validation,
+                                preparedDeployment: {
+                                    id: 'prep-unk-1',
+                                    digest: 'sha256:prep-unk-1',
+                                    preflight: {
+                                        status: 'unknown',
+                                        errors: [],
+                                        unmodeled: ['RuntimeClass inspection is restricted (403)'],
+                                    },
+                                    cases: [{ namespace: 'llmd-frozen-1' }],
+                                },
+                            },
+                        },
+                    });
+                }
+                return jsonResponse({ ...planRun, status: 'deploying', deployment_run_id: 'exec-unk-1' }, 202);
+            }
+            throw new Error(`Unexpected fetch: ${url}`);
+        },
+        async ({ root, findButton, clickButton }) => {
+            await act(async () => {
+                root.render(
+                    <AuthContext.Provider value={{ can: () => true }}>
+                        <DeploymentWorkflow
+                            draft={workflowDraft}
+                            mode="manual"
+                            embedded
+                            onDeploymentStarted={(result) => startedRuns.push(result)}
+                        />
+                    </AuthContext.Provider>,
+                );
+            });
+            await clickButton(/Review & deploy/);
+            await clickButton(/^Confirm deployment$/);
+            await clickButton(/Re-check & Deploy/);
+
+            assert.equal(findButton(/Re-check & Deploy/), null, 'Expected adminHandoff to clear after unknown prepared plan returns');
+            const acceptBtn = findButton(/^Accept risks and deploy$/);
+            const backBtn = findButton(/Back to edit/);
+            assert.ok(acceptBtn);
+            assert.ok(backBtn);
+            assert.equal(Boolean(reactProps(acceptBtn).disabled), false);
+            assert.equal(Boolean(reactProps(backBtn).disabled), false);
+
+            await clickButton(/^Accept risks and deploy$/);
+
+            assert.equal(permissionCheckPayloads.length, 2);
+            assert.equal(permissionCheckPayloads[1].prepared_plan_id, 'prep-unk-1');
+            assert.equal(permissionCheckPayloads[1].namespace, 'llmd-frozen-1');
+            assert.equal(approvePayloads.length, 2);
+            assert.deepEqual(approvePayloads[1], {
+                configuration_checksum: 'checksum-1',
+                endpoint: 'inference-gateway:80',
+                namespace: 'llmd-frozen-1',
+                prepared_plan_id: 'prep-unk-1',
+                expected_plan_digest: 'sha256:prep-unk-1',
+                acknowledge_unknown: true,
+            });
+            assert.equal(startedRuns.length, 1);
+            assert.equal(startedRuns[0].deployment_run_id, 'exec-unk-1');
+        },
+    );
+});
+
+test('DeploymentWorkflow clears adminHandoff and blocks confirm when prepared plan preflight fails', async (t) => {
+    const planRun = makeRestoredPlanRun();
+    await withWorkflowDom(
+        t,
+        async (url) => {
+            if (url === '/api/agentic-deployments/run-plan-1') return jsonResponse(planRun);
+            if (url === '/api/v1/deployments/permission-check') {
+                return jsonResponse({
+                    sufficient: false,
+                    status: 'admin_required',
+                    namespace: 'llmd-bootstrapped-1',
+                    identity: { kind: 'ServiceAccount', name: 'deployer', namespace: 'team-ns', overrideRequired: false },
+                    adminOperations: [{ id: 'ns.create', title: 'Create namespace' }],
+                });
+            }
+            if (url === '/api/v1/deployments/permission-remediation') {
+                return jsonResponse({ script: '#!/usr/bin/env bash', namespace: 'llmd-bootstrapped-1' });
+            }
+            if (url === '/api/v1/deployments/admin-handoff/verify') {
+                return jsonResponse({ verified: true, status: 'verified', namespace: 'llmd-bootstrapped-1' });
+            }
+            if (url === '/api/agentic-deployments/run-plan-1/approve') {
+                return jsonResponse({
+                    ...planRun,
+                    configuration_plan: {
+                        ...planRun.configuration_plan,
+                        validation: {
+                            ...planRun.configuration_plan.validation,
+                            preparedDeployment: {
+                                id: 'prep-fail-1',
+                                digest: 'sha256:prep-fail-1',
+                                preflight: {
+                                    status: 'fail',
+                                    errors: [{ code: 'REQUIRED_CRD_UNAVAILABLE', message: 'DisaggregatedSet CRD is not installed' }],
+                                    unmodeled: [],
+                                },
+                                cases: [{ namespace: 'llmd-bootstrapped-1' }],
+                            },
+                        },
+                    },
+                });
+            }
+            throw new Error(`Unexpected fetch: ${url}`);
+        },
+        async ({ root, findButton, clickButton, alerts }) => {
+            await act(async () => {
+                root.render(
+                    <AuthContext.Provider value={{ can: () => true }}>
+                        <DeploymentWorkflow draft={workflowDraft} mode="manual" embedded />
+                    </AuthContext.Provider>,
+                );
+            });
+            await clickButton(/Review & deploy/);
+            await clickButton(/^Confirm deployment$/);
+            await clickButton(/Re-check & Deploy/);
+
+            assert.equal(findButton(/Re-check & Deploy/), null);
+            assert.equal(Boolean(reactProps(findButton(/^Confirm deployment$/)).disabled), true);
+            assert.equal(Boolean(reactProps(findButton(/Back to edit/)).disabled), false);
+            assert.ok(alerts().some((text) => text.includes('DisaggregatedSet CRD is not installed')));
+        },
+    );
+});
+
+test('DeploymentPermissionHandoff renders optional Dismiss button only when onDismiss is provided', () => {
+    const withoutDismiss = renderToStaticMarkup(
+        <DeploymentPermissionHandoff mode="bootstrap" namespace="llmd-test" onPrimaryAction={() => {}} />,
+    );
+    assert.doesNotMatch(withoutDismiss, />Dismiss<\/button>/);
+
+    const withDismiss = renderToStaticMarkup(
+        <DeploymentPermissionHandoff mode="bootstrap" namespace="llmd-test" onPrimaryAction={() => {}} onDismiss={() => {}} />,
+    );
+    assert.match(withDismiss, />Dismiss<\/button>/);
+});
+
+test('DeploymentWorkflow step-2 auto-confirm forwards frozenNamespace and preserves preparedPlanId on 403 deployment_admin_setup_required', async (t) => {
+    const planRun = makeRestoredPlanRun();
+    const approvePayloads = [];
+    const remediationPayloads = [];
+    const verifyPayloads = [];
+    const startedRuns = [];
+    let step2Attempts = 0;
+    await withWorkflowDom(
+        t,
+        async (url, options = {}) => {
+            if (url === '/api/agentic-deployments/run-plan-1') return jsonResponse(planRun);
+            if (url === '/api/v1/deployments/permission-check') {
+                return jsonResponse({
+                    sufficient: true,
+                    status: 'sufficient',
+                    namespace: 'llmd-precheck-1',
+                });
+            }
+            if (url === '/api/agentic-deployments/run-plan-1/approve') {
+                const payload = JSON.parse(options.body);
+                approvePayloads.push(payload);
+                if (!payload.prepared_plan_id) {
+                    return jsonResponse({
+                        ...planRun,
+                        configuration_plan: {
+                            ...planRun.configuration_plan,
+                            validation: {
+                                ...planRun.configuration_plan.validation,
+                                preparedDeployment: {
+                                    id: 'prep-frozen-pass',
+                                    digest: 'sha256:prep-frozen-pass',
+                                    preflight: { status: 'pass', errors: [], unmodeled: [] },
+                                    cases: [{ namespace: 'llmd-frozen-pass' }],
+                                },
+                            },
+                        },
+                    });
+                }
+                step2Attempts += 1;
+                if (step2Attempts === 1) {
+                    return jsonResponse({
+                        code: 'deployment_admin_setup_required',
+                        detail: 'Orchestration administrator setup required.',
+                        identity: { kind: 'ServiceAccount', name: 'lens-edit', namespace: 'lens-edit', overrideRequired: false },
+                        adminOperations: [{ id: 'ns.create', title: 'Create namespace' }],
+                    }, 403);
+                }
+                return jsonResponse({ ...planRun, status: 'deploying', deployment_run_id: 'exec-frozen-pass' }, 202);
+            }
+            if (url === '/api/v1/deployments/permission-remediation') {
+                remediationPayloads.push(JSON.parse(options.body));
+                return jsonResponse({
+                    script: '#!/usr/bin/env bash\nkubectl apply -f -',
+                    namespace: 'llmd-frozen-pass',
+                    bootstrapDigest: 'digest-frozen-pass',
+                });
+            }
+            if (url === '/api/v1/deployments/admin-handoff/verify') {
+                verifyPayloads.push(JSON.parse(options.body));
+                return jsonResponse({
+                    verified: true,
+                    status: 'verified',
+                    namespace: 'llmd-frozen-pass',
+                });
+            }
+            throw new Error(`Unexpected fetch: ${url}`);
+        },
+        async ({ root, findButton, clickButton }) => {
+            await act(async () => {
+                root.render(
+                    <AuthContext.Provider value={{ can: () => true }}>
+                        <DeploymentWorkflow
+                            draft={workflowDraft}
+                            mode="manual"
+                            embedded
+                            onDeploymentStarted={(result) => startedRuns.push(result)}
+                        />
+                    </AuthContext.Provider>,
+                );
+            });
+            await clickButton(/Review & deploy/);
+            await clickButton(/^Confirm deployment$/);
+
+            assert.equal(approvePayloads.length, 2);
+            assert.equal(approvePayloads[1].namespace, 'llmd-frozen-pass');
+            assert.equal(approvePayloads[1].prepared_plan_id, 'prep-frozen-pass');
+            assert.equal(remediationPayloads.length, 1);
+            assert.equal(remediationPayloads[0].prepared_plan_id, 'prep-frozen-pass');
+            assert.equal(remediationPayloads[0].namespace, 'llmd-frozen-pass');
+            assert.ok(findButton(/Re-check & Deploy/));
+
+            await clickButton(/Re-check & Deploy/);
+
+            assert.equal(verifyPayloads.length, 1);
+            assert.equal(verifyPayloads[0].prepared_plan_id, 'prep-frozen-pass');
+            assert.equal(verifyPayloads[0].namespace, 'llmd-frozen-pass');
+            assert.equal(approvePayloads.length, 3);
+            assert.equal(approvePayloads[2].prepared_plan_id, 'prep-frozen-pass');
+            assert.equal(startedRuns.length, 1);
+            assert.equal(startedRuns[0].deployment_run_id, 'exec-frozen-pass');
+        },
+    );
+});
+
+test('DeploymentSummary disables Recheck resources while adminHandoff is generating or verifying', () => {
+    for (const flag of [{ generating: true }, { verifying: true }]) {
+        const html = renderToStaticMarkup(
+            <DeploymentSummary
+                run={summaryRun()}
+                draft={summaryDraft}
+                adminHandoff={{
+                    namespace: 'llmd-test',
+                    report: { status: 'admin_required', adminOperations: [{ id: 'ns.create', title: 'Create namespace' }] },
+                    ...flag,
+                }}
+            />,
+        );
+        assert.match(html, /<button[^>]*disabled=""[^>]*>Recheck resources<\/button>/);
+    }
+});

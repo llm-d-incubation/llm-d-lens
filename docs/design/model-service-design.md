@@ -126,7 +126,7 @@ flowchart TB
 ```
 
 One shared Gateway per cluster; each deployment provides its own `InferencePool`
-\+ EPP without a proxy. Each model service gets one HTTPRoute referencing its
+\+ EPP and a standalone proxy. Each model service gets one HTTPRoute referencing its
 positive-weight pools. Solid arrows show routing/data; dashed arrows show
 ext_proc/control interactions.
 
@@ -221,7 +221,7 @@ Data-plane components have three layers:
 
 - **Shared cluster (at cluster creation):** Gateway API / GAIE CRDs, provider,
   **Gateway**, IPP.
-- **Deployment:** model server + EPP + InferencePool, 1:1, no Gateway/proxy.
+- **Deployment:** model server + EPP + InferencePool, 1:1, with its own standalone proxy.
 - **Model service (at publication):** HTTPRoute and IPP model mapping,
   referencing the cluster Gateway and deployment pool.
 
@@ -256,16 +256,27 @@ versions step:
 
 - **Start the shared Gateway at cluster creation:** install Gateway API/GAIE
   CRDs, provider, Gateway, and IPP (§5), one Gateway per cluster.
-- **Deployments do not start their own Gateway/proxy:** use the shared Gateway.
-- **Deployments retain their EPP + InferencePool:** create together, EPP:pool
-  1:1, chart proxy disabled. Pool selectors select pods; scaling changes only
-  pod counts.
+- **New deployments retain a standalone proxy:** direct deployment testing and
+  independent access do not require a shared Gateway or publication.
+- **Deployments retain their EPP + InferencePool:** EPP:pool is 1:1. Pool
+  selectors select pods; scaling changes only pod counts.
+- **Publication adds a shared Gateway route:** it does not disable the proxy.
+  Detachment removes the association and route, preserving standalone access.
+- **One EPP transport policy:** Istio/agentgateway use plaintext;
+  Envoy AI Gateway/GKE use TLS. Render both EPP and its proxy consistently.
+  Legacy Envoy sidecars are repaired using a versioned ConfigMap and one Pod
+  template update, then rollout is awaited before routes are submitted.
+  Separate proxy workloads requiring transport changes and unsupported custom
+  configs must be redeployed. Recorded Gateway-only deployments remain legacy
+  and need redeployment to obtain a standalone endpoint.
 - **Model services generate HTTPRoute:** `parentRefs` targets the cluster
   Gateway; `backendRefs` lists the positive-weight, non-disabled pools, with one
   IPP model mapping.
 
-Deployment order: create pool/EPP and wait for readiness, then publish the model
-service HTTPRoute.
+Deployment order: create standalone proxy/EPP/model workloads and wait for
+readiness. Publication is a separate action that attaches the deployment pool
+through the model service HTTPRoute. Direct access uses the engine model name
+and does not pass through Gateway authorization.
 
 ### 6. Domain model
 
@@ -992,9 +1003,9 @@ The three Gateway Mode layers have separate lifecycles:
   (`render_inference_gateway`), `gateway_ops.py` (`install_inference_gateway` /
   `install_ipp`)
 - **Layer:** Deployment; **Created when:** Deployment creation; **Resources:**
-  Model server + EPP + **InferencePool** (1:1, **no own proxy/gateway**);
-  **Code:** `llm_d_lens/deploy/...` (disable chart proxy; see
-  `router-gateway-mode.values.yaml`)
+  Model server + EPP + **InferencePool** (1:1) + **Standalone Proxy**;
+  **Code:** `llm_d_lens/deploy/data_plane.py`, `source_composition.py`;
+  `router-gateway-mode.values.yaml` remains for explicit legacy Gateway-only mode
 - **Layer:** Model service; **Created when:** Publication; **Resources:**
   **HTTPRoute**, cross-namespace **ReferenceGrant**, IPP model-mapping
   **ConfigMap**; **Code:** `gateway_providers.py` (`render_model_route`),

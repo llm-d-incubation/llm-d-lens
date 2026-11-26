@@ -24,7 +24,7 @@ import { DeleteModelCacheModal } from './DeleteModelCacheModal';
 import { ModelCacheLogsModal } from './ModelCacheLogsModal';
 import { PermissionGate } from '../../../auth';
 import { clusterOptions, errorMessage, hasPendingSync, sourceDisplayName, sourceRepository, summarizeStatuses } from './modelCachePresentation';
-import { findModelByRepository } from '@repo/shared/catalog';
+import { useModelCatalog } from '../../../../shared/lib/useModelCatalog';
 
 const SEARCH_DEBOUNCE_MS = 300;
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100];
@@ -42,6 +42,7 @@ function StatCard({ label, value, tone = 'text-white' }) {
 }
 
 export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHandled, initialClusterId = '', initialEntryId = '', initialAction = '' } = {}) {
+    const { models: catalogModels } = useModelCatalog();
     const [searchInput, setSearchInput] = useState('');
     const query = useDebouncedValue(searchInput, SEARCH_DEBOUNCE_MS).trim();
     const [typeFilter, setTypeFilter] = useState('');
@@ -130,18 +131,17 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
     const UNLABELED_TYPE = 'Unlabeled';
 
     // Cross-reference each cached model's source repository against the
-    // (frontend-only) Model Market catalog so we can show/filter by model
-    // type -- there is no backend endpoint for this, the catalog is static.
+    // shared catalog so built-in and custom models use the same type filters.
     // Entries with no catalog match are labeled UNLABELED_TYPE so they can
     // still be filtered/grouped instead of being silently excluded.
     const modelTypeById = useMemo(() => {
         const map = {};
         for (const item of items) {
-            const catalogModel = findModelByRepository(sourceRepository(item));
+            const catalogModel = catalogModels.find(model => model.repository.toLowerCase() === sourceRepository(item).split('@')[0].toLowerCase() && model.revision === (item.source?.huggingface?.revision || 'main'));
             map[item.id] = catalogModel ? catalogModel.category : UNLABELED_TYPE;
         }
         return map;
-    }, [items]);
+    }, [items, catalogModels]);
 
     const typeOptions = useMemo(() => {
         const options = [...new Set(Object.values(modelTypeById))].filter((type) => type !== UNLABELED_TYPE).sort();
@@ -518,6 +518,7 @@ export function ModelCachePage({ onNavigateBack, initialDownload, onDownloadHand
                     clusters={clusters}
                     defaultClusterId={initialDownload?.clusterId ?? clusterId}
                     defaultRepoId={initialDownload?.repoId}
+                    defaultRevision={initialDownload?.revision}
                     defaultStorageVolumeId={initialDownload?.storageVolumeId}
                     onCancel={closeDialog}
                     onCreate={handleCreate}

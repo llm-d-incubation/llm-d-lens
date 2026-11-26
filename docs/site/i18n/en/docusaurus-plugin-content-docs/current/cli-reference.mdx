@@ -1,9 +1,155 @@
 ---
 title: CLI Reference
-description: Command-line tools for running, installing and managing Lens.
+description: Standalone llmd engine CLI and command-line scripts for running, installing, and managing Lens.
 ---
 
-## `llmd` inference endpoints
+Lens ships two distinct sets of command-line tools:
+
+1. **[`llmd` (Standalone Engine CLI)](#llmd-standalone-engine-cli)** from `apps/lens` — a cluster-admin-free, pure-Python CLI that plans, stands up, scales, rolls out, migrates, and tears down llm-d guides inside a single Kubernetes or OpenShift namespace without a Lens server, database, or Node.js.
+2. **[Server and Operations Scripts](#server-and-operations-scripts)** — repository and installer scripts (`hack/lens-local.sh`, `lensctl.sh`, `LensInstaller-Ubuntu-x86_64-online.sh`, MCP catalog validation, and `alembic`) for operating the Lens Web GUI and API backend.
+
+---
+
+## `llmd` Standalone Engine CLI
+
+`llmd` (`apps/lens`, Python package `llm-d-lens-engine`) operates directly against a namespace using your own `kubectl` or `oc` credentials. It does not require cluster-admin permissions, and it never creates namespaces, CRDs, ClusterRoles, PersistentVolumes, SCCs, or network attachments — instead, `llmd plan` flags administrator prerequisites and can export them with `--admin-yaml`.
+
+:::info Entrypoint note
+`llmd` (`lens.cli:main`) is the full standalone CLI documented below. The `lens` entrypoint (`lens.__main__:main`) in `apps/lens` is currently a `--version` / `--help` stub only — always invoke `llmd`, not `lens`.
+:::
+
+### Installation and prerequisites
+
+- **Python**: Python 3.11+ (`PyYAML` is the only Python runtime dependency; no Lens backend, PostgreSQL, or Node.js required).
+- **Cluster & rendering binaries on `PATH`**: `kubectl` (or `oc` with `--kube-cli oc` / `LLMD_KUBE_CLI=oc`), `helm`, `git`, and `kustomize` (or `kubectl kustomize` when standalone `kustomize` is not installed).
+
+Install from the repository root into a virtual environment:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e ./apps/lens
+.venv/bin/llmd --version
+```
+
+### Global and shared flags
+
+#### Global flags
+
+Place global flags before the subcommand (`llmd -o json status ...`):
+
+| Flag | Environment variable | Default | Description |
+| --- | --- | --- | --- |
+| `--version` | — | — | Print `llmd <version>` and exit. |
+| `-o`, `--output {text,json,yaml}` | — | `text` | Output format (`text`, `json`, or `yaml`). Progress lines are written to `stderr` so structured `-o json` / `-o yaml` output on `stdout` remains clean. |
+| `--state-dir DIR` | `LLMD_STATE_DIR` | `$LENS_DATA_DIR/llmd` (`~/.local/share/lens/llmd`) | Local directory for registered sources (`sources.yaml`) and rollout drainer logs. |
+
+#### Shared source and cluster flags
+
+Source- and cluster-scoped subcommands accept these common options:
+
+| Flag | Environment variable | Default | Description |
+| --- | --- | --- | --- |
+| `--source NAME\|PATH\|URL#REF` | — | *(auto if 1 source registered)* | Stack source: a registered source name, a local checkout path, or a Git URL with optional `#REF` (branch, tag, commit, or PR ref such as `#refs/pull/<N>/head`). |
+| `--refresh` | — | `false` | Re-fetch a cached remote Git source (`$LENS_CACHE_DIR/repos`). |
+| `-n`, `--namespace NS` | `LLMD_NAMESPACE` | current kube context namespace (`default` for `render`) | Target Kubernetes/OpenShift namespace. |
+| `--kubeconfig FILE` | `KUBECONFIG` | kubectl lookup (`~/.kube/config`) | Path to a kubeconfig file. |
+| `--context CONTEXT` | — | current kube context | Kubernetes context name. |
+| `--kube-cli {kubectl,oc}` | `LLMD_KUBE_CLI` | `kubectl` | Kubernetes CLI binary used for cluster operations. |
+
+### Subcommands (12 top-level commands)
+
+`llmd` provides **12 top-level subcommands** (including separate `status <instance>` and `list` commands):
+
+| Subcommand | Purpose | Key flags & arguments |
+| --- | --- | --- |
+| `sources {add,list,remove}` | Register, list, or forget stack sources in `sources.yaml`. (`remove` leaves local checkouts intact.) | `add NAME LOCATION [--ref REF] [--stacks GLOB] [--exclude GLOB] [--companion TEMPLATE] [--pool-label LABEL]`; `remove NAME` |
+| `stacks [prefix]` | List guides and kustomize stacks in a source, inspect one guide's `--var` inputs and support matrix, or resolve companion templates. No cluster access required. | `[prefix]`, `--var NAME=VALUE`, `--companions NAMESPACE`, `--source`, `--refresh` |
+| `render <stack>` | Print rendered Kubernetes YAML/JSON manifests for a guide, kustomize directory, or manifest files. No cluster access required. | `<stack>`, `-n/--namespace`, `--var NAME=VALUE`, `--set KEY=VALUE`, `--source`, `--refresh` |
+| `plan <stack>` | Render, apply namespace policy, run preflight/companion checks, and execute a server dry-run without changing the cluster. Outputs a reviewable `digest`. | `<stack>`, `--offline`, `--name`, `--var`, `--set`, `--allow-privileged`, `--skip-admin-parts`, `--switch-stack`, `--manifest FILE`, `--admin-yaml FILE` |
+| `standup <stack>` | Stand up a stack in the target namespace (or update an existing `llmd`-managed instance) using server-side apply. | `<stack>`, `--expected-digest DIGEST`, `--with-companions`, `--wait`, `--timeout SEC` (default `1800`), plus `plan` flags |
+| `import <stack>` | Record an already-running stack deployed by `kubectl`, `helm`, or `other` without relabeling or modifying live objects. | `<stack>`, `--manager {kubectl,helm,other}`, `--dry-run`, plus `plan` flags |
+| `rollouts {plan,start,status,pause,resume,abort,finish}` | Perform an in-place rollout of a running instance to another source ref or stack path. | `plan\|start <stack> --name INSTANCE [--floor ROLE=GROUPS] [--allow-outage] [--pool-label LABEL]`; `start` adds `--drain CMD \| --no-drain`, `--expected-digest`, `--watch`, `--timeout SEC`; `status\|pause\|resume\|abort\|finish INSTANCE [--pool-label LABEL] [--watch] [--timeout SEC] [-y\|--yes]` |
+| `scale <instance> WORKLOAD=N...` | Set replicas for a Deployment, StatefulSet, LeaderWorkerSet, or `DisaggregatedSet` role (`SET/ROLE`) and persist overrides in the instance record. Pass `WORKLOAD=--` to revert to stack defaults. | `<instance>`, `WORKLOAD=N...`, `--drain CMD \| --no-drain`, `--dry-run`, `-y/--yes`, `--allow-privileged`, `--skip-admin-parts` |
+| `migrate {plan,start,step,status,finish} <instance>` | Move a workload replica-by-replica across namespaces or clusters without dropping capacity. | `<action> <instance> --from NS --to NS [--workload W] [--stack PATH] [--name TARGET_NAME] [--from-context C] [--to-context C] [--from-kubeconfig F] [--to-kubeconfig F] [--from-source S] [--to-source S] [--with-companions] [--expected-digest D] [--drain CMD \| --no-drain] [--timeout SEC] [-y\|--yes]` |
+| `status <instance>` | Show live object states, pod readiness, warning events, previous container crash logs, Service endpoints, and persisted scale overrides for one instance. | `<instance>`, `--watch` (polls every 10 seconds), shared target flags |
+| `list` | List all `llmd` instances recorded in the target namespace (`INSTANCE`, `MODE`, `PHASE`, `PODS`, `GPUS`, `STACK`). | Shared target flags |
+| `teardown <instance>` | Delete recorded objects whose UID (and `llmd` labels, when managed) still match. Keeps PVCs by default. | `<instance>`, `--delete-volumes`, `--forget` (removes only the record, leaving objects running), `-y/--yes`, shared target flags |
+
+### Instance state and lifecycle phases
+
+`llmd` stores authoritative instance state inside the cluster rather than on a laptop, so `status`, `scale`, `rollouts`, and `teardown` work from any machine:
+
+- **ConfigMap name**: `lens-instance-<name>` in the target namespace (schema `lens.llm-d.ai/inventory/v1`, key `inventory.json`).
+- **Labels**: `app.kubernetes.io/managed-by=llm-d-lens`, `lens.llm-d.ai/instance=<name>`, and `lens.llm-d.ai/role=inventory`.
+- **Instance phases**:
+  - `Applying` — written *before* objects are applied so an interrupted `standup` can still be torn down cleanly.
+  - `Applied` — all planned objects applied and UIDs recorded.
+  - `Deleting` — `teardown` has started removing recorded objects.
+  - `Removed` — written when `teardown` finishes with kept `PersistentVolumeClaim` objects remaining (otherwise the `lens-instance-<name>` ConfigMap itself is deleted).
+  - `Invalid` — reported by `llmd list` if an inventory ConfigMap fails schema or label validation.
+- **Rollout phases** (recorded under `rollout.phase`): `Rolling`, `Paused`, `Aborting`, and terminal states `Finished` / `Aborted`.
+
+### End-to-end walkthrough
+
+```bash
+# 1. Register an upstream llm-d source (or a local checkout)
+llmd sources add llm-d https://github.com/llm-d/llm-d.git#main
+
+# 2. Inspect available guides and variables for optimized-baseline
+llmd stacks
+llmd stacks optimized-baseline
+
+# 3. Review a plan against your target namespace (read-only)
+llmd plan optimized-baseline -n llmd-dev --var INFRA_PROVIDER=k8s
+
+# 4. Stand up the exact reviewed plan using its digest and wait for readiness
+llmd standup optimized-baseline -n llmd-dev \
+  --var INFRA_PROVIDER=k8s \
+  --expected-digest <digest-from-plan> \
+  --wait
+
+# 5. Inspect live status (human-readable or JSON)
+llmd list -n llmd-dev
+llmd -o json status optimized-baseline -n llmd-dev
+
+# 6. Clean up (keeps PVCs unless --delete-volumes is passed)
+llmd teardown optimized-baseline -n llmd-dev -y
+```
+
+#### Example `-o json` output (`llmd -o json status`)
+
+```json
+{
+  "endpoints": [
+    "http://optimized-baseline-router.llmd-dev.svc.cluster.local:80"
+  ],
+  "health": "Ready",
+  "instance": "optimized-baseline",
+  "management": {
+    "mode": "llmd"
+  },
+  "namespace": "llmd-dev",
+  "objects": [
+    {
+      "detail": "1/1 ready",
+      "object": "Deployment/optimized-baseline-nvidia-gpu-vllm-decode",
+      "state": "ready"
+    }
+  ],
+  "overrides": {},
+  "phase": "Applied",
+  "pods": {
+    "problems": [],
+    "ready": 1,
+    "total": 1
+  },
+  "previousStack": null,
+  "stack": "guides/optimized-baseline",
+  "unreadable": []
+}
+```
+
+### `llmd` inference endpoints
 
 The Lens engine discovers inference endpoints automatically from rendered resources. Guides,
 kustomize and manifest stacks need no endpoint declarations or extra metadata files.
@@ -41,7 +187,13 @@ INFERENCE_URL=$(jq -er '.inferenceEndpoint.url // empty' status.json) || exit 1
 The benchmark must be able to reach the cluster-local Service URL. It must not fall back to the
 first legacy endpoint or select a metrics port.
 
-## `hack/lens-local.sh` (local source installation and services)
+---
+
+## Server and Operations Scripts
+
+Use these scripts when operating the full **Lens Web GUI and unified Python backend** (`apps/frontend` + `apps/backend`).
+
+### `hack/lens-local.sh` (local source installation and services)
 
 | Command | Purpose |
 | --- | --- |
@@ -50,49 +202,27 @@ first legacy endpoint or select a metrics port.
 | `hack/lens-local.sh stop` | Stop all services started by this script. |
 | `hack/lens-local.sh restart` | Complete target-node checks when enabled, prepare dependencies and validate the reuse map before stopping and restarting services. |
 | `hack/lens-local.sh status` | Show which services are running and their PIDs. |
-| `hack/lens-local.sh clean [-y\|--yes] [--cache\|--hard\|--all]` | Stop services and delete app data/logs. `--cache` also removes source checkouts and benchmark venvs; `--hard` also removes the dev venv, toolchain, TLS certs, node_modules and build outputs; `--all` removes both. |
+| `hack/lens-local.sh clean [-y\|--yes] [--cache\|--hard\|--all]` | Stop services and delete app data/logs. `--cache` also removes source checkouts and benchmark venvs; `--hard` also removes the dev venv, toolchain, TLS certs, `node_modules`, and build outputs; `--all` removes both. |
 | `hack/lens-local.sh install-node` | Install a supported Node.js into `.dev-tools/` (used automatically if the system Node is missing or too old). |
 
-Ports are configurable via `FRONTEND_PORT` (default `5173`) and `BACKEND_PORT`
-(default `3000`). `SERVER_PORT` remains a fallback for the Python port.
-The legacy `restart server` target selects `backend`; use `restart all` when
-switching from the old three-process setup. See [Environment Variables](/environment-variables).
+Ports are configurable via `FRONTEND_PORT` (default `5173`) and `BACKEND_PORT` (default `3000`). `SERVER_PORT` remains a fallback for the Python port. The legacy `restart server` target selects `backend`; use `restart all` when switching from the old three-process setup. See [Environment Variables](/environment-variables).
 
-### Target node and kubeconfig
+#### Target node and kubeconfig
 
-`check`, `start` and `restart` accept `--target-node NODE` and
-`--kubeconfig FILE`. Flags override `TARGET_NODE` and `KUBECONFIG`.
-The kubeconfig flag accepts one file, relative to the directory where you invoke
-the command; inherited `KUBECONFIG` file lists are preserved.
+`check`, `start`, and `restart` accept `--target-node NODE` and `--kubeconfig FILE`. Flags override `TARGET_NODE` and `KUBECONFIG`. The kubeconfig flag accepts one file, relative to the directory where you invoke the command; inherited `KUBECONFIG` file lists are preserved.
 
 ```bash
 hack/lens-local.sh restart --target-node node-a --kubeconfig "$HOME/.kube/config"
 TARGET_NODE=node-a KUBECONFIG="$HOME/.kube/config" hack/lens-local.sh check
 ```
 
-No dedicated target-node configuration file is loaded, and targets are not
-persisted: supply the target on each invocation or export `TARGET_NODE` in your
-shell. Without a target,
-ordinary startup does not query Kubernetes or require kubectl/jq. With a target,
-the launcher requires kubectl, jq and an `LLM_D_ROOT` checkout containing `guides/`,
-then checks that the node is accessible, Ready and not cordoned before any
-existing services are stopped. This is not a guarantee that a particular
-workload's resource requests, affinity or tolerations can be scheduled.
+No dedicated target-node configuration file is loaded, and targets are not persisted: supply the target on each invocation or export `TARGET_NODE` in your shell. Without a target, ordinary startup does not query Kubernetes or require `kubectl`/`jq`. With a target, the launcher requires `kubectl`, `jq`, and an `LLM_D_ROOT` checkout containing `guides/`, then checks that the node is accessible, Ready, and not cordoned before any existing services are stopped. This is not a guarantee that a particular workload's resource requests, affinity, or tolerations can be scheduled.
 
-The target is exported to the existing backend contract
-`PRISM_K8S_TARGET_NODE`. That variable also remains a fallback when `TARGET_NODE`
-is unset. When `KUBECONFIG` is unset, Kubernetes uses its normal configuration
-lookup. `stop`, `status`, `clean` and `install-node` do not perform target-node
-checks; target flags are rejected for those commands.
+The target is exported to the backend contract `PRISM_K8S_TARGET_NODE`. That variable also remains a fallback when `TARGET_NODE` is unset. When `KUBECONFIG` is unset, Kubernetes uses its normal configuration lookup. `stop`, `status`, `clean`, and `install-node` do not perform target-node checks; target flags are rejected for those commands.
 
-Hardware discovery stays in the backend and hardware profiles. The launcher
-does not discover an Intel-specific PCI allowlist; an explicitly supplied
-`PRISM_GPU_PCI_ALLOWLIST` is preserved. It also does not inject deployment-runtime
-defaults: without overrides, the backend uses namespace prefix `llmd-`, readiness
-timeout 900 seconds, command timeout 300 seconds and retains failed namespaces.
-Explicit `LLM_D_BENCH_*` overrides remain supported by their existing consumers.
+Hardware discovery stays in the backend and hardware profiles. The launcher does not discover an Intel-specific PCI allowlist; an explicitly supplied `PRISM_GPU_PCI_ALLOWLIST` is preserved. It also does not inject deployment-runtime defaults: without overrides, the backend uses namespace prefix `llmd-`, readiness timeout 900 seconds, command timeout 300 seconds, and retains failed namespaces. Explicit `LLM_D_BENCH_*` overrides remain supported by their existing consumers.
 
-## `lensctl.sh` (installed deployments)
+### `lensctl.sh` (installed deployments)
 
 Written into the install directory by the Ubuntu installer:
 
@@ -103,11 +233,9 @@ Written into the install directory by the Ubuntu installer:
 | `lensctl.sh stop` | Stop the installed deployment's services. |
 | `lensctl.sh uninstall` | Uninstall; `--keep-data` / `--purge` control data, `--keep-db` / `--purge-db` control the embedded database. |
 
-## `LensInstaller-Ubuntu-x86_64-online.sh`
+### `LensInstaller-Ubuntu-x86_64-online.sh`
 
-Download from main or a release tag containing the online installer; the script
-selects its embedded version. Only new or empty install directories are accepted.
-There is no version override or upgrade mode.
+Download from `main` or a release tag containing the online installer; the script selects its embedded version. Only new or empty install directories are accepted. There is no version override or upgrade mode.
 
 | Flag | Purpose |
 | --- | --- |
@@ -123,14 +251,10 @@ There is no version override or upgrade mode.
 
 See [Installation](/installation) and [Upgrade](/upgrade) for full usage.
 
-## `node hack/generate-mcp-tools.mjs`
+### `node hack/generate-mcp-tools.mjs`
 
-Validates the Python MCP catalog against the current REST schema, failing on
-unexpected skipped operations. `--check` performs the same validation; `--json`
-exports the catalog. No Node server artifact is generated. Local `start`/`restart`
-and installed launchers validate the same catalog directly. The Python-only
-equivalent is `.venv/bin/python -m llm_d_lens.mcp.catalog`.
+Validates the Python Assistant MCP catalog against the current REST schema, failing on unexpected skipped operations. `--check` performs the same validation; `--json` exports the catalog. No Node server artifact is generated. Local `start`/`restart` and installed launchers validate the same catalog directly. The Python-only equivalent is `.venv/bin/python -m llm_d_lens.assistant_tools.catalog`.
 
-## `alembic`
+### `alembic`
 
-Applies or authors database schema migrations — see [Migration](/migration).
+Applies or authors database schema migrations using `alembic -c apps/backend/alembic.ini` — see [Migration](/migration).

@@ -4,6 +4,7 @@ import { deploymentSelection, nodeParameterPaths, capabilityTogglePatch, selecti
 import { optimizationSourceFacts } from '@repo/shared/inference/optimizations';
 import { inferenceScene } from './sceneGraph.js';
 import { createBlueprint } from './blueprint.js';
+import { compositionRequest, resolveCompositionDraft } from './compositionPolicy.js';
 const serving = id => ({ id, variables: {}, steps: { deploy: { worker: { run: `kubectl apply -k SOURCE/guides/${id}/modelserver/cpu` } } } });
 const catalog = { environment: {}, guides: [serving('optimized-baseline'), serving('pd-disaggregation'), { id: 'runtime-inventory', variables: {} }], assets: [{ path: 'guides/optimized-baseline/modelserver/cpu', kind: 'kustomize' }, { path: 'guides/pd-disaggregation/modelserver/cpu', kind: 'kustomize' }, { path: 'inventory-chart', guide: 'runtime-inventory', kind: 'chart' }] };
 test('empty selection restores baseline; a serving Guide replaces it, and add-ons keep it', () => {
@@ -60,10 +61,80 @@ test('selection guards reuse serving conflicts and keep compatible add-ons selec
         assets: [...catalog.assets, { path: 'guides/tiered-prefix-cache/modelserver/cpu', kind: 'kustomize' }] };
     const draft = { selectedGuides: ['pd-disaggregation'], capabilityOverrides: {}, sourceRouter: { mode: 'standalone' } };
     const patch = capabilityTogglePatch({ id: 'cache', enabled: false }, draft);
-    assert.match(selectionConflicts(fixture, draft, patch)[0], /Competing serving topologies/);
+    assert.deepEqual(selectionConflicts(fixture, draft, patch), []);
+    assert.match(selectionConflicts(fixture, draft, { selectedGuides: ['pd-disaggregation', 'tiered-prefix-cache'] })[0], /Competing serving topologies/);
     assert.deepEqual(selectionConflicts(fixture, draft, { selectedGuides: ['pd-disaggregation', 'runtime-inventory'] }), []);
     assert.deepEqual(draft.capabilityOverrides, {});
     assert.deepEqual(selectionConflicts(fixture, draft, { capabilityOverrides: { prefix: true } }), []);
+});
+
+test('manually adding CPU cache preserves the serving workload and router through request generation', () => {
+    const guides = ['optimized-baseline', 'pd-disaggregation', 'tiered-prefix-cache'].map(id => ({ ...serving(id), steps: { deploy: {
+        worker: { run: `kubectl apply -k SOURCE/guides/${id}/modelserver/cpu` },
+        router: { run: `helm upgrade --install ${id} oci://example/llm-d-router-standalone -f SOURCE/guides/${id}/router/values.yaml` },
+    } } }));
+    const fixture = { ...catalog, guides, assets: guides.flatMap(({ id }) => [
+        { path: `guides/${id}/modelserver/cpu`, guide: id, kind: 'kustomize' },
+        { path: `guides/${id}/router/values.yaml`, guide: id, kind: 'values', content: 'router: {}' },
+    ]) };
+    for (const guide of ['optimized-baseline', 'pd-disaggregation']) {
+        const initial = resolveCompositionDraft(fixture, { ...createBlueprint(), sourceMode: true,
+            selectedGuides: [guide], capabilityOverrides: { chunked: false }, cacheCpuGiB: '3.5' });
+        const original = structuredClone(initial);
+        const patch = capabilityTogglePatch({ id: 'cache', enabled: false }, initial);
+        assert.deepEqual(selectionConflicts(fixture, initial, patch), []);
+        let draft = resolveCompositionDraft(fixture, { ...initial, ...patch });
+        assert.deepEqual(draft.sourcePlan.guides, [guide]);
+        assert.deepEqual(draft.sourceUnits, initial.sourceUnits);
+        assert.deepEqual(draft.sourceRouter, initial.sourceRouter);
+        assert.equal(draft.nativeCpuCacheGiB, 3.5);
+        assert.equal(inferenceScene(draft).capabilities.find(cap => cap.id === 'cache').enabled, true);
+        const request = compositionRequest(draft, 'session');
+        assert.equal(request.nativeCpuCacheGiB, 3.5);
+        assert.deepEqual(request.guideSelection.guides, [guide]);
+        assert.deepEqual(request.guideSelection.capabilities, { chunked: false, prefix: true });
+        assert.equal(request.router.release, guide);
+
+        // Parameter edits survive disable/restore without introducing the donor's router.
+        draft = { ...draft, nativeCpuCacheGiB: 7 };
+        draft = resolveCompositionDraft(fixture, { ...draft, ...capabilityTogglePatch({ id: 'cache', enabled: true }, draft) });
+        assert.equal(compositionRequest(draft, 'session').nativeCpuCacheGiB, undefined);
+        assert.equal(inferenceScene(draft).capabilities.find(cap => cap.id === 'cache').enabled, false);
+        draft = resolveCompositionDraft(fixture, { ...draft, ...capabilityTogglePatch({ id: 'cache', enabled: false }, draft) });
+        assert.equal(compositionRequest(draft, 'session').nativeCpuCacheGiB, 7);
+        assert.deepEqual(draft.sourceRouter, initial.sourceRouter);
+        assert.deepEqual(initial, original);
+        if (guide === 'pd-disaggregation') {
+            const conflicts = selectionConflicts(fixture, initial, { selectedGuides: [guide, 'tiered-prefix-cache'] });
+            assert.ok(conflicts.some(message => message.startsWith('Competing serving topologies:')));
+            assert.ok(conflicts.some(message => message.startsWith('Conflicting router releases:')));
+        }
+    }
+});
+
+test('native CPU cache respects disabled prefix caching and validates the editable capacity', () => {
+    const initial = { ...createBlueprint(), selectedGuides: ['pd-disaggregation'], capabilityOverrides: { prefix: false } };
+    for (const nativeCpuCacheGiB of [undefined, 6]) {
+        const draft = { ...initial, nativeCpuCacheGiB };
+        const patch = capabilityTogglePatch({ id: 'cache', enabled: false }, draft);
+        assert.equal(patch.capabilityOverrides.prefix, false);
+        assert.match(selectionConflicts(catalog, draft, patch).join(' '), /Enable prefix caching/);
+    }
+    const draft = { ...initial, capabilityOverrides: {} };
+    assert.equal(capabilityTogglePatch({ id: 'cache', enabled: false }, draft).nativeCpuCacheGiB, Number(createBlueprint().cacheCpuGiB));
+    for (const cacheCpuGiB of ['0', '-1', '1025', 'NaN', 'Infinity']) {
+        const patch = capabilityTogglePatch({ id: 'cache', enabled: false }, { ...draft, cacheCpuGiB });
+        assert.match(selectionConflicts(catalog, draft, patch).join(' '), /at most 1024 GiB/);
+    }
+});
+
+test('an explicit tiered-cache recipe keeps its connector and variant controls', () => {
+    const draft = { ...createBlueprint(), selectedGuides: ['tiered-prefix-cache'], capabilityOverrides: {},
+        sourceVariables: { 'tiered-prefix-cache': { CONNECTOR: 'lmcache', VARIANT: 'cpu' } } };
+    const patch = capabilityTogglePatch({ id: 'cache', enabled: false }, draft);
+    assert.deepEqual(patch.capabilityOverrides, { cache: true });
+    assert.equal(patch.nativeCpuCacheGiB, undefined);
+    assert.equal(patch.sourceVariables, undefined);
 });
 
 

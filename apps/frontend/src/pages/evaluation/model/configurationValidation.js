@@ -1,5 +1,5 @@
 import yaml from 'js-yaml';
-import { expandConfigurationTopologies, RUNTIME_CONTROL_FIELDS, runtimeControlOverrides } from './configuration.js';
+import { analyzeConfigurationSweep, configurationTopologyErrors, expandConfigurationTopologies, RUNTIME_CONTROL_FIELDS, runtimeControlOverrides } from './configuration.js';
 import { normalizeGuideSettings } from '@repo/shared/evaluation/guide-settings';
 import { adminManagedEnvironmentMessage, isAdminManagedEnvironmentVariable } from '@repo/shared/evaluation/managed-environment';
 
@@ -26,15 +26,21 @@ export function validateConfigurationInputs(input) {
     }
     if (isPd && guideVariants.length && !guideVariants.includes(guideVariant)) add('guideVariant', 'Select a supported P/D variant.');
     if (guide === 'tiered-prefix-cache' && !guideVariants.includes(guideVariant)) add('guideVariant', 'Select a supported cache variant.');
-    const topologyFields = ['tensorParallelVariants', ...(isPd ? ['prefillTensorParallelVariants'] : []), ...(!isPd || !input.pdTopologyVariants?.trim() ? ['replicaVariants', ...(isPd ? ['prefillReplicaVariants'] : [])] : [])];
-    for (const field of topologyFields) {
-        if (String(input[field]).split(',').some(value => !value.trim() || !Number.isSafeInteger(Number(value)) || Number(value) < 1)) add(field, 'Enter positive integers separated by commas.');
-    }
-    if (!errors.some(error => topologyFields.includes(error.field))) {
-        try {
-            // Validate topology syntax here; generation checks the explicitly selected resource budget.
-            expandConfigurationTopologies(input);
-        } catch (error) { add(isPd && input.pdTopologyVariants?.trim() ? 'pdTopologyVariants' : 'replicaVariants', error.message); }
+    if (input.sweep !== undefined) {
+        analyzeConfigurationSweep(input.sweep, input.maxConfigurations).errors.forEach(error => add(error.field, error.message));
+    } else if (input.topologies !== undefined) {
+        configurationTopologyErrors(input).forEach(error => add(error.field, error.message));
+    } else {
+        const topologyFields = ['tensorParallelVariants', ...(isPd ? ['prefillTensorParallelVariants'] : []), ...(!isPd || !input.pdTopologyVariants?.trim() ? ['replicaVariants', ...(isPd ? ['prefillReplicaVariants'] : [])] : [])];
+        for (const field of topologyFields) {
+            if (String(input[field]).split(',').some(value => !value.trim() || !Number.isSafeInteger(Number(value)) || Number(value) < 1)) add(field, 'Enter positive integers separated by commas.');
+        }
+        if (!errors.some(error => topologyFields.includes(error.field))) {
+            try {
+                // Validate topology syntax here; generation checks the explicitly selected resource budget.
+                expandConfigurationTopologies(input);
+            } catch (error) { add(isPd && input.pdTopologyVariants?.trim() ? 'pdTopologyVariants' : 'replicaVariants', error.message); }
+        }
     }
     const protectedNames = ['model', 'model-path', 'served-model-name', 'tensor-parallel-size', 'tensor_parallel_size', 'tp_size'];
     customRows.forEach((item, index) => {
@@ -72,7 +78,7 @@ export function validateConfigurationInputs(input) {
 
 // The planning API currently returns strings. Only attach errors with a known
 // parameter identity; infrastructure failures remain global.
-export function configurationServerErrors(messages, { customRows = [], sweepEnabled = false, pdTopologyVariants = '', embedded = false } = {}) {
+export function configurationServerErrors(messages, { customRows = [], sweepEnabled = false, pdTopologyVariants = '', topologyRows = false, embedded = false } = {}) {
     return messages.flatMap(message => {
         const text = String(message);
         const custom = customRows.findIndex(row => row.name && text.includes(row.name));
@@ -83,6 +89,7 @@ export function configurationServerErrors(messages, { customRows = [], sweepEnab
         else if (custom >= 0) field = `custom.${custom}.name`;
         else if (Object.values(RUNTIME_CONTROL_FIELDS).some(name => text.includes(name))) field = Object.keys(RUNTIME_CONTROL_FIELDS).find(key => text.includes(RUNTIME_CONTROL_FIELDS[key]));
         else if (/block.size/i.test(text)) field = 'blockSize';
+        else if (topologyRows && /\bTP\b|tensor.parallel|replica|topology needs/i.test(text)) field = 'topologies';
         else if (/prefill.*TP|prefill.*tensor.parallel/i.test(text)) field = sweepEnabled ? 'prefillTensorParallelVariants' : 'prefillTensorParallelSize';
         else if (/\bTP\b|tensor.parallel/i.test(text)) field = sweepEnabled ? 'tensorParallelVariants' : 'tensorParallelSize';
         else if (/topology needs|replicas=.*exceed/i.test(text)) field = sweepEnabled ? (pdTopologyVariants.trim() ? 'pdTopologyVariants' : /prefill/i.test(text) ? 'prefillReplicaVariants' : 'replicaVariants') : /prefill/i.test(text) ? 'prefillReplicas' : 'replicas';

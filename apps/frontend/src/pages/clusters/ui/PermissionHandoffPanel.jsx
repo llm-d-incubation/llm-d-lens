@@ -45,7 +45,7 @@ function MissingRules({ rules }) {
     return (
         <ul className="mt-1.5 space-y-1" aria-label="Missing Kubernetes permissions">
             {rules.map((rule, index) => (
-                <li key={`${rule.operationId || rule.resource || index}-rule`} className="break-all font-mono text-[11px] text-theme-muted">
+                <li key={`${rule.operationId || rule.resource || 'rule'}-${index}`} className="break-all font-mono text-[11px] text-theme-muted">
                     {ruleLabel(rule)}
                 </li>
             ))}

@@ -67,3 +67,33 @@ for (const availableAccelerators of [0, 1, 8]) {
         assert.deepEqual(validate({ guide: 'pd-disaggregation', guideVariant: 'vllm', pdTopologyVariants: '1:2', tensorParallelVariants: '4', prefillTensorParallelVariants: '4', availableAccelerators }), []);
     });
 }
+
+
+test('PD row validation identifies each invalid cell and ignores obsolete sweep inputs', () => {
+    const row = { prefillReplicaCount: '2', prefillTpCount: '1', replicaCount: '2', tpCount: '4' };
+    const inputs = { guide: 'pd-disaggregation', topologies: [row], pdTopologyVariants: 'invalid', replicaVariants: '', tensorParallelVariants: '' };
+    assert.deepEqual(validate(inputs), []);
+    assert.deepEqual(validate({ ...inputs, topologies: [row, { ...row, replicaCount: '', prefillTpCount: '0' }] }).map(error => error.field).sort(), ['topologies.1.prefillTpCount', 'topologies.1.replicaCount']);
+    assert.equal(validate({ ...inputs, topologies: [] })[0].field, 'topologies');
+});
+
+test('PD server topology errors target the table while routing errors retain their own field', async () => {
+    const { configurationServerErrors } = await import('./configurationValidation.js');
+    const errors = configurationServerErrors([
+        'Prefill TP must divide the attention heads.',
+        'Requested topology needs 32 accelerators, but only 8 are available.',
+        'Precise token-load routing currently requires one EPP replica.',
+        'Connection refused',
+    ], { topologyRows: true });
+    assert.deepEqual(errors.map(error => error.field), ['topologies', 'topologies', 'routerValues']);
+});
+
+
+test('sweep range and filter errors map to the editable source fields', async () => {
+    const { topologySweepFromConfiguration } = await import('./configuration.js');
+    const sweep = topologySweepFromConfiguration();
+    assert.deepEqual(validate({ guide: 'pd-disaggregation', sweep }), []);
+    const invalid = validate({ guide: 'pd-disaggregation', sweep: { ...sweep, prefillReplicaVariants: '1-', maxAccelerators: '-2' } });
+    assert.deepEqual(invalid.map(error => error.field), ['sweep.prefillReplicaVariants', 'sweep.maxAccelerators']);
+    assert.equal(validate({ guide: 'pd-disaggregation', sweep: { ...sweep, fixedAccelerators: '1' } })[0].field, 'topologies');
+});

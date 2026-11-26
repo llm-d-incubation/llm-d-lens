@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MODELS } from '@repo/shared/catalog';
+import { MODELS, defaultServing, catalogModel } from '@repo/shared/catalog';
+import ModelParametersForm from './ModelParametersForm.jsx';
 import { AuthContext } from '../../auth/AuthContext.js';
 import AgenticDeploymentWorkspace from '../../deployment/ui/AgenticDeploymentWorkspace.jsx';
 import ManualDeploymentWorkspace from '../../deployment/ui/ManualDeploymentWorkspace.jsx';
@@ -84,12 +85,12 @@ test('serving arguments add tool calling and reject plan-managed engine fields',
         { name: 'enable-auto-tool-choice', value: 'true' }, { name: 'tool-call-parser', value: 'hermes' },
         { name: 'kv-cache-dtype', value: 'fp8' }, { name: 'reasoning-parser', value: 'qwen3' },
     ]);
-    assert.deepEqual(servingArguments({ toolCalling: false, toolParser: '', extra: 'dtype=bfloat16' }, [{ name: 'dtype', value: 'auto' }]), [{ name: 'dtype', value: 'bfloat16' }]);
+    assert.deepEqual(servingArguments({ toolCalling: false, toolParser: '', extra: 'dtype=bfloat16' }, [{ name: 'dtype', value: 'auto' }]), [{ name: 'dtype', value: 'bfloat16' }, { name: 'enable-auto-tool-choice', value: 'false' }]);
     assert.throws(() => servingArguments({ toolCalling: false, toolParser: '', extra: 'max-model-len=8192' }), /managed by the plan/);
     assert.throws(() => servingArguments({ toolCalling: false, toolParser: '', extra: '--enforce-eager' }), /name=value/);
     assert.throws(() => servingArguments({ toolCalling: true, toolParser: 'bad parser', extra: '' }), /parser/);
     assert.deepEqual(servingArguments({ toolCalling: true, toolParser: 'hermes', extra: 'tool-call-parser=qwen3_coder' }),
-        [{ name: 'tool-call-parser', value: 'qwen3_coder' }]);
+        [{ name: 'enable-auto-tool-choice', value: 'true' }, { name: 'tool-call-parser', value: 'qwen3_coder' }]);
 });
 
 test('Manual review restores 3D topology and allows component editing', () => {
@@ -141,7 +142,9 @@ test('model catalog preserves search and removes legacy pre-generation runtime c
     assert.match(html, /Workload &amp; limits/);
     assert.match(html, /id="deployment-optimizations"[\s\S]*Core llm-d optimizations on/);
     assert.match(html, /id="deployment-objective"[\s\S]*Optimize for[\s\S]*>Low latency<[\s\S]*>High throughput</);
-    assert.match(html, /vLLM options/);
+    assert.match(html, /Model parameters/);
+    assert.match(html, /Enable tool calling/);
+    assert.match(html, /Restore model defaults/);
     assert.match(html, /Load target[\s\S]*aria-label="Concurrent requests"/);
     assert.doesNotMatch(html, /P95 E2E|P95 input tokens/);
     assert.match(html, /Mean input tokens/);
@@ -173,4 +176,41 @@ test('saved constraints remain visible and unchanged when the simplified form is
     assert.match(html, /value="4096"/);
     assert.match(html, /<details open="">/);
     assert.doesNotMatch(html, /Predicted TTFT|GPU rental/);
+});
+
+
+test('tool enable override preserves parser and explicit disable removes it', () => {
+    const settings = { toolCalling: true, toolParser: 'hermes', extra: 'enable-auto-tool-choice=true' };
+    assert.deepEqual(servingArguments(settings), [{ name: 'enable-auto-tool-choice', value: 'true' }, { name: 'tool-call-parser', value: 'hermes' }]);
+    assert.deepEqual(servingArguments({ ...settings, extra: 'enable-auto-tool-choice=false' }), [{ name: 'enable-auto-tool-choice', value: 'false' }]);
+    assert.throws(() => servingArguments({ ...settings, extra: 'enable-auto-tool-choice=maybe' }), /true or false/);
+});
+
+test('custom models preserve identity and defaults without modifying the catalog', () => {
+    const model = catalogModel({ id: 'custom-1', name: 'Custom', repository: 'team/model', revision: 'release', source: 'custom', version: 3, modelType: 'text-generation', servingDefaults: { toolCalling: true, toolParser: 'hermes' } });
+    const settings = defaultServing(model);
+    settings.toolCalling = false;
+    assert.equal(model.servingDefaults.toolCalling, true);
+    assert.equal(model.revision, 'release');
+    assert.equal(model.id, 'custom-1');
+    const html = renderToStaticMarkup(createElement(ModelParametersForm, { value: defaultServing(model), onChange() {} }));
+    assert.match(html, /Enable tool calling/);
+    assert.match(html, /value="hermes"/);
+    assert.match(html, /checked=""/);
+});
+
+
+test('catalog combines category, publisher and word filters with stable release sorting', async () => {
+    const { filterCatalogModels } = await import('@repo/shared/catalog');
+    const models = [
+        { name: 'Old 8B', repository: 'a/old', family: 'a', category: 'Text', releaseDate: '2024-01-01' },
+        { name: 'New 8B', repository: 'a/new', family: 'a', category: 'Text', releaseDate: '2026-01-01' },
+        { name: 'Other', repository: 'b/model', family: 'b', category: 'Text', releaseDate: '2025-01-01' },
+        { name: 'Vision', repository: 'a/vision', family: 'a', category: 'Vision', releaseDate: '2025-01-01' },
+        { name: 'Undated', repository: 'a/unknown', family: 'a', category: 'Text' },
+    ];
+    assert.deepEqual(filterCatalogModels(models, { category: 'Text', publisher: 'a', search: '8b a/' }).map(model => model.name), ['New 8B', 'Old 8B']);
+    assert.deepEqual(filterCatalogModels(models, { category: 'Text', publisher: 'a', sort: 'oldest' }).map(model => model.name), ['Old 8B', 'New 8B', 'Undated']);
+    assert.deepEqual(filterCatalogModels(models, { category: 'Text', publisher: 'a', sort: 'name' }).map(model => model.name), ['New 8B', 'Old 8B', 'Undated']);
+    assert.equal(models[0].name, 'Old 8B');
 });

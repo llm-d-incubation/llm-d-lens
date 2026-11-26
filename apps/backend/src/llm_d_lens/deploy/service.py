@@ -634,7 +634,11 @@ class GuideAdapterDeploymentService:
                                 "install them from the cluster's CRDs action before deploying"
                             )
             if prepared_artifact:
-                provider_execution = {"namespace": namespace, "_artifact": provider_artifact}
+                provider_execution = {
+                    "namespace": namespace,
+                    "provenance": dict(request.provenance or {}),
+                    "_artifact": provider_artifact,
+                }
             provider_execution = await adapter.deploy(
                 provider_artifact,
                 {
@@ -649,6 +653,7 @@ class GuideAdapterDeploymentService:
                     "data_plane_warning": data_plane_warning,
                 },
             )
+            provider_execution.setdefault("provenance", dict(request.provenance or {}))
             provider_execution["_artifact"] = provider_artifact
             deployment_snapshot = await adapter.diagnostics(provider_execution)
             self._log_archive.append_snapshot(execution_id, "deployed", deployment_snapshot)
@@ -1018,7 +1023,16 @@ class GuideAdapterDeploymentService:
         if execution.endpoint:
             provider_context["endpoint_url"] = execution.endpoint.url
             provider_context["baseline_endpoint_url"] = execution.endpoint.baseline_url
-        return adapter, artifact, {**provider_context, "namespace": execution.namespace, "_artifact": artifact}
+        return (
+            adapter,
+            artifact,
+            {
+                **provider_context,
+                "namespace": execution.namespace,
+                "provenance": dict(execution.provenance or {}),
+                "_artifact": artifact,
+            },
+        )
 
     async def refresh_diagnostics(self, execution: DeploymentExecution) -> DeploymentExecution:
         if execution.execution_id in _creating_executions:

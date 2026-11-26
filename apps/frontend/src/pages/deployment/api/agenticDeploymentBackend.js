@@ -1,5 +1,13 @@
 import { streamSseRequest } from '../../../shared/api/sse.js';
-import { postJson } from '../../../shared/api/httpClient.js';
+import { postJson, requestJson } from '../../../shared/api/httpClient.js';
+
+export function listDeploymentVerifications(executionId, signal) {
+    return requestJson(`/api/v1/deployments/executions/${encodeURIComponent(executionId)}/verifications`, { signal });
+}
+
+export function startDeploymentVerification(executionId, checks, requests) {
+    return postJson(`/api/v1/deployments/executions/${encodeURIComponent(executionId)}/verifications`, { checks, requests });
+}
 
 export const DEFAULT_REQUIREMENTS = {
     objective: 'balanced', maxAccelerators: '', ttftMs: '', tpotMs: '', providerRef: '', plannerPrompt: '',
@@ -15,23 +23,31 @@ export function defaultRequirements() {
 // The plan owns these; setting them as free-form arguments would conflict with its topology and runtime fields.
 const MANAGED_ARGUMENTS = new Set(['model', 'served-model-name', 'host', 'port', 'tensor-parallel-size', 'pipeline-parallel-size',
     'data-parallel-size', 'max-model-len', 'max-num-seqs', 'max-num-batched-tokens', 'gpu-memory-utilization']);
-const TOOL_ARGUMENTS = new Set(['enable-auto-tool-choice', 'tool-call-parser']);
 
-export function servingArguments({ toolCalling, toolParser, extra }, catalogArguments = []) {
-    const rows = [];
+export function servingArguments({ toolCalling = false, toolParser = '', reasoningParser = '', chatTemplate = '', dtype = '', extra = '' }, catalogArguments = []) {
+    const values = new Map(catalogArguments.map(item => [item.name, item.value]));
+    values.set('enable-auto-tool-choice', toolCalling ? 'true' : 'false');
+    if (toolParser) values.set('tool-call-parser', toolParser.trim());
+    for (const [name, value] of [['reasoning-parser', reasoningParser], ['chat-template', chatTemplate], ['dtype', dtype]]) {
+        if (value) values.set(name, value);
+    }
     for (const line of extra.split('\n').map(item => item.trim()).filter(Boolean)) {
         const match = /^(?:--)?([a-z0-9][a-z0-9-]*)(?:=|\s+)(\S.*)$/.exec(line);
         if (!match) throw new Error(`"${line}" must be written as name=value.`);
-        if (MANAGED_ARGUMENTS.has(match[1])) throw new Error(`--${match[1]} is managed by the plan; edit it after the plan is built.`);
-        rows.push({ name: match[1], value: match[2].trim() });
+        if (MANAGED_ARGUMENTS.has(match[1]) || match[1] === 'revision') throw new Error(`--${match[1]} is managed by the plan or model revision.`);
+        values.set(match[1], match[2].trim());
     }
-    // Explicit tool arguments replace the catalog default.
-    if (toolCalling && !rows.some(item => TOOL_ARGUMENTS.has(item.name))) {
-        if (!/^[a-z0-9_]+$/.test(toolParser.trim())) throw new Error('Tool call parser must be a vLLM parser name, for example hermes.');
-        rows.unshift({ name: 'enable-auto-tool-choice', value: 'true' }, { name: 'tool-call-parser', value: toolParser.trim() });
+    if (values.has('no-enable-auto-tool-choice')) {
+        const disabled = values.get('no-enable-auto-tool-choice');
+        if (!['true', 'false'].includes(disabled)) throw new Error('Tool calling must be true or false.');
+        values.set('enable-auto-tool-choice', disabled === 'true' ? 'false' : 'true');
+        values.delete('no-enable-auto-tool-choice');
     }
-    const names = new Set(rows.map(item => item.name));
-    return [...catalogArguments.filter(item => !names.has(item.name)), ...rows];
+    const enabled = values.get('enable-auto-tool-choice');
+    if (!['true', 'false'].includes(enabled)) throw new Error('Tool calling must be true or false.');
+    if (enabled === 'true' && !/^[a-z0-9_]+$/.test(values.get('tool-call-parser') || '')) throw new Error('Tool calling requires a valid tool call parser, for example hermes.');
+    if (enabled === 'false') values.delete('tool-call-parser');
+    return [...values].map(([name, value]) => ({ name, value }));
 }
 
 export const OPTIMIZATION_CONTROLS = [
@@ -121,7 +137,10 @@ export function deploymentPlanningRequest(draft, values, clusterSessionId, mode,
         placement_node_label: draft.placementNodeLabel || null,
         max_model_len: draft.contextLength, gpu_memory_utilization: draft.gpuMemoryUtilization,
         max_num_seqs: draft.maxNumSeqs, max_num_batched_tokens: draft.maxNumBatchedTokens,
-        vllm_arguments: draft.vllmArguments || [],
+        vllm_arguments: draft.servingOverrides ? [] : draft.vllmArguments || [],
+        model_catalog_id: draft.modelCatalogId || null,
+        model_catalog_version: draft.modelCatalogVersion || null,
+        serving_overrides: draft.servingOverrides || null,
         planning_mode: mode, ai_provider_id: mode === 'agentic' ? aiProviderId || null : null,
         planner_prompt: plannerPrompt || null,
         execution_policy: { mode: 'approval_required', max_total_duration_minutes: maxDuration, allow_trials: mode === 'agentic' && Boolean(values.allowTrial) },
@@ -188,6 +207,7 @@ export function deploymentPermissionPayload({
     manifest = '',
     namespaceLabels = null,
     agenticDeploymentRunId = null,
+    preparedPlanId = null,
     deploymentName = null,
     providerRef = null,
     storageVolumeId = null,
@@ -205,6 +225,7 @@ export function deploymentPermissionPayload({
         ...(manifest ? { manifest } : {}),
         ...(hasLabels ? { namespace_labels: namespaceLabels } : {}),
         ...(agenticDeploymentRunId ? { agentic_deployment_run_id: agenticDeploymentRunId } : {}),
+        ...(preparedPlanId ? { prepared_plan_id: preparedPlanId } : {}),
         ...(deploymentName ? { deployment_name: deploymentName } : {}),
         ...(providerRef ? { provider_ref: providerRef } : {}),
         ...(storageVolumeId ? { storage_volume_id: storageVolumeId } : {}),
@@ -234,7 +255,7 @@ export function verifyDeploymentCleanup(executionId, payload = {}) {
 }
 
 export function isDeploymentAdminSetupError(error) {
-    const code = error?.code || error?.body?.code || '';
+    const code = error?.code || error?.body?.code || error?.body?.detail?.code || '';
     return (error?.status === 403 || error?.status === 409) && code === 'deployment_admin_setup_required';
 }
 

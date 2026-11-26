@@ -116,3 +116,21 @@ test('pending deployment run lookup forwards caller cancellation', async (t) => 
     });
     assert.deepEqual(await searchLocalDeploymentRuns('a b', { signal: controller.signal }), []);
 });
+
+test('executePreparedDeployment preserves 403 deployment_admin_setup_required status, code, and body', async (t) => {
+    const body = {
+        code: 'deployment_admin_setup_required',
+        detail: 'Orchestration administrator setup is required before deploying.',
+        namespace: 'llmd-ds-1',
+        identity: { kind: 'ServiceAccount', name: 'lens-edit', namespace: 'lens-edit', overrideRequired: false },
+    };
+    t.mock.method(globalThis, 'fetch', async () => Response.json(body, { status: 403 }));
+    await assert.rejects(
+        executePreparedDeployment(
+            { configurations: [{ content: { disaggregatedSet: { slices: 2 } } }], provenance: { cluster_server_id: 'cluster-a' } },
+            { id: 'plan-1', digest: 'sha256:plan-1' },
+            false,
+        ),
+        (error) => error.status === 403 && error.code === 'deployment_admin_setup_required' && error.body?.namespace === 'llmd-ds-1',
+    );
+});

@@ -8,7 +8,7 @@ import logging
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import Response
+from fastapi.responses import JSONResponse, Response
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from llm_d_lens.api.problems import problem
@@ -21,8 +21,10 @@ from llm_d_lens.auth.access import (
     visible_cluster_ids,
 )
 from llm_d_lens.db.dao.deployment_batch import DeploymentBatchDao
+from llm_d_lens.deploy import verification
 from llm_d_lens.deploy.application import deployment_run_manager
 from llm_d_lens.deploy.capabilities import (
+    DeploymentAdminSetupRequiredError,
     DeploymentBootstrapVerifyRequest,
     DeploymentCapabilityUnavailableError,
     DeploymentCapabilityValidationError,
@@ -72,6 +74,8 @@ from llm_d_lens.deploy.standard_kubernetes_service import (
     StandardKubernetesServiceRequest,
     build_standard_kubernetes_service_configuration,
 )
+from llm_d_lens.deploy.usage import DeploymentInUseError
+from llm_d_lens.deploy.verification_checks import VerificationRequest
 from llm_d_lens.hardware.resolver import deployment_mode
 from llm_d_lens.infrastructure.kubernetes import PortForwardError, list_resources
 
@@ -296,13 +300,17 @@ async def verify_deployment_execution(execution_id: str, body: RuntimeVerificati
         raise
 
 
-def _ready_model_cache_entry(entries, model: str):
+def _ready_model_cache_entry(entries, model: str, revision: str | None = None):
     expected = model.strip().lower()
     for entry in entries:
         source = getattr(entry, "source", None)
         huggingface = getattr(source, "huggingface", None)
         repo_id = str(getattr(huggingface, "repo_id", "") or "").strip().lower()
-        if repo_id == expected and getattr(entry, "status", "") == "ready":
+        if (
+            repo_id == expected
+            and getattr(entry, "status", "") == "ready"
+            and (revision is None or (getattr(huggingface, "revision", None) or "main") == revision)
+        ):
             return entry
     return None
 
@@ -369,6 +377,7 @@ async def _refresh_deployment_records() -> None:
 @router.on_event("startup")
 async def start_deployment_record_refresh() -> None:
     global _refresh_task
+    verification.fail_interrupted_verifications()
     for run in _store.list_runs():
         if run.status == DeploymentRunStatus.CANCELLING:
             deployment_run_manager.reconcile_interrupted_cancellation(run.id)
@@ -406,6 +415,27 @@ async def _validate_cluster_placement(placement: dict | None, cluster_id: str | 
             raise ValueError("selected node label is not present in the cluster")
 
 
+def _create_run_target_cluster_ids(request: DeploymentRunCreateRequest, owner_user_id: str | None) -> list[str]:
+    cluster_ids: list[str] = []
+    if request.prepared_plan_id:
+        from llm_d_lens.db.dao.deployment_plan import DeploymentPlanDao
+
+        plan = DeploymentPlanDao().get(request.prepared_plan_id)
+        if plan is not None and plan.owner_user_id == owner_user_id and plan.cluster_id:
+            cluster_ids.append(plan.cluster_id)
+    session_id = request.provenance.get("cluster_session_id")
+    if isinstance(session_id, str) and session_id.strip():
+        from llm_d_lens.cluster.sessions import get_session
+
+        session = get_session(session_id)
+        if session is not None and session.server_id and session.server_id not in cluster_ids:
+            cluster_ids.append(session.server_id)
+    raw_server_id = request.provenance.get("cluster_server_id")
+    if isinstance(raw_server_id, str) and raw_server_id.strip() and raw_server_id.strip() not in cluster_ids:
+        cluster_ids.append(raw_server_id.strip())
+    return cluster_ids
+
+
 @router.post(
     "/runs",
     summary="Start a deployment run from one or more already-rendered deployable configurations.",
@@ -422,11 +452,17 @@ async def _validate_cluster_placement(placement: dict | None, cluster_id: str | 
 )
 async def create_run(request: DeploymentRunCreateRequest, http_request: Request = None):
     try:
+        principal = current_principal(http_request)
+        owner_user_id = owner_for_create(principal)
+        for target_cluster_id in _create_run_target_cluster_ids(request, owner_user_id):
+            require_cluster_access(principal, target_cluster_id)
         placement = request.runtime_binding.placement if request.runtime_binding else None
         await _validate_cluster_placement(placement, request.provenance.get("cluster_server_id"), http_request)
-        return await deployment_run_manager.start_run(
-            request, owner_user_id=owner_for_create(current_principal(http_request))
-        )
+        return await deployment_run_manager.start_run(request, owner_user_id=owner_user_id)
+    except DeploymentAdminSetupRequiredError as error:
+        return JSONResponse(status_code=403, content=error.to_response_payload())
+    except DeploymentCapabilityUnavailableError as error:
+        return problem(503, "Cluster permission check unavailable", str(error), error.code)
     except Exception as error:
         if _is_cluster_auth_error(error):
             return problem(401, "Kubeconfig unauthorized", str(error), "kubeconfig_unauthorized")
@@ -550,6 +586,9 @@ async def create_standard_kubernetes_service_run(
 ):
     """Create the current vLLM implementation of a Standard service run."""
     try:
+        from llm_d_lens.model_catalog.service import resolve_deployment_model
+
+        request = resolve_deployment_model(request)
         from llm_d_lens.cluster import registry
         from llm_d_lens.cluster import service as cluster_service
         from llm_d_lens.cluster.sessions import require_active_session
@@ -579,7 +618,7 @@ async def create_standard_kubernetes_service_run(
                 cluster_id=session.server_id,
                 storage_volume_id=request.storage_volume_id,
             )
-            ready_entry = _ready_model_cache_entry(entries, request.model)
+            ready_entry = _ready_model_cache_entry(entries, request.model, request.model_revision)
             if ready_entry is None:
                 raise ValueError("selected model is not ready in the selected model cache storage")
             model_revision = ready_entry.source.huggingface.revision
@@ -720,6 +759,45 @@ def _require_execution(execution_id: str):
     return context
 
 
+def _execution_payload(context, principal, owner=None):
+    """Expose canonical links and existing policy decisions without exposing owner identities."""
+    if owner is None:
+        owner = _owner_for_run(context.run_id)
+    user_id, group_id = owner if owner else (None, None)
+    ownership = "unknown" if not user_id else "self" if principal and user_id == principal.user_id else "other"
+
+    def allowed(permission, *, run_only=False):
+        if principal is None:
+            return False
+        return any(
+            resource_readable(
+                principal,
+                permission=permission,
+                resource_type=kind,
+                resource_id=identifier,
+                cluster_id=context.cluster_id,
+                owner_user_id=user_id,
+                owner_group_id=group_id,
+            )
+            for kind, identifier in (("deployment_run", context.run_id), ("deployment_execution", context.execution_id))
+            if identifier and (not run_only or kind == "deployment_run")
+        )
+
+    payload = context.api_payload()
+    payload.update(
+        run_id=context.run_id,
+        case_id=context.case_id,
+        ownership=ownership,
+        capabilities={
+            "connect": allowed("deployment:execution:connect"),
+            "update": allowed("deployment:execution:update"),
+            "stop": allowed("deployment:case:execute", run_only=True),
+            "delete": allowed("deployment:execution:delete"),
+        },
+    )
+    return payload
+
+
 def _list_runs(query: str = "", principal=None):
     needle = query.lower().strip()
     runs = list(reversed(_store.list_runs()))
@@ -831,12 +909,12 @@ async def list_executions(
         limit=limit,
         allowed_cluster_ids=visible_cluster_ids(principal),
     )
+    owners = DeploymentBatchDao().owner_map([context.run_id for context in contexts])
     if principal is not None:
-        owners = DeploymentBatchDao().owner_map([context.run_id for context in contexts])
         contexts = [
             context for context in contexts if _execution_readable(principal, context, owners.get(context.run_id))
         ]
-    return {"items": [context.api_payload() for context in contexts]}
+    return {"items": [_execution_payload(context, principal, owners.get(context.run_id)) for context in contexts]}
 
 
 @router.get(
@@ -855,8 +933,14 @@ async def get_execution(execution_id: str, request: Request = None):
     context = find_execution_context(execution_id)
     if context is None:
         raise HTTPException(status_code=404, detail="deployment execution not found")
-    _require_execution_permission(current_principal(request), context, "deployment:run:read")
-    return context.api_payload()
+    principal = current_principal(request)
+    _require_execution_permission(principal, context, "deployment:run:read")
+    payload = _execution_payload(context, principal)
+    run = _store.get_run(context.run_id) if context.run_id else None
+    case = next((case for case in run.cases if case.id == context.case_id), None) if run else None
+    if case and 0 <= case.source_configuration_ordinal < len(run.source_configurations):
+        payload["configuration"] = run.source_configurations[case.source_configuration_ordinal].model_dump(mode="json")
+    return payload
 
 
 @router.get(
@@ -1080,6 +1164,59 @@ async def get_execution_pod_logs(
         "logs": logs,
         "success": result.returncode == 0,
     }
+
+
+@router.post(
+    "/executions/{execution_id}/verifications",
+    status_code=202,
+    operation_id="create_deployment_verification",
+    summary="Start a bounded deployment verification.",
+    description="Persist and start a small inference check on the Lens host. Returns a verification id immediately; "
+    "read its persisted result without replaying requests. The request budget includes prefix warmup.",
+)
+async def create_verification(execution_id: str, request: VerificationRequest, http_request: Request = None):
+    context = find_execution_context(execution_id)
+    if context is None:
+        raise HTTPException(status_code=404, detail="deployment execution not found")
+    principal = current_principal(http_request)
+    _require_execution_permission(principal, context, "deployment:execution:connect")
+    try:
+        return verification.start_verification(execution_id, request)
+    except ValueError as error:
+        return problem(409, "Verification cannot start", str(error), "deployment_conflict")
+
+
+@router.get(
+    "/executions/{execution_id}/verifications",
+    operation_id="list_deployment_verifications",
+    summary="List persisted deployment verifications.",
+    description="Read the most recent 20 verification records attached to this execution. Does not send inference "
+    "requests or advance task lifecycle. Records survive stop and clean, and are removed with the execution.",
+)
+async def list_verifications(execution_id: str, request: Request = None):
+    context = find_execution_context(execution_id)
+    if context is None:
+        raise HTTPException(status_code=404, detail="deployment execution not found")
+    _require_execution_permission(current_principal(request), context, "deployment:run:read")
+    return {"items": verification.list_verifications(execution_id)}
+
+
+@router.get(
+    "/executions/{execution_id}/verifications/{verification_id}",
+    operation_id="get_deployment_verification",
+    summary="Get a persisted deployment verification.",
+    description="Read a verification's lifecycle, request budget, actual counts and evidence-qualified verdict. "
+    "Reads never send requests or resume an interrupted task.",
+)
+async def get_verification(execution_id: str, verification_id: str, request: Request = None):
+    context = find_execution_context(execution_id)
+    if context is None:
+        raise HTTPException(status_code=404, detail="deployment execution not found")
+    _require_execution_permission(current_principal(request), context, "deployment:run:read")
+    try:
+        return verification.get_verification(execution_id, verification_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
 
 
 @router.patch(
@@ -1355,6 +1492,8 @@ async def delete_run(run_id: str, request: Request = None):
             "deployment_cleanup_permission_denied",
             extra=error.payload,
         )
+    except DeploymentInUseError as error:
+        return problem(409, "Deployment is in use", str(error), "deployment_in_use")
     except Exception as error:
         if _is_cluster_auth_error(error):
             return problem(401, "Kubeconfig unauthorized", str(error), "kubeconfig_unauthorized")
@@ -1486,6 +1625,8 @@ async def stop_case(run_id: str, case_id: str, request: Request = None):
         _require_run_permission(current_principal(request), run, "deployment:case:execute")
     try:
         case, execution = await deployment_run_manager.worker_for_run(run_id).stop_case(run_id, case_id)
+    except DeploymentInUseError as error:
+        return problem(409, "Deployment is in use", str(error), "deployment_in_use")
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return _case_response(case, execution)
@@ -1524,6 +1665,8 @@ async def restart_case(run_id: str, case_id: str, request: RestartCaseRequest, h
         case = await deployment_run_manager.worker_for_run(run_id).restart_case(
             run_id, case_id, model_token=(request.model_token or "").strip() or None
         )
+    except DeploymentInUseError as error:
+        return problem(409, "Deployment is in use", str(error), "deployment_in_use")
     except Exception as error:
         if _is_cluster_auth_error(error):
             return problem(401, "Kubeconfig unauthorized", str(error), "kubeconfig_unauthorized")
@@ -1550,6 +1693,8 @@ async def clean_case(run_id: str, case_id: str, request: CleanCaseRequest, http_
         case, execution = await deployment_run_manager.worker_for_run(run_id).clean_case(
             run_id, case_id, preserve_rendered_overlay=request.preserve_rendered_overlay
         )
+    except DeploymentInUseError as error:
+        return problem(409, "Deployment is in use", str(error), "deployment_in_use")
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     return _case_response(case, execution)
@@ -1628,9 +1773,10 @@ async def generate_deployment_permission_remediation(
     http_request: Request = None,
 ):
     """Render an idempotent Orchestration administrator bash script for the deployment namespace."""
-    require_cluster_access(current_principal(http_request), body.cluster_id)
+    principal = current_principal(http_request)
+    require_cluster_access(principal, body.cluster_id)
     try:
-        return await generate_deployment_bootstrap_script(body)
+        return await generate_deployment_bootstrap_script(body, owner_user_id=owner_for_create(principal))
     except DeploymentClusterAuthError as error:
         return problem(401, "Kubeconfig unauthorized", str(error), "kubeconfig_unauthorized")
     except DeploymentCapabilityValidationError as error:

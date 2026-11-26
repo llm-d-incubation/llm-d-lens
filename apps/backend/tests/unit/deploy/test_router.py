@@ -748,6 +748,10 @@ async def test_list_ready_executions_is_side_effect_free_and_filtered(monkeypatc
     assert len(response["items"]) == 1
     assert response["items"][0] == {
         "execution_id": "execution-ready",
+        "run_id": "run-1",
+        "case_id": "case-execution-ready",
+        "ownership": "unknown",
+        "capabilities": {"connect": False, "update": False, "stop": False, "delete": False},
         "status": "ready",
         "cluster_id": "cluster-1",
         "cluster_session_id": "session-1",
@@ -784,8 +788,8 @@ async def test_list_ready_executions_is_side_effect_free_and_filtered(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_execution_payload_omits_run_and_case_identifiers(monkeypatch):
-    """run_id/case_id stay inside Deploy and must not leak to API consumers."""
+async def test_execution_payload_exposes_canonical_run_and_case_links(monkeypatch):
+    """Execution links let Web and MCP address the same deployment case."""
     ready = _execution("execution-ready", DeploymentStatus.READY)
     run = SimpleNamespace(
         id="run-1",
@@ -802,8 +806,8 @@ async def test_execution_payload_omits_run_and_case_identifiers(monkeypatch):
     payload = await router.get_execution("execution-ready")
 
     assert payload["execution_id"] == "execution-ready"
-    assert "run_id" not in payload
-    assert "case_id" not in payload
+    assert payload["run_id"] == "run-1"
+    assert payload["case_id"] == "case-execution-ready"
 
 
 @pytest.mark.asyncio
@@ -1013,7 +1017,7 @@ async def test_deployment_permission_routes_delegate_and_map_errors(monkeypatch)
     )
     assert res["sufficient"] is True
 
-    async def raise_401(_body):
+    async def raise_401(_body, **_kwargs):
         raise DeploymentClusterAuthError("Unauthorized")
 
     monkeypatch.setattr(router, "generate_deployment_bootstrap_script", raise_401)
@@ -1435,3 +1439,223 @@ def test_standard_kubernetes_service_uses_cluster_vllm_image_when_configured(mon
         cluster_vllm_image=None,
     )
     assert fallback_cfg.content["runtime"]["image"] == runtime_image(accelerator="nvidia")
+
+
+@pytest.mark.asyncio
+async def test_deploy_and_agentic_approve_map_admin_setup_required_to_403_and_allow_retry(monkeypatch):
+    import json
+
+    from fastapi.responses import JSONResponse
+
+    from llm_d_lens.agentic import router as agentic_router
+    from llm_d_lens.agentic.models import (
+        AgenticApprovalRequest,
+        AgenticCandidate,
+        AgenticDeploymentCreateRequest,
+        AgenticDeploymentRun,
+        AgenticDeploymentStatus,
+    )
+    from llm_d_lens.agentic.planner import PlanningFacts
+    from llm_d_lens.configuration.plan_models import ConfigurationPlan, DeploymentRequirements
+    from llm_d_lens.deploy import capabilities, router
+    from llm_d_lens.deploy.contracts import DeployableConfiguration, DeploymentRunCreateRequest
+    from llm_d_lens.infrastructure.artifacts.manifests import configuration_checksum
+
+    report = {
+        "status": "admin_required",
+        "sufficient": False,
+        "clusterId": "cluster-nonadmin",
+        "namespace": "llmd-pd-target",
+        "adminOperations": [{"id": "deploy.rbac", "step": 2, "title": "Grant RBAC", "executor": "admin"}],
+        "missing": [],
+    }
+
+    # 1. POST /api/v1/deployments/runs maps DeploymentAdminSetupRequiredError to 403 JSONResponse
+    monkeypatch.setattr(router, "_validate_cluster_placement", lambda *_args: asyncio.sleep(0))
+    monkeypatch.setattr(router, "current_principal", lambda _req: None)
+    monkeypatch.setattr(router, "owner_for_create", lambda _p: "alice")
+
+    async def raise_admin_setup(*_args, **_kwargs):
+        raise capabilities.DeploymentAdminSetupRequiredError(report)
+
+    monkeypatch.setattr(router.deployment_run_manager, "start_run", raise_admin_setup)
+    config_content = {"model": {"name": "Qwen/Qwen3-0.6B"}}
+    cfg = DeployableConfiguration(
+        type="pd",
+        format="manifest",
+        provider_ref="pd-disaggregation",
+        checksum=configuration_checksum(config_content),
+        content=config_content,
+    )
+    deploy_req = DeploymentRunCreateRequest(
+        configurations=[cfg],
+        provenance={"cluster_session_id": "s1", "cluster_server_id": "cluster-nonadmin"},
+    )
+    deploy_resp = await router.create_run(deploy_req, None)
+    assert isinstance(deploy_resp, JSONResponse)
+    assert deploy_resp.status_code == 403
+    deploy_body = json.loads(deploy_resp.body)
+    assert deploy_body["code"] == "deployment_admin_setup_required"
+    assert deploy_body["namespace"] == "llmd-pd-target"
+    assert deploy_body["adminOperations"] == report["adminOperations"]
+
+    # 2. POST /api/agentic-deployments/{run_id}/approve maps to 403 AND keeps run AWAITING_APPROVAL for retry
+    candidate = AgenticCandidate(
+        provider_ref="pd-disaggregation",
+        replicas=1,
+        tensor_parallel_size=1,
+        max_model_len=4096,
+        gpu_memory_utilization=0.9,
+    )
+    agentic_run = AgenticDeploymentRun(
+        status=AgenticDeploymentStatus.AWAITING_APPROVAL,
+        selected_candidate=candidate,
+        request=AgenticDeploymentCreateRequest(
+            cluster_session_id="a" * 36,
+            deployment_name="pd-deploy",
+            model="Qwen/Qwen3-0.6B",
+            replicas=1,
+            tensor_parallel_size=1,
+            storage_volume_id="vol-1",
+            planning_facts=PlanningFacts(8, 32, 8),
+            requirements=DeploymentRequirements(model="Qwen/Qwen3-0.6B"),
+        ),
+        configuration_plan=ConfigurationPlan(
+            plan_id="plan-1",
+            mode="agentic",
+            requirements=DeploymentRequirements(model="Qwen/Qwen3-0.6B"),
+            configuration={"checksum": "cfg-sum"},
+            validation={"status": "resources_checked"},
+        ),
+    )
+    monkeypatch.setattr(agentic_router.service, "get", lambda _rid: agentic_run)
+    monkeypatch.setattr(agentic_router, "current_principal", lambda _req: None)
+    monkeypatch.setattr(agentic_router, "owner_for_create", lambda _p: "alice")
+
+    attempts = {"count": 0}
+
+    async def fake_approve(*_args, **_kwargs):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise capabilities.DeploymentAdminSetupRequiredError(report)
+        agentic_run.status = AgenticDeploymentStatus.DEPLOYING
+        agentic_run.deployment_run_id = "deploy-run-1"
+        return agentic_run
+
+    monkeypatch.setattr(agentic_router.service, "approve", fake_approve)
+    approval = AgenticApprovalRequest(
+        configuration_checksum="cfg-sum",
+        prepared_plan_id="plan-1",
+        expected_plan_digest="sha256:digest",
+        acknowledge_unknown=True,
+    )
+    approve_resp = await agentic_router.approve_agentic_deployment(agentic_run.id, None, approval)
+    assert isinstance(approve_resp, JSONResponse)
+    assert approve_resp.status_code == 403
+    approve_body = json.loads(approve_resp.body)
+    assert approve_body["code"] == "deployment_admin_setup_required"
+    assert approve_body["namespace"] == "llmd-pd-target"
+    assert agentic_run.status == AgenticDeploymentStatus.AWAITING_APPROVAL
+
+    retried = await agentic_router.approve_agentic_deployment(agentic_run.id, None, approval)
+    assert retried.status == AgenticDeploymentStatus.DEPLOYING
+    assert retried.deployment_run_id == "deploy-run-1"
+
+    # 3. AgenticDeploymentService._approve keeps AWAITING_APPROVAL on 403/503/401 recoverable errors
+    from llm_d_lens.agentic import service as agentic_service_mod
+    from llm_d_lens.agentic import source_plan as source_plan_mod
+    from llm_d_lens.agentic.planner import PlannedCandidate
+
+    svc = agentic_service_mod.AgenticDeploymentService()
+    planned = PlannedCandidate(
+        id=candidate.id,
+        provider_ref="pd-disaggregation",
+        replicas=1,
+        tensor_parallel_size=1,
+        max_model_len=4096,
+        gpu_memory_utilization=0.9,
+        required_gpus=1,
+        deployable=True,
+        rationale="PD candidate",
+    )
+    svc_run = agentic_run.model_copy(
+        deep=True,
+        update={
+            "status": AgenticDeploymentStatus.AWAITING_APPROVAL,
+            "deployment_run_id": None,
+            "candidates": [planned],
+            "configuration_plan": ConfigurationPlan(
+                plan_id="plan-1",
+                mode="agentic",
+                requirements=DeploymentRequirements(model="Qwen/Qwen3-0.6B"),
+                configuration=cfg.model_dump(mode="json"),
+                validation={"status": "resources_checked"},
+            ),
+        },
+    )
+    svc._runs[svc_run.id] = svc_run
+    monkeypatch.setattr(
+        agentic_service_mod, "require_active_session", lambda sid: SimpleNamespace(id=sid, server_id="cluster-nonadmin")
+    )
+    monkeypatch.setattr(svc, "_validate_model_cache", lambda *_args: asyncio.sleep(0, result=None))
+    monkeypatch.setattr(
+        agentic_service_mod,
+        "resolve_planning_facts",
+        lambda *_args, **_kwargs: asyncio.sleep(
+            0,
+            result=SimpleNamespace(
+                facts=PlanningFacts(8, 32, 8),
+                cluster_snapshot={"hardware": {}},
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        agentic_service_mod.CandidateValidator,
+        "validate",
+        lambda _self, _facts, _proposals: SimpleNamespace(accepted=[SimpleNamespace(deployable=True)], rejected=[]),
+    )
+    monkeypatch.setattr(
+        agentic_service_mod,
+        "evaluate_capacity",
+        lambda *_args, **_kwargs: SimpleNamespace(is_deployable=True, rejection_reasons=[]),
+    )
+    monkeypatch.setattr(agentic_service_mod, "resolve_cluster_vllm_image", lambda _cid: None)
+    monkeypatch.setattr(agentic_service_mod, "cluster_accelerator", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        agentic_service_mod,
+        "build_agentic_configuration",
+        lambda *_args, **_kwargs: cfg.model_copy(deep=True),
+    )
+
+    for recoverable_err in (
+        capabilities.DeploymentAdminSetupRequiredError(report),
+        capabilities.DeploymentCapabilityUnavailableError("SSAR unavailable"),
+        capabilities.DeploymentClusterAuthError("401 Unauthorized"),
+    ):
+
+        async def fail_reviewed(*_args, _err=recoverable_err, **_kwargs):
+            raise _err
+
+        monkeypatch.setattr(source_plan_mod, "reviewed_deployment", fail_reviewed)
+        with pytest.raises(type(recoverable_err)):
+            await svc.approve(svc_run.id, approval=approval)
+        assert svc_run.status == AgenticDeploymentStatus.AWAITING_APPROVAL
+
+    # 4. POST /api/v1/deployments/runs enforces require_cluster_access even without placement.nodeLabel
+    from llm_d_lens.core.exceptions import ForbiddenError
+
+    checked_clusters: list[str] = []
+
+    def deny_revoked_cluster(_principal, cid):
+        checked_clusters.append(cid)
+        if cid == "cluster-revoked":
+            raise ForbiddenError("cluster access revoked")
+
+    monkeypatch.setattr(router, "require_cluster_access", deny_revoked_cluster)
+    revoked_req = DeploymentRunCreateRequest(
+        configurations=[cfg],
+        provenance={"cluster_session_id": "s1", "cluster_server_id": "cluster-revoked"},
+    )
+    with pytest.raises(ForbiddenError, match="cluster access revoked"):
+        await router.create_run(revoked_req, None)
+    assert checked_clusters == ["cluster-revoked"]

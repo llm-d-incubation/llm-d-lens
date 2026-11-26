@@ -47,3 +47,13 @@ test('source runtime variants retain selection and use readable root labels', as
     assert.equal(selectedGuideVariant(options, 'vllm-special/new/deep'), 'vllm-special/new/deep');
     assert.equal(selectedGuideVariant([{value: 'custom/path'}], 'removed'), 'custom/path');
 });
+
+
+test('RDMA preference uses discovered variants and keeps explicit or unsupported selections', async () => {
+    const { selectedGuideVariant } = await import('./capabilities.js');
+    const options = [{ value: '.' }, { value: 'vllm-rdma' }];
+    assert.equal(selectedGuideVariant(options, '.', { preferRdma: true }), 'vllm-rdma');
+    assert.equal(selectedGuideVariant(options, '.', { preferRdma: false }), '.');
+    assert.equal(selectedGuideVariant(options, 'vllm-rdma'), 'vllm-rdma');
+    assert.equal(selectedGuideVariant([{ value: 'base' }], '', { preferRdma: true }), 'base');
+});

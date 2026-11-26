@@ -1,6 +1,6 @@
 ---
-title: Model Market
-description: Backend touchpoints behind the frontend-only model catalog.
+title: Model Catalog
+description: Manage custom model entries, serving defaults, and catalog-backed deployment hand-off.
 ---
 
 import Tabs from '@theme/Tabs';
@@ -8,12 +8,71 @@ import TabItem from '@theme/TabItem';
 
 ## Backend API
 
-Model Market does **not** have a dedicated backend module. Its catalog is static frontend data in `packages/shared/src/catalog/modelCatalog.js`, so there is no backend catalog API to document. The page only calls shared cluster and deployment APIs.
+The catalog API combines read-only built-in seeds with persisted custom entries.
+Admin and maintainer roles have `model-catalog:entry:read/create/update/delete`;
+end-user permissions are unchanged. Entries are global configuration, like external providers.
 
-The page initializes deployment `max_model_len` from the card's numeric
-`contextLength` metadata, using `4096` only when that metadata is absent. Agentic
-requests pass the same value in `planning_facts.context_length`; the backend
-uses the top-level `max_model_len` as the effective planning context.
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+| Method | Path | Behavior |
+| --- | --- | --- |
+| GET | `/api/v1/model-catalog` | List built-in and custom entries in `items` |
+| POST | `/api/v1/model-catalog` | Create a custom entry; returns 201 |
+| PUT | `/api/v1/model-catalog/{entry_id}` | Replace custom defaults; requires current `version` |
+| DELETE | `/api/v1/model-catalog/{entry_id}?version=1` | Delete a custom entry; retain weights and deployments |
+
+```json
+{
+  "name": "Team model",
+  "repository": "team/model",
+  "revision": "main",
+  "modelType": "text-generation",
+  "dtype": "BF16",
+  "weightGiB": 16,
+  "contextLength": 32768,
+  "servingDefaults": {
+    "toolCalling": true,
+    "toolParser": "hermes",
+    "reasoningParser": "",
+    "chatTemplate": "",
+    "dtype": "auto",
+    "extra": "kv-cache-dtype=fp8"
+  }
+}
+```
+
+Responses also include `id`, `version`, `source`, `createdAt` and `updatedAt`.
+Stale update/delete versions return 409. Invalid settings and built-in mutations return 422.
+
+  </TabItem>
+  <TabItem value="python" label="Python">
+
+```python
+from llm_d_lens.model_catalog.contracts import CatalogInput, CatalogUpdate
+from llm_d_lens.model_catalog.service import list_entries, create_entry, update_entry, delete_entry
+
+entry = create_entry(CatalogInput(name="Team model", repository="team/model"))
+updated = update_entry(entry.id, CatalogUpdate(
+    name="Team model", repository="team/model", version=entry.version,
+    servingDefaults={"toolCalling": True, "toolParser": "hermes"},
+))
+delete_entry(updated.id, updated.version)
+```
+
+  </TabItem>
+</Tabs>
+
+Deployment requests accept `model_catalog_id`, `model_catalog_version` and
+`serving_overrides` (a partial camelCase serving-defaults object). The server resolves
+system defaults, model defaults and deployment overrides in that order, then applies
+legacy `vllm_arguments` by argument name. `false` disables tool calling and an empty
+string clears optional settings. A parser is required when tool calling is enabled.
+Both built-in and custom entries require their catalog id to inherit defaults.
+Legacy requests without a catalog id keep their explicit arguments and cache revision selection. The request records `model_revision`,
+`model_catalog_snapshot` and final `vllm_arguments`. Context defaults to the model's
+metadata only when `max_model_len` is omitted. Explicit deployment values win.
+
 
 ### List Lens-managed clusters
 
@@ -265,7 +324,7 @@ Start a Standard Kubernetes Service deployment run using Lens's allowlisted vLLM
 **Manual** (deterministic requirements planning) or **Agentic**. This endpoint remains available to
 API and MCP callers that want the plain allowlisted vLLM contract without a
 Guide template, and is documented here because it is still the deployment
-contract reached from the Model Market domain.
+contract reached from the Model Catalog domain.
 :::
 
 <Tabs>
@@ -468,6 +527,6 @@ asyncio.run(main())
   </TabItem>
 </Tabs>
 
-Model Market does not expose its own catalog API; see [Clusters](/api-reference/modules/clusters) and [Deployments](/api-reference/modules/deployments) for the full backend-facing module pages.
+Model Catalog exposes its own CRUD API under `/api/v1/model-catalog` (documented above); see [Clusters](/api-reference/modules/clusters) and [Deployments](/api-reference/modules/deployments) for cluster discovery, registration, and full deployment execution APIs.
 
 See the full request/response schemas in the FastAPI OpenAPI schema (regenerate with `npm run docs:api`).

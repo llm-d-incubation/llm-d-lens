@@ -3,11 +3,30 @@ title: FAQ
 description: Frequently asked questions about roles, scope and the model-service gateway.
 ---
 
+### Which usage path should I choose: Web GUI, `llmd` CLI, or Agent Tools via MCP?
+
+Lens supports three ways to operate llm-d (plus OpenAI/Anthropic model clients calling published cluster gateways directly with `lens-mk-*` keys):
+
+- **Web GUI (`apps/frontend` + unified Python backend):** best for multi-cluster governance, visual Manual/Agentic deployment planning, Model Catalog browsing/CRUD, guided Evaluation, Trace Replayer, Model Services gateways, RBAC/audit, and the built-in Lens Assistant.
+- **Standalone `llmd` CLI (`apps/lens`):** best for namespace-scoped, cluster-admin-free GitOps or terminal workflows directly against Kubernetes/OpenShift—with no Lens server, PostgreSQL database, or Node.js required. See [CLI Reference](/cli-reference).
+- **Agent Tools via MCP (`POST /api/mcp`):** best for coding and operations agents (`opencode`, Claude Code, Cursor, OpenAI Codex CLI) driving end-to-end planning, deployment, verification, benchmarking, comparison, and cleanup using Lens IDs, shared Web UI state, and `lens-pat-*` RBAC. See [MCP integration](/mcp).
+
+### Can I onboard a cluster without cluster-admin privileges, or use a custom vLLM image?
+
+Yes:
+
+- **Non-Admin (`edit`) onboarding:** Register the cluster with a namespace-scoped kubeconfig. Lens runs Preflight, pauses at **Orchestration administrator namespace setup** to generate an idempotent, zero-secret bootstrap script for your cluster admin to run once, falls back to Prometheus-synthesized node and accelerator inventory when cluster-wide `kubectl get nodes` returns `403`, and uses a two-phase flow for deployment deletion. See [Clusters](/user-guide/clusters) and [Deployments](/user-guide/deployments).
+- **Custom vLLM image:** Under **Clusters → Edit cluster** (or the **llm-d stack** onboarding step), set a custom OCI **vLLM image** (`vllmImage` with a `:tag` or `@sha256:` digest), or leave it empty to inherit the selected hardware profile's `runtime_image`. Per-deployment overrides take highest precedence, followed by the cluster `vllmImage`, then the hardware profile default.
+
+### Can I add custom models and serving defaults to the Model Catalog?
+
+Yes. Users with `model-catalog:entry:create/update/delete` (`admin` and `maintainer` roles) can add custom entries on the **Model Catalog** page or via `/api/v1/model-catalog` with repository, revision, dtype, weight, context length, and `servingDefaults` (`toolCalling`, `toolParser`, `reasoningParser`, `chatTemplate`, `dtype`, `extra`). Deployments resolve system defaults, catalog defaults, and per-deployment overrides in order, and store a `model_catalog_snapshot` on each request so later catalog updates or deletions never change existing deployments.
+
 ### What roles exist, and what can each one do?
 
 `admin` (global, full access), `maintainer` (scoped to one or more assigned
-clusters; can operate deployments, evaluation, simulation, storage,
-observability and most of Model Service on those clusters), and `end-user`
+clusters; can operate deployments, evaluation, Trace Replayer, storage,
+observability and most of Model Services on those clusters), and `end-user`
 (self-scoped: manage your own API tokens, call the inference gateway, view
 your own usage). See [Auth and RBAC](/architecture) for the
 full permission catalog.
@@ -29,11 +48,12 @@ have access.
 
 ### Does Lens sit in the inference request path?
 
-No. The Lens UI/BFF/Python backend are the control plane only. Inference
-traffic to a published model service goes directly from the caller to the
-cluster's shared Gateway, which routes through the model's HTTPRoute to its
-InferencePool/EPP and then to the backend pod — Lens is never on that
-request's critical path.
+No. The Lens Web UI and unified Python FastAPI backend (`llm_d_lens`) are the
+control plane only (and the standalone `llmd` CLI only executes control-plane
+operations against Kubernetes). Inference traffic to a published model service
+goes directly from the caller to the cluster's shared Gateway, which routes
+through the model's HTTPRoute to its InferencePool/EPP and then to the backend
+pod — Lens is never on that request's critical path.
 
 ### How is Model Service usage measured?
 

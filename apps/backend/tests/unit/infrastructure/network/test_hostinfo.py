@@ -51,3 +51,22 @@ def test_serving_port_from_argv():
     assert hostinfo.serving_port_from_argv(["uvicorn", "app", "--port=9100"]) == 9100
     assert hostinfo.serving_port_from_argv(["uvicorn", "app"]) is None
     assert hostinfo.serving_port_from_argv(["uvicorn", "app", "--port", "nope"]) is None
+
+
+def test_serving_tls_from_argv():
+    assert hostinfo.serving_tls_from_argv(["uvicorn", "app", "--ssl-certfile", "c.crt"]) is True
+    assert hostinfo.serving_tls_from_argv(["uvicorn", "app", "--ssl-certfile=c.crt"]) is True
+    assert hostinfo.serving_tls_from_argv(["uvicorn", "app", "--port", "3000"]) is False
+
+
+def test_authz_tls_follows_https_serving_unless_env_overrides(monkeypatch):
+    from llm_d_lens.model_service.gateway_providers import authz_tls_insecure_enabled
+
+    monkeypatch.delenv("LENS_MODEL_GATEWAY_AUTHZ_TLS_INSECURE", raising=False)
+    monkeypatch.setattr(hostinfo, "_SERVING_TLS", True)
+    assert authz_tls_insecure_enabled() is True
+    monkeypatch.setattr(hostinfo, "_SERVING_TLS", False)
+    assert authz_tls_insecure_enabled() is False
+    monkeypatch.setattr(hostinfo, "_SERVING_TLS", True)
+    monkeypatch.setenv("LENS_MODEL_GATEWAY_AUTHZ_TLS_INSECURE", "0")
+    assert authz_tls_insecure_enabled() is False

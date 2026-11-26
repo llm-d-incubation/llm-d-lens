@@ -2,22 +2,24 @@ import { useMemo, useState } from 'react';
 import { Search } from 'lucide-react';
 import { Modal } from '../../../../shared/ui/Modal';
 import { Input } from '../../../../shared/ui/FormControls';
-import { CATEGORIES, MODELS } from '@repo/shared/catalog';
+import { useModelCatalog } from '../../../../shared/lib/useModelCatalog';
+import { FormError } from '../../../../shared/ui/FormError';
 import { ModelCard } from '../../../model-market';
 
 export function ModelMarketPickerModal({ onCancel, onSelect }) {
+    const { models, categories, error } = useModelCatalog();
     const [category, setCategory] = useState('All');
     const [search, setSearch] = useState('');
 
     const visibleModels = useMemo(() => {
         const needle = search.trim().toLowerCase();
-        return MODELS.filter((model) => {
+        return models.filter((model) => {
             if (category !== 'All' && model.category !== category) return false;
             if (!needle) return true;
-            return [model.name, model.family, model.repository, model.type]
+            return [model.name, model.family, model.repository, model.modelType]
                 .some((item) => String(item || '').toLowerCase().includes(needle));
         });
-    }, [category, search]);
+    }, [category, search, models]);
 
     return (
         <Modal
@@ -28,6 +30,7 @@ export function ModelMarketPickerModal({ onCancel, onSelect }) {
             size="2xl"
         >
             <div className="flex flex-col gap-4">
+                <FormError message={error} />
                 <div className="flex items-center gap-3">
                     <div className="relative flex-1">
                         <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
@@ -42,7 +45,7 @@ export function ModelMarketPickerModal({ onCancel, onSelect }) {
                 </div>
 
                 <div className="flex flex-wrap gap-2" role="tablist" aria-label="Model categories">
-                    {CATEGORIES.map((item) => (
+                    {categories.map((item) => (
                         <button
                             key={item}
                             type="button"

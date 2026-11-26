@@ -3,10 +3,29 @@ title: 常见问题
 description: 关于角色、权限范围和模型服务网关的常见问题解答。
 ---
 
+### 应该选择哪种使用路径：Web GUI、`llmd` CLI 还是通过 MCP 的代理工具？
+
+Lens 支持三种操作 llm-d 的方式（此外 OpenAI/Anthropic 模型客户端也可使用 `lens-mk-*` 密钥直接调用已发布的集群网关）：
+
+- **Web GUI（`apps/frontend` + 统一 Python 后端）：** 适合多集群治理、可视化 Manual/Agentic 部署规划、模型目录（Model Catalog）浏览与 CRUD、引导式评估、轨迹回放（Trace Replayer）、模型服务网关、RBAC/审计以及内置 Lens Assistant。
+- **独立 `llmd` CLI（`apps/lens`）：** 适合在无需运行 Lens 服务端、PostgreSQL 数据库或 Node.js 的情况下，直接针对 Kubernetes/OpenShift 执行按命名空间隔离、无需集群管理员权限的 GitOps 或终端工作流。参见 [CLI 参考](/cli-reference)。
+- **通过 MCP 的代理工具（`POST /api/mcp`）：** 适合编码与运维代理（`opencode`、Claude Code、Cursor、OpenAI Codex CLI）使用 Lens 原生 ID、共享的 Web UI 状态及 `lens-pat-*` RBAC 自动化完成规划、部署、验证、基准测试、对比和清理。参见 [MCP 集成](/mcp)。
+
+### 可以在没有 cluster-admin 权限的情况下接入集群，或使用自定义 vLLM 镜像吗？
+
+可以：
+
+- **非管理员（`edit`）接入：** 使用按命名空间授权的 kubeconfig 注册集群。Lens 会运行 Preflight，在**编排平台管理员命名空间配置**步骤生成一份不含明文密钥的幂等引导脚本交由集群管理员一次性执行；当集群级 `kubectl get nodes` 返回 `403` 时自动回退到基于 Prometheus 合成的节点与加速器库存；并在删除部署时使用两阶段清理流程。参见[集群](/user-guide/clusters)和[部署](/user-guide/deployments)。
+- **自定义 vLLM 镜像：** 在**集群 → 编辑集群**（或接入向导的 **llm-d stack** 步骤）中，设置自定义 OCI **vLLM image**（`vllmImage`，需带 `:tag` 或 `@sha256:` 摘要），或留空以继承所选硬件 profile 的 `runtime_image`。单次部署中的显式覆盖优先级最高，其次是集群 `vllmImage`，最后是硬件 profile 默认值。
+
+### 可以向模型目录（Model Catalog）添加自定义模型和服务默认值吗？
+
+可以。拥有 `model-catalog:entry:create/update/delete` 权限的用户（`admin` 和 `maintainer` 角色）可在**模型目录（Model Catalog）**页面或通过 `/api/v1/model-catalog` 添加自定义条目，配置仓库、revision、dtype、权重、上下文长度和 `servingDefaults`（`toolCalling`、`toolParser`、`reasoningParser`、`chatTemplate`、`dtype`、`extra`）。部署时会依次解析系统默认值、目录默认值和单次部署覆盖，并在每次请求中保存 `model_catalog_snapshot`，因此后续更新或删除目录条目不会影响已有部署。
+
 ### 存在哪些角色，各自能做什么？
 
 `admin`（全局，拥有完整访问权限）、`maintainer`（限定于一个或多个
-被分配的集群；可以在这些集群上操作部署、评估、模拟、存储、
+被分配的集群；可以在这些集群上操作部署、评估、轨迹回放（Trace Replayer）、存储、
 可观测性以及模型服务的大部分功能），以及 `end-user`
 （仅限自身范围：管理自己的 API 令牌、调用推理网关、查看自己的
 使用情况）。完整的权限目录参见[认证与 RBAC](/architecture)。
@@ -26,7 +45,8 @@ description: 关于角色、权限范围和模型服务网关的常见问题解�
 
 ### Lens 是否位于推理请求的路径之中？
 
-不是。Lens 的 UI/BFF/Python 后端只是控制平面。发往已发布模型
+不是。Lens 的 Web UI 和统一的 Python FastAPI 后端（`llm_d_lens`）只是控制平面
+（独立 `llmd` CLI 也仅面向 Kubernetes 执行控制平面操作）。发往已发布模型
 服务的推理流量会从调用方直接经过集群的共享网关，通过该模型的
 HTTPRoute 路由到它的 InferencePool/EPP，再到后端 Pod——Lens
 从不位于该请求的关键路径上。

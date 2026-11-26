@@ -61,21 +61,24 @@ def test_hidden_migrated_routes_participate_in_startup_validation(monkeypatch):
     prefixes = (
         "/api/config",
         "/api/mcp",
+        "/api/assistant/mcp",
         "/api/playground",
         "/api/candidate-",
         "/api/remote-deploy",
         "/api/guide-planning",
     )
     expected = {(entry.method, entry.path) for entry in routes.ROUTE_PERMISSIONS if entry.path.startswith(prefixes)}
-    assert len(expected) == 24
+    assert len(expected) == 27
     assert expected <= routes.app_route_table(app)
     assert routes.validate_route_registry(app) == []
     monkeypatch.setattr(
         routes,
         "ROUTE_PERMISSIONS",
-        tuple(entry for entry in routes.ROUTE_PERMISSIONS if (entry.method, entry.path) != ("POST", "/api/mcp")),
+        tuple(
+            entry for entry in routes.ROUTE_PERMISSIONS if (entry.method, entry.path) != ("POST", "/api/assistant/mcp")
+        ),
     )
-    assert routes.validate_route_registry(app) == ["route not registered: POST /api/mcp"]
+    assert routes.validate_route_registry(app) == ["route not registered: POST /api/assistant/mcp"]
 
 
 def test_session_cookie_max_age_uses_absolute_ttl_not_idle_window():
@@ -123,7 +126,7 @@ def _migrated_routes():
     )
     routes = [(entry.method, entry.path) for entry in ROUTE_PERMISSIONS if entry.path.startswith(prefixes)]
     assert len(routes) >= 16
-    return [*routes, ("POST", "/api/playground/chat"), ("POST", "/api/mcp")]
+    return [*routes, ("POST", "/api/playground/chat"), ("POST", "/api/assistant/mcp")]
 
 
 def test_migrated_business_routes_require_authentication():
@@ -155,7 +158,7 @@ def test_mcp_entry_permission_does_not_grant_target_tool_permission(monkeypatch,
 
     def rpc(client, method, params):
         response = client.post(
-            "/api/mcp",
+            "/api/assistant/mcp",
             json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
             headers={"accept": "application/json, text/event-stream", "authorization": "Bearer fixture"},
         )
@@ -163,7 +166,7 @@ def test_mcp_entry_permission_does_not_grant_target_tool_permission(monkeypatch,
         return json.loads(next(EventSource(response).iter_sse()).data)
 
     with _client() as client:
-        assert client.post("/api/mcp", json={}).status_code == 401
+        assert client.post("/api/assistant/mcp", json={}).status_code == 401
         assert rpc(client, "tools/list", {})["result"]["tools"]
         result = rpc(client, "tools/call", {"name": "list_deployments", "arguments": {}})
         body = json.loads(result["result"]["content"][0]["text"])
@@ -278,7 +281,7 @@ def test_authenticated_mcp_browser_session_initializes_and_calls_read_tool():
 
         def rpc(method, params):
             response = client.post(
-                "/api/mcp",
+                "/api/assistant/mcp",
                 json={"jsonrpc": "2.0", "id": 1, "method": method, "params": params},
                 headers={**_csrf_headers(client), "accept": "application/json, text/event-stream"},
             )
@@ -1011,7 +1014,7 @@ def test_multi_permission_remediation_route_records_matched_or_compacted_audit_p
 
         # Short tuples (<= 100 chars) preserve existing joined formatting on deny while adding requiredPermissions.
         short_deny = client.post(
-            "/api/mcp",
+            "/api/assistant/mcp",
             json={},
             headers={"authorization": "Bearer fixture", "x-request-id": "mcp-deny"},
         )
@@ -1020,3 +1023,11 @@ def test_multi_permission_remediation_route_records_matched_or_compacted_audit_p
         assert len(mcp_deny_events) == 1
         assert mcp_deny_events[0].permission == "mcp:tool:invoke | playground:chat:use"
         assert mcp_deny_events[0].detail["requiredPermissions"] == ["mcp:tool:invoke", "playground:chat:use"]
+
+
+def test_matrix_artifact_names_with_a_slash_are_routed_through_authorization():
+    with _client() as client:
+        _bootstrap_and_login(client)
+        run_id = "00000000-0000-4000-8000-000000000000"
+        # 404 comes from the handler; an unregistered route would be refused here with 403.
+        assert client.get(f"/api/v1/evaluate/runs/{run_id}/artifacts/matrix-0/config.yaml").status_code == 404

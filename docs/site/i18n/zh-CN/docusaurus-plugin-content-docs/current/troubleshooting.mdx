@@ -39,7 +39,7 @@ helm upgrade -i eg oci://docker.io/envoyproxy/gateway-helm \
   -f https://raw.githubusercontent.com/envoyproxy/ai-gateway/v0.7.0/examples/inference-pool/envoy-gateway-values-addon.yaml
 ```
 
-然后在 **Model services** 中重新协调目标集群，再次发送请求。
+然后在 **Model Services（模型服务）**中重新协调目标集群，再次发送请求。
 
 ## 安装 Gateway 时出现 "no matches for kind ... ensure CRDs are installed first"
 
@@ -59,7 +59,7 @@ helm upgrade -i eg oci://docker.io/envoyproxy/gateway-helm \
 
 请查看 `~/.local/state/lens/logs/dev/backend.log` 以了解实际的异常信息。
 常见原因包括：`[project.dependencies]` 变更后缺少某个 Python 依赖
-（运行 `python3 -m pip install -e '.[dev]'` 解决），或者端口已被占用——
+（运行 `python3 -m pip install -e 'apps/backend[dev]'` 解决），或者端口已被占用——
 `hack/lens-local.sh` 会自动选择空闲端口，并在日志中记录实际使用的端口。
 
 ## MCP 工具目录中缺少刚刚添加的路由
@@ -98,3 +98,16 @@ kubeconfig 中显式的 `proxy-url` 保持不变。
 根据观测增加内存，或降低输入长度、数据集规模、并发及到达速率。总内存预留随 `parallelism` 增长，
 节点必须有足够可调度内存。配置变化不会调整正在运行的 Pod，需要新建任务。
 开环时长不含请求排空，超过服务能力的速率可能积累请求。OOM 中断不能当作完整成功测量。
+
+## 独立 `llmd` CLI 错误（`apps/lens`）
+
+- **运行 `lens` 只打印 `--version` / `--help`：** 请使用从 `apps/lens` 安装的 `llmd` 入口（例如执行 `pip install -e ./apps/lens` 后运行 `.venv/bin/llmd`），而不是 `lens`。
+- **`PATH` 中缺少集群或渲染工具：** `llmd` 依赖 `kubectl`（或在 OpenShift 上配合 `--kube-cli oc` / `LLMD_KUBE_CLI=oc` 使用 `oc`）、`helm`、`git` 和 `kustomize`。
+- **`llmd standup --expected-digest` 摘要不匹配：** 在 `llmd plan` 之后，源码引用、渲染变量或 Chart 内容发生了变化。请重新运行 `llmd plan`（若要拉取远程分支最新提交请加 `--refresh`），并传入新输出的摘要。
+
+## 外部代理 MCP（`POST /api/mcp`）返回 `401`、`405` 或 TLS 错误
+
+- **`401 Unauthorized`：** 请在 **Account → Personal access tokens** 创建个人访问令牌（`lens-pat-*`），确认账号拥有 `mcp:tool:invoke` 或 `playground:chat:use` 权限，并发送 `Authorization: Bearer <token>`。使用 `opencode` 时，必须在 `opencode.json` 中设置 `"oauth": false`，防止其在收到 `401` 时自动跳转 OAuth 流程。
+- **`405 Method Not Allowed`：** `/api/mcp` 仅支持 `POST`（无状态 Streamable HTTP）；`GET` 和 `DELETE` 会按设计返回 `405`。请将客户端配置为使用 Streamable HTTP，而非回退到 SSE（例如在 `opencode` 中配置 `"type": "remote"`，在 Cursor 和 Claude Code 中配置 `"type": "http"`）。
+- **自签名 TLS 证书失败：** Ubuntu 在线安装器默认开启自动 HTTPS。请在客户端信任或传入服务端证书，在本地隔离安装时使用 `--no-https`，或在开发模式下改用 `http://localhost:3000/api/mcp`。
+- **`tools/list` 中缺少预期工具：** 默认仅启用 `core` profile。请在后端设置 `LENS_MCP_PROFILES`（例如 `core,serving,storage,simulation`）以开启更多工具分组，参见 [MCP 集成](/mcp)。

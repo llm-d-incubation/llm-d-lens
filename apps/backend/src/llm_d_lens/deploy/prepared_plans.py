@@ -51,6 +51,7 @@ def requires_prepared_plan(configurations) -> bool:
 def request_identity(request) -> str:
     value = request.model_dump(mode="json", exclude={"prepared_plan_id", "expected_plan_digest", "acknowledge_unknown"})
     value["provenance"].pop("cluster_session_id", None)
+    value["provenance"].pop("target_namespace", None)
     if value.get("runtime_binding"):
         value["runtime_binding"].pop("cluster_session_id", None)
     return configuration_checksum(value)
@@ -170,22 +171,46 @@ async def preflight(plan: DeploymentPreparedPlan, index: int | None = None) -> d
         report["unmodeled"] = sorted(set(report.get("unmodeled") or []) | set(extra_unmodeled))
         if not report["errors"] and report["status"] == "pass":
             report["status"] = "unknown"
-    for volume in volumes:
-        if volume["metadata"]["name"] in planned_volumes:
-            report["errors"].append({"code": "PERSISTENT_VOLUME_ALREADY_EXISTS", "message": volume["metadata"]["name"]})
-            report["status"] = "fail"
     selected = plan.payload["artifacts"] if index is None else [plan.payload["artifacts"][index]]
+    bootstrapped_cache: dict[str, bool] = {}
+
+    async def _is_bootstrapped(ns: str) -> bool:
+        if ns not in bootstrapped_cache:
+            bootstrapped_cache[ns] = await _namespace_bootstrapped(plan.cluster_id, ns)
+        return bootstrapped_cache[ns]
+
+    satellite_pvs_by_ns: dict[str, set[str]] = {}
+    for item in selected:
+        case_ns = item["context"]["namespace"]
+        for doc in item["artifact"]["deployment_contract"].get("preparedStorage", []):
+            if isinstance(doc, dict) and doc.get("kind") == "PersistentVolume":
+                pv_name = (doc.get("metadata") or {}).get("name")
+                if isinstance(pv_name, str) and pv_name:
+                    satellite_pvs_by_ns.setdefault(case_ns, set()).add(pv_name)
+
+    for volume in volumes:
+        pv_name = volume["metadata"]["name"]
+        if pv_name in planned_volumes:
+            claim_ns = ((volume.get("spec") or {}).get("claimRef") or {}).get("namespace")
+            if (
+                isinstance(claim_ns, str)
+                and pv_name in satellite_pvs_by_ns.get(claim_ns, ())
+                and await _is_bootstrapped(claim_ns)
+            ):
+                continue
+            report["errors"].append({"code": "PERSISTENT_VOLUME_ALREADY_EXISTS", "message": pv_name})
+            report["status"] = "fail"
     if namespaces is not None:
         occupied = {item["metadata"]["name"] for item in namespaces}
         for item in selected:
             ns = item["context"]["namespace"]
-            if ns in occupied and not await _namespace_bootstrapped(plan.cluster_id, ns):
+            if ns in occupied and not await _is_bootstrapped(ns):
                 report["errors"].append({"code": "NAMESPACE_ALREADY_EXISTS", "message": ns})
                 report["status"] = "fail"
     else:
         for item in selected:
             ns = item["context"]["namespace"]
-            if await _namespace_bootstrapped(plan.cluster_id, ns):
+            if await _is_bootstrapped(ns):
                 continue
             sa_res = await scoped_runner(plan.cluster_id).run(
                 ["kubectl", "get", "serviceaccounts", "--namespace", ns, "-o", "name"],
@@ -328,6 +353,29 @@ async def prepare(manager, request, *, owner_user_id: str | None = None) -> Depl
         if (configuration.provenance.get("cluster_ref") or {}).get("id") != session.server_id:
             raise ValueError("Configuration must be regenerated for the selected cluster")
     run = DeploymentPlanService(manager.store).build_run(bound)
+    if len(run.cases) == 1:
+        from llm_d_lens.deploy import capabilities
+        from llm_d_lens.deploy.application import (
+            bind_single_case_target_namespace,
+            ensure_namespace_not_used_by_active_execution,
+            resolve_bootstrapped_target_namespace,
+            single_case_namespace_lookup,
+        )
+
+        case = run.cases[0]
+        agentic_run_id_str, deployment_name_str = single_case_namespace_lookup(bound, case)
+        verified_ns = capabilities.peek_verified_namespace(
+            session.server_id,
+            owner_user_id=owner_user_id,
+            agentic_deployment_run_id=agentic_run_id_str,
+            deployment_name=deployment_name_str,
+            prepared_plan_id=None,
+        )
+        if verified_ns is None:
+            verified_ns = await resolve_bootstrapped_target_namespace(session.server_id, bound, case)
+        if verified_ns:
+            ensure_namespace_not_used_by_active_execution(manager.store, verified_ns)
+        bind_single_case_target_namespace(run, case, verified_ns)
     worker = manager._worker(run)
     artifacts = []
     for case in run.cases:
@@ -347,9 +395,12 @@ async def prepare(manager, request, *, owner_user_id: str | None = None) -> Depl
         frozen["manifest_ref"] = None
         frozen["manifest_checksum"] = text_checksum(manifest)
         artifacts.append({"artifact": frozen, "manifest": manifest, "context": context})
+    raw_target_ns = request.provenance.get("target_namespace")
+    requested_target_ns = raw_target_ns.strip() if isinstance(raw_target_ns, str) and raw_target_ns.strip() else None
     payload = {
         "schemaVersion": "deployment-plan.v1",
         "requestIdentity": identity,
+        "requestedTargetNamespace": requested_target_ns,
         "run": run.model_dump(mode="json"),
         "artifacts": artifacts,
     }
@@ -399,6 +450,73 @@ def public_plan(plan: DeploymentPreparedPlan) -> dict:
     }
 
 
+async def _ensure_consume_permissions(
+    plan: DeploymentPreparedPlan,
+    run: DeploymentRun,
+    request,
+    *,
+    verified_ns: str | None = None,
+) -> None:
+    from llm_d_lens.cluster import registry as cluster_registry
+    from llm_d_lens.deploy import capabilities
+
+    artifacts = plan.payload.get("artifacts") or []
+    single_case = len(run.cases) == 1 and len(artifacts) == 1
+    if single_case and verified_ns and artifacts[0]["context"]["namespace"] == verified_ns:
+        return
+    if cluster_registry.get_cluster(plan.cluster_id) is None:
+        return
+
+    for index, entry in enumerate(artifacts):
+        case_ns = entry["context"]["namespace"]
+        if single_case and verified_ns == case_ns:
+            continue
+        case = run.cases[index] if index < len(run.cases) else None
+        case_prov = (case.create_request.provenance or {}) if case is not None else {}
+        contract = entry["artifact"].get("deployment_contract") or {}
+        bundle = contract.get("deploymentBundle")
+        runtime = entry["context"].get("runtime") or {}
+        storage_volume_id = runtime.get("storageVolumeId")
+        uses_storage = bool(storage_volume_id or contract.get("preparedStorage"))
+        documents = plan_documents(plan, index)
+        uses_lws = bool(disaggregated_sets(documents)) or any(doc.get("kind") == "LeaderWorkerSet" for doc in documents)
+        manifest_parts = [entry.get("manifest") or ""]
+        if bundle:
+            frozen_manifest = (bundle.get("frozen") or {}).get("manifest")
+            if frozen_manifest:
+                manifest_parts.append(frozen_manifest)
+            for asset in bundle.get("resources") or ():
+                if asset.get("content"):
+                    manifest_parts.append(asset["content"])
+        combined_manifest = "\n---\n".join(part for part in manifest_parts if part.strip()) or None
+        deployment_name = (
+            request.provenance.get("deployment_name")
+            or case_prov.get("deployment_name")
+            or (
+                (case.create_request.deployment_policy.value or {}).get("deployment_name") if case is not None else None
+            )
+        )
+        agentic_run_id = request.provenance.get("agentic_deployment_run_id") or case_prov.get(
+            "agentic_deployment_run_id"
+        )
+        perm_request = capabilities.DeploymentPermissionCheckRequest(
+            cluster_id=plan.cluster_id,
+            namespace=case_ns,
+            deployment_name=str(deployment_name) if deployment_name else None,
+            provider_ref=case.provider_ref if case is not None else None,
+            agentic_deployment_run_id=str(agentic_run_id) if agentic_run_id else None,
+            prepared_plan_id=plan.id,
+            uses_storage=uses_storage,
+            storage_volume_id=storage_volume_id,
+            uses_lws=uses_lws,
+            uses_router=bool(bundle),
+            manifest=combined_manifest,
+        )
+        report = await capabilities.check_deployment_permissions(perm_request)
+        if not report.get("sufficient"):
+            raise capabilities.DeploymentAdminSetupRequiredError(report)
+
+
 async def consume(manager, request, *, owner_user_id: str | None = None):
     dao = DeploymentPlanDao()
     plan = dao.get(request.prepared_plan_id)
@@ -407,6 +525,18 @@ async def consume(manager, request, *, owner_user_id: str | None = None):
     session = require_active_session(request.provenance.get("cluster_session_id"))
     if plan.cluster_id != session.server_id or request_identity(request) != plan.payload["requestIdentity"]:
         raise ValueError("Configuration, runtime binding or cluster changed; prepare a new plan")
+    artifacts = plan.payload.get("artifacts") or []
+    raw_target_ns = request.provenance.get("target_namespace")
+    requested_target_ns = raw_target_ns.strip() if isinstance(raw_target_ns, str) and raw_target_ns.strip() else None
+    if requested_target_ns is not None:
+        frozen_single_ns = artifacts[0]["context"]["namespace"] if len(artifacts) == 1 else None
+        allowed_target_ns = {
+            ns
+            for ns in (frozen_single_ns, plan.payload.get("requestedTargetNamespace"))
+            if isinstance(ns, str) and ns.strip()
+        }
+        if requested_target_ns not in allowed_target_ns:
+            raise ValueError("Configuration, runtime binding or cluster changed; prepare a new plan")
     if request.expected_plan_digest != plan.digest or configuration_checksum(plan.payload) != plan.digest:
         raise ValueError("Reviewed deployment plan digest does not match")
     if plan.run_id:
@@ -418,20 +548,67 @@ async def consume(manager, request, *, owner_user_id: str | None = None):
     if report["status"] == "fail" or report["status"] == "unknown" and not request.acknowledge_unknown:
         raise ValueError("Deployment preflight failed or its unknown constraints have not been acknowledged")
     run = DeploymentRun.model_validate(plan.payload["run"])
-    run.provenance.update({"_prepared_plan_id": plan.id, "cluster_session_id": session.id})
-    for index, case in enumerate(run.cases):
-        case.create_request.provenance.update(
-            {
-                "_prepared_plan_id": plan.id,
-                "_prepared_plan_digest": plan.digest,
-                "_prepared_case_index": index,
-                "_prepared_acknowledge_unknown": request.acknowledge_unknown,
-                "cluster_session_id": session.id,
-            }
+    is_single_case = len(run.cases) == 1 and len(artifacts) == 1
+    case_ns: str | None = None
+    consumed_ns: str | None = None
+    agentic_run_id_str: str | None = None
+    deployment_name_str: str | None = None
+    if is_single_case:
+        from llm_d_lens.deploy import capabilities
+        from llm_d_lens.deploy.application import single_case_namespace_lookup
+
+        case_ns = artifacts[0]["context"]["namespace"]
+        agentic_run_id_str, deployment_name_str = single_case_namespace_lookup(request, run.cases[0])
+        peeked_ns = capabilities.peek_verified_namespace(
+            plan.cluster_id,
+            owner_user_id=owner_user_id,
+            agentic_deployment_run_id=agentic_run_id_str,
+            deployment_name=deployment_name_str,
+            prepared_plan_id=plan.id,
         )
-    run_id = dao.consume(plan.id, plan.digest, run)
-    saved = manager.store.get_run(run_id)
-    worker = manager.worker_for_run(run_id)
+        if peeked_ns == case_ns:
+            consumed_ns = capabilities.consume_verified_namespace(
+                plan.cluster_id,
+                owner_user_id=owner_user_id,
+                agentic_deployment_run_id=agentic_run_id_str,
+                deployment_name=deployment_name_str,
+                prepared_plan_id=plan.id,
+            )
+    try:
+        from llm_d_lens.deploy.application import ensure_namespace_not_used_by_active_execution
+
+        for entry in artifacts:
+            entry_ns = (entry.get("context") or {}).get("namespace")
+            if isinstance(entry_ns, str) and entry_ns:
+                ensure_namespace_not_used_by_active_execution(manager.store, entry_ns)
+        await _ensure_consume_permissions(plan, run, request, verified_ns=consumed_ns)
+        run.provenance.update({"_prepared_plan_id": plan.id, "cluster_session_id": session.id})
+        for index, case in enumerate(run.cases):
+            case.create_request.provenance.update(
+                {
+                    "_prepared_plan_id": plan.id,
+                    "_prepared_plan_digest": plan.digest,
+                    "_prepared_case_index": index,
+                    "_prepared_acknowledge_unknown": request.acknowledge_unknown,
+                    "cluster_session_id": session.id,
+                }
+            )
+        run_id = dao.consume(plan.id, plan.digest, run)
+        saved = manager.store.get_run(run_id)
+        worker = manager.worker_for_run(run_id)
+    except BaseException:
+        if consumed_ns:
+            from llm_d_lens.deploy import capabilities
+
+            capabilities.record_verified_namespace(
+                plan.cluster_id,
+                consumed_ns,
+                owner_user_id=owner_user_id,
+                agentic_deployment_run_id=agentic_run_id_str,
+                deployment_name=deployment_name_str,
+                prepared_plan_id=plan.id,
+            )
+        raise
     manager._schedule_run(run_id, worker)
     return saved
 

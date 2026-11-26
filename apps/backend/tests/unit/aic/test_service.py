@@ -563,3 +563,54 @@ def test_replay_rejects_invalid_report(monkeypatch, changes):
                 gpu_count=1,
             )
         )
+
+
+def test_native_nan_values_do_not_crash_candidate_serialization(monkeypatch):
+    import pandas as pd
+
+    result = SimpleNamespace(
+        chosen_exp="agg",
+        best_configs={
+            "agg": pd.DataFrame(
+                [
+                    {"tp": 2, "num_total_gpus": 2, "replicas_needed": float("nan"), "ttft": float("nan"), "tpot": 10},
+                ]
+            )
+        },
+    )
+    monkeypatch.setattr(service, "_cli", lambda: (None, lambda **_: result, None))
+    response = service.experiments_sync(service.AICExperimentRequest(yaml_text="agg: {}"))
+    assert response.experiments[0]["replicas"] == 1
+    assert response.experiments[0]["ttft_ms"] is None
+
+
+def test_invalid_native_experiment_result_becomes_aic_error(monkeypatch):
+    result = SimpleNamespace(chosen_exp="agg", best_configs={"agg": None})
+    monkeypatch.setattr(service, "_cli", lambda: (None, lambda **_: result, None))
+    with pytest.raises(service.AICError):
+        service.experiments_sync(service.AICExperimentRequest(yaml_text="agg: {}"))
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), 0, -1, 1.5])
+def test_native_invalid_topology_is_not_replaced_with_a_fabricated_count(value):
+    with pytest.raises(service.AICError, match="invalid topology"):
+        service._candidate("agg", {"tp": value, "num_total_gpus": 2})
+
+
+@pytest.mark.parametrize(
+    "name,row,mode",
+    [
+        ("manual", {"tp": 2, "num_total_gpus": 4}, "agg"),
+        ("agg_vllm", {"tp": 2, "num_total_gpus": 4}, "agg"),
+        ("my_pd_experiment", {"(p)tp": 1, "(d)tp": 2, "(p)workers": 2, "(d)workers": 1, "num_total_gpus": 4}, "disagg"),
+    ],
+)
+def test_experiment_names_do_not_determine_serving_mode(monkeypatch, name, row, mode):
+    import pandas as pd
+
+    result = SimpleNamespace(chosen_exp=name, best_configs={name: pd.DataFrame([row])})
+    monkeypatch.setattr(service, "_cli", lambda: (None, lambda **_: result, None))
+    response = service.experiments_sync(service.AICExperimentRequest(yaml_text="manual: {}"))
+    assert response.experiments[0]["mode"] == mode
+    assert response.experiments[0]["num_total_gpus"] == 4
+    assert response.experiments[0]["is_chosen"]

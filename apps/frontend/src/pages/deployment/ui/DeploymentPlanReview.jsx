@@ -315,7 +315,7 @@ function HandoffOperationRow({ entry, tone = 'danger', statusLabel, ariaLabel, r
                     {rules.length > 0 && (
                         <ul className="mt-1.5 space-y-1" aria-label="Missing Kubernetes permissions">
                             {rules.map((rule, index) => (
-                                <li key={`${rule.operationId || rule.resource || index}-rule`} className="break-all font-mono text-[11px] text-theme-muted">
+                                <li key={`${rule.operationId || rule.resource || 'rule'}-${index}`} className="break-all font-mono text-[11px] text-theme-muted">
                                     {handoffRuleLabel(rule)}
                                 </li>
                             ))}
@@ -353,6 +353,7 @@ export function DeploymentPermissionHandoff({
     onCopyScript,
     onPrimaryAction,
     primaryActionLabel,
+    onDismiss,
     confirmed = false,
     onConfirmChange,
     onConfirmDelete,
@@ -690,6 +691,16 @@ export function DeploymentPermissionHandoff({
                     >
                         <RefreshCw size={13} aria-hidden="true" /> {primaryLabel}
                     </Button>
+                    {onDismiss && (
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={onDismiss}
+                            disabled={activeBusy}
+                        >
+                            Dismiss
+                        </Button>
+                    )}
                 </div>
 
                 <FormError message={error || localError} />

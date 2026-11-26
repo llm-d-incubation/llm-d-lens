@@ -1,7 +1,32 @@
+from types import SimpleNamespace
+
 import pytest
 
 from llm_d_lens.db.dao.deployment_plan import DeploymentPlanDao
 from llm_d_lens.deploy.contracts import DeployableConfiguration, DeploymentPreparedPlan, DeploymentRun
+
+
+@pytest.mark.asyncio
+async def test_verified_namespace_binding_pins_prepared_namespace_for_non_admin():
+    from llm_d_lens.deploy import capabilities
+    from llm_d_lens.deploy.application import DeploymentRunManager
+
+    capabilities.clear_verified_namespaces()
+    capabilities.record_verified_namespace("cluster", "llmd-granted", agentic_deployment_run_id="agentic-1")
+    case = SimpleNamespace(
+        create_request=SimpleNamespace(
+            provenance={}, deployment_policy=SimpleNamespace(value={"deployment_name": "demo"})
+        )
+    )
+    run = SimpleNamespace(cases=[case], provenance={})
+    request = SimpleNamespace(provenance={"agentic_deployment_run_id": "agentic-1"}, prepared_plan_id=None)
+    manager = SimpleNamespace(store=SimpleNamespace(list_executions=lambda: []))
+
+    async with DeploymentRunManager.verified_namespace_binding(manager, run, request, "cluster", None):
+        pass
+
+    assert case.create_request.deployment_policy.value["namespace_policy"] == {"exact": "llmd-granted"}
+    assert run.provenance["target_namespace"] == "llmd-granted"
 
 
 def test_plan_round_trip_and_atomic_run_creation():
@@ -799,3 +824,680 @@ async def test_prepared_plan_storage_resources_empty_when_namespace_matches_alig
         }
     )
     assert [doc["kind"] for doc in other_ns] == ["PersistentVolume", "PersistentVolumeClaim"]
+
+
+@pytest.mark.asyncio
+async def test_prepare_honors_verified_and_bootstrapped_target_namespace_and_rejects_conflicts(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    from llm_d_lens.cluster import registry as cluster_registry
+    from llm_d_lens.deploy import application, capabilities, prepared_plans
+    from llm_d_lens.deploy.contracts import (
+        ConfigurationArtifact,
+        DeploymentCase,
+        DeploymentCreateRequest,
+        DeploymentRunCreateRequest,
+        DeploymentStatus,
+    )
+    from llm_d_lens.deploy.providers.guide_adapter import GuideDeploymentArtifact
+    from llm_d_lens.infrastructure.artifacts.manifests import configuration_checksum
+
+    monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("LLM_D_BENCH_NAMESPACE_PREFIX", "llmd-")
+    monkeypatch.setattr(cluster_registry, "get_cluster", lambda _cid: None)
+    monkeypatch.setattr(cluster_registry, "cluster_kubeconfig_namespace", lambda _cid: None)
+    monkeypatch.setattr(
+        prepared_plans, "require_active_session", lambda _sid: SimpleNamespace(id="sess-1", server_id="cluster-a")
+    )
+    monkeypatch.setattr(application, "cluster_deployment_source", lambda *_args: {})
+    monkeypatch.setattr(prepared_plans, "preflight", AsyncMock(return_value={"status": "pass"}))
+
+    capabilities.clear_verified_namespaces()
+
+    def build_request_and_run(*, target_namespace: str | None = None, agentic_run_id: str | None = None):
+        config = DeployableConfiguration(
+            type="pd",
+            format="manifest",
+            provider_ref="pd-disaggregation",
+            content={},
+            checksum=configuration_checksum({}),
+            provenance={"cluster_ref": {"id": "cluster-a"}},
+        )
+        provenance = {"cluster_session_id": "sess-1", "cluster_server_id": "cluster-a"}
+        if agentic_run_id:
+            provenance["agentic_deployment_run_id"] = agentic_run_id
+        if target_namespace:
+            provenance["target_namespace"] = target_namespace
+        req = DeploymentRunCreateRequest(configurations=[config], provenance=provenance)
+        run = DeploymentRun(source_configurations=[config], provenance=dict(provenance))
+        run.cases = [
+            DeploymentCase(
+                run_id=run.id,
+                ordinal=0,
+                source_configuration_ordinal=0,
+                provider_ref=config.provider_ref,
+                component="pd",
+                create_request=DeploymentCreateRequest(
+                    configuration_artifacts=[
+                        ConfigurationArtifact(
+                            schema_version="v1",
+                            kind="pd",
+                            provider_ref=config.provider_ref,
+                            media_type="application/json",
+                            content="{}",
+                            checksum=config.checksum,
+                        )
+                    ],
+                    provenance=dict(provenance),
+                ),
+            )
+        ]
+        return req, run
+
+    manifest_file = tmp_path / "workload.yaml"
+    manifest_file.write_text("apiVersion: v1\nkind: Service\nmetadata:\n  name: router\n", encoding="utf-8")
+
+    observed_prepare_policies = []
+
+    async def fake_prepare_case(case):
+        observed_prepare_policies.append(
+            {
+                "namespace_policy": (case.create_request.deployment_policy.value or {}).get("namespace_policy"),
+                "target_namespace": (case.create_request.provenance or {}).get("target_namespace"),
+            }
+        )
+        ns = ((case.create_request.deployment_policy.value or {}).get("namespace_policy") or {}).get(
+            "exact"
+        ) or "llmd-random-fallback"
+        artifact = GuideDeploymentArtifact(
+            guide_id="pd-disaggregation",
+            artifact_hash="hash-1",
+            manifest_ref=str(manifest_file),
+            deployment_contract={},
+        )
+        return artifact, {"namespace": ns, "runtime": {}}
+
+    worker = SimpleNamespace(prepare_case=AsyncMock(side_effect=fake_prepare_case))
+
+    # 1. Verified namespace via peek_verified_namespace (non-destructive; still available for consume)
+    capabilities.record_verified_namespace("cluster-a", "llmd-peeked-ns", agentic_deployment_run_id="agentic-1")
+    req1, run1 = build_request_and_run(agentic_run_id="agentic-1")
+    monkeypatch.setattr(prepared_plans.DeploymentPlanService, "build_run", lambda *_args: run1)
+    manager1 = SimpleNamespace(
+        store=SimpleNamespace(list_executions=lambda: []),
+        _worker=Mock(return_value=worker),
+    )
+    plan1 = await prepared_plans.prepare(manager1, req1)
+    assert plan1.payload["artifacts"][0]["context"]["namespace"] == "llmd-peeked-ns"
+    assert plan1.payload["run"]["provenance"]["target_namespace"] == "llmd-peeked-ns"
+    assert observed_prepare_policies[-1] == {
+        "namespace_policy": {"exact": "llmd-peeked-ns"},
+        "target_namespace": "llmd-peeked-ns",
+    }
+    assert capabilities.peek_verified_namespace("cluster-a", agentic_deployment_run_id="agentic-1") == "llmd-peeked-ns"
+
+    # 2. Fallback to explicit target_namespace + is_bootstrap_marker_present when not in memory map
+    async def marker_present(cluster_id, namespace, **_kwargs):
+        return cluster_id == "cluster-a" and namespace == "llmd-bootstrapped-ns"
+
+    monkeypatch.setattr(capabilities, "is_bootstrap_marker_present", marker_present)
+    req2, run2 = build_request_and_run(target_namespace="llmd-bootstrapped-ns", agentic_run_id="agentic-2")
+    monkeypatch.setattr(prepared_plans.DeploymentPlanService, "build_run", lambda *_args: run2)
+    plan2 = await prepared_plans.prepare(manager1, req2)
+    assert plan2.payload["artifacts"][0]["context"]["namespace"] == "llmd-bootstrapped-ns"
+    assert observed_prepare_policies[-1]["namespace_policy"] == {"exact": "llmd-bootstrapped-ns"}
+
+    # 3. Unverified target_namespace is stripped and not pinned
+    req3, run3 = build_request_and_run(target_namespace="llmd-unbootstrapped", agentic_run_id="agentic-3")
+    monkeypatch.setattr(prepared_plans.DeploymentPlanService, "build_run", lambda *_args: run3)
+    plan3 = await prepared_plans.prepare(manager1, req3)
+    assert plan3.payload["artifacts"][0]["context"]["namespace"] == "llmd-random-fallback"
+    assert "target_namespace" not in plan3.payload["run"]["provenance"]
+    assert "target_namespace" not in plan3.payload["run"]["cases"][0]["create_request"]["provenance"]
+
+    # 4. Active execution collision on verified namespace is rejected before prepare_case
+    active_exec = SimpleNamespace(
+        execution_id="exec-live",
+        namespace="llmd-bootstrapped-ns",
+        status=DeploymentStatus.READY,
+    )
+    req4, run4 = build_request_and_run(target_namespace="llmd-bootstrapped-ns", agentic_run_id="agentic-4")
+    monkeypatch.setattr(prepared_plans.DeploymentPlanService, "build_run", lambda *_args: run4)
+    manager_busy = SimpleNamespace(
+        store=SimpleNamespace(list_executions=lambda: [active_exec]),
+        _worker=Mock(return_value=worker),
+    )
+    with pytest.raises(ValueError, match="already used by an active deployment"):
+        await prepared_plans.prepare(manager_busy, req4)
+
+
+@pytest.mark.asyncio
+async def test_preflight_allows_bootstrapped_satellite_pv_and_rejects_unbootstrapped_or_foreign_pv(monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    import yaml
+
+    from llm_d_lens.deploy import prepared_plans
+
+    manifest = yaml.safe_dump(
+        {
+            "kind": "DisaggregatedSet",
+            "metadata": {"name": "pd"},
+            "spec": {
+                "slices": 1,
+                "roles": [
+                    {
+                        "name": "decode",
+                        "spec": {
+                            "replicas": 1,
+                            "leaderWorkerTemplate": {
+                                "workerTemplate": {
+                                    "spec": {"containers": [{"resources": {"limits": {"nvidia.com/gpu": 1}}}]}
+                                }
+                            },
+                        },
+                    }
+                ],
+            },
+        }
+    )
+
+    def make_plan(namespace: str) -> DeploymentPreparedPlan:
+        return DeploymentPreparedPlan(
+            cluster_id="cluster-1",
+            digest="sha256:test",
+            payload={
+                "artifacts": [
+                    {
+                        "manifest": manifest,
+                        "context": {"namespace": namespace},
+                        "artifact": {
+                            "deployment_contract": {
+                                "preparedStorage": [
+                                    {
+                                        "kind": "PersistentVolume",
+                                        "metadata": {"name": "pv-sat"},
+                                        "spec": {"claimRef": {"namespace": namespace, "name": "pvc-sat"}},
+                                    }
+                                ],
+                                "deploymentBundle": {
+                                    "frozen": {"manifest": ""},
+                                    "resources": [],
+                                    "helm": {"values": [{"content": ""}]},
+                                },
+                            }
+                        },
+                    }
+                ]
+            },
+            preflight={},
+        )
+
+    nodes = [
+        {
+            "metadata": {"name": "gpu-1", "labels": {}},
+            "status": {
+                "conditions": [{"type": "Ready", "status": "True"}],
+                "allocatable": {"cpu": "16", "memory": "64Gi", "nvidia.com/gpu": "2", "pods": "110"},
+            },
+        }
+    ]
+    crds = [
+        {
+            "metadata": {"name": name},
+            "status": {"conditions": [{"type": "Established", "status": "True"}]},
+        }
+        for name in ("disaggregatedsets.disaggregatedset.x-k8s.io", "leaderworkersets.leaderworkerset.x-k8s.io")
+    ]
+    namespaces = [{"metadata": {"name": "llmd-bootstrapped"}}, {"metadata": {"name": "llmd-unbootstrapped"}}]
+    cluster_pvs: list[dict] = []
+
+    class FakeRunner:
+        async def run(self, cmd, timeout=30):
+            resource = cmd[2] if len(cmd) > 2 else ""
+            if resource == "customresourcedefinitions":
+                return SimpleNamespace(returncode=0, stdout=json.dumps({"items": crds}), stderr="")
+            if resource == "namespaces":
+                return SimpleNamespace(returncode=0, stdout=json.dumps({"items": namespaces}), stderr="")
+            if resource == "persistentvolumes":
+                return SimpleNamespace(returncode=0, stdout=json.dumps({"items": cluster_pvs}), stderr="")
+            return SimpleNamespace(returncode=1, stdout="", stderr="unexpected")
+
+    monkeypatch.setattr(
+        prepared_plans, "fetch_cluster_nodes_and_pods", AsyncMock(return_value=(nodes, [], "kubernetes"))
+    )
+    monkeypatch.setattr(prepared_plans, "scoped_runner", lambda _cid: FakeRunner())
+    monkeypatch.setattr(
+        prepared_plans,
+        "_namespace_bootstrapped",
+        AsyncMock(side_effect=lambda _cid, ns: ns == "llmd-bootstrapped"),
+    )
+
+    # 1. Bound to the selected bootstrapped namespace -> no false PERSISTENT_VOLUME_ALREADY_EXISTS
+    cluster_pvs[:] = [{"metadata": {"name": "pv-sat"}, "spec": {"claimRef": {"namespace": "llmd-bootstrapped"}}}]
+    ok_report = await prepared_plans.preflight(make_plan("llmd-bootstrapped"))
+    assert ok_report["errors"] == []
+
+    # 2. Bound to a different namespace -> still fails
+    cluster_pvs[:] = [{"metadata": {"name": "pv-sat"}, "spec": {"claimRef": {"namespace": "other-ns"}}}]
+    foreign_report = await prepared_plans.preflight(make_plan("llmd-bootstrapped"))
+    assert any(err["code"] == "PERSISTENT_VOLUME_ALREADY_EXISTS" for err in foreign_report["errors"])
+
+    # 3. Bound to an unbootstrapped namespace -> still fails
+    cluster_pvs[:] = [{"metadata": {"name": "pv-sat"}, "spec": {"claimRef": {"namespace": "llmd-unbootstrapped"}}}]
+    unbootstrapped_report = await prepared_plans.preflight(make_plan("llmd-unbootstrapped"))
+    assert any(err["code"] == "PERSISTENT_VOLUME_ALREADY_EXISTS" for err in unbootstrapped_report["errors"])
+
+
+@pytest.mark.asyncio
+async def test_consume_enforces_non_admin_permission_gate_and_consumes_verified_namespace(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    from llm_d_lens.cluster import registry as cluster_registry
+    from llm_d_lens.deploy import application, capabilities, prepared_plans
+    from llm_d_lens.deploy.contracts import (
+        ConfigurationArtifact,
+        DeploymentCase,
+        DeploymentCreateRequest,
+        DeploymentRunCreateRequest,
+    )
+    from llm_d_lens.deploy.providers.guide_adapter import GuideDeploymentArtifact
+    from llm_d_lens.infrastructure.artifacts.manifests import configuration_checksum
+
+    monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("LLM_D_BENCH_NAMESPACE_PREFIX", "llmd-")
+    capabilities.clear_verified_namespaces()
+
+    monkeypatch.setattr(
+        cluster_registry,
+        "get_cluster",
+        lambda cid: SimpleNamespace(id=cid) if cid == "cluster-nonadmin" else None,
+    )
+    monkeypatch.setattr(cluster_registry, "cluster_kubeconfig_namespace", lambda _cid: None)
+    monkeypatch.setattr(
+        prepared_plans,
+        "require_active_session",
+        lambda _sid: SimpleNamespace(id="sess-1", server_id="cluster-nonadmin"),
+    )
+    monkeypatch.setattr(application, "cluster_deployment_source", lambda *_args: {})
+    monkeypatch.setattr(prepared_plans, "preflight", AsyncMock(return_value={"status": "pass"}))
+
+    ds_manifest = "apiVersion: disaggregatedset.x-k8s.io/v1\nkind: DisaggregatedSet\nmetadata:\n  name: pd\n"
+    manifest_file = tmp_path / "ds.yaml"
+    manifest_file.write_text(ds_manifest, encoding="utf-8")
+
+    config = DeployableConfiguration(
+        type="pd",
+        format="manifest",
+        provider_ref="pd-disaggregation",
+        content={},
+        checksum=configuration_checksum({}),
+        provenance={"cluster_ref": {"id": "cluster-nonadmin"}},
+    )
+    request = DeploymentRunCreateRequest(
+        configurations=[config],
+        provenance={
+            "cluster_session_id": "sess-1",
+            "cluster_server_id": "cluster-nonadmin",
+            "agentic_deployment_run_id": "agentic-gate-1",
+        },
+    )
+    run = DeploymentRun(source_configurations=[config], provenance=dict(request.provenance))
+    run.cases = [
+        DeploymentCase(
+            run_id=run.id,
+            ordinal=0,
+            source_configuration_ordinal=0,
+            provider_ref=config.provider_ref,
+            component="pd",
+            create_request=DeploymentCreateRequest(
+                configuration_artifacts=[
+                    ConfigurationArtifact(
+                        schema_version="v1",
+                        kind="pd",
+                        provider_ref=config.provider_ref,
+                        media_type="application/json",
+                        content="{}",
+                        checksum=config.checksum,
+                    )
+                ],
+                provenance=dict(request.provenance),
+            ),
+        )
+    ]
+    artifact = GuideDeploymentArtifact(
+        guide_id="pd-disaggregation",
+        artifact_hash="hash-ds",
+        manifest_ref=str(manifest_file),
+        deployment_contract={
+            "deploymentBundle": {
+                "frozen": {"manifest": "apiVersion: v1\nkind: Service\nmetadata:\n  name: router\n"},
+                "helm": {"values": [{"content": "router: {}"}]},
+                "resources": [],
+            }
+        },
+    )
+    worker = SimpleNamespace(
+        prepare_case=AsyncMock(
+            return_value=(artifact, {"namespace": "llmd-pd-target", "runtime": {"storageVolumeId": "vol-1"}})
+        )
+    )
+    stored_runs: dict[str, DeploymentRun] = {}
+
+    def create_run_fn(new_run):
+        stored_runs[new_run.id] = new_run
+        return new_run
+
+    manager = SimpleNamespace(
+        store=SimpleNamespace(
+            list_executions=lambda: [],
+            get_run=lambda rid: stored_runs.get(rid) or run,
+            create_run=create_run_fn,
+        ),
+        _worker=Mock(return_value=worker),
+        worker_for_run=Mock(return_value=worker),
+        _schedule_run=Mock(),
+    )
+    monkeypatch.setattr(prepared_plans, "storage_resources", AsyncMock(return_value=[]))
+    monkeypatch.setattr(prepared_plans.DeploymentPlanService, "build_run", lambda *_args: run)
+    plan = await prepared_plans.prepare(manager, request)
+    request.prepared_plan_id = plan.id
+    request.expected_plan_digest = plan.digest
+
+    # 1. Missing permissions -> consume raises DeploymentAdminSetupRequiredError before dao.consume
+    # and restores any unrelated verified namespace binding if present
+    capabilities.record_verified_namespace(
+        "cluster-nonadmin",
+        "llmd-other-verified",
+        agentic_deployment_run_id="agentic-gate-1",
+    )
+    seen_perm_requests = []
+
+    async def deny_permissions(perm_req):
+        seen_perm_requests.append(perm_req)
+        return {
+            "status": "admin_required",
+            "sufficient": False,
+            "clusterId": perm_req.cluster_id,
+            "namespace": perm_req.namespace,
+            "adminOperations": [{"id": "deploy.rbac", "step": 2, "title": "Grant RBAC", "executor": "admin"}],
+            "missing": [],
+        }
+
+    monkeypatch.setattr(capabilities, "check_deployment_permissions", deny_permissions)
+    with pytest.raises(capabilities.DeploymentAdminSetupRequiredError) as setup_err:
+        await prepared_plans.consume(manager, request)
+    assert setup_err.value.code == "deployment_admin_setup_required"
+    assert setup_err.value.report["namespace"] == "llmd-pd-target"
+    assert seen_perm_requests[0].uses_lws is True
+    assert seen_perm_requests[0].uses_router is True
+    assert seen_perm_requests[0].storage_volume_id == "vol-1"
+    assert seen_perm_requests[0].prepared_plan_id == plan.id
+    assert DeploymentPlanDao().get(plan.id).status == "prepared"
+    manager._schedule_run.assert_not_called()
+    assert capabilities.peek_verified_namespace("cluster-nonadmin", prepared_plan_id=plan.id) is None
+    assert (
+        capabilities.consume_verified_namespace("cluster-nonadmin", agentic_deployment_run_id="agentic-gate-1")
+        == "llmd-other-verified"
+    )
+
+    # 2. After namespace bootstrap verification -> consume skips redundant check, consumes binding, and schedules run
+    capabilities.record_verified_namespace(
+        "cluster-nonadmin",
+        "llmd-pd-target",
+        prepared_plan_id=plan.id,
+    )
+    monkeypatch.setattr(
+        capabilities,
+        "check_deployment_permissions",
+        AsyncMock(side_effect=AssertionError("should not re-run SSAR when namespace was just verified")),
+    )
+    saved = await prepared_plans.consume(manager, request)
+    assert saved is not None
+    manager._schedule_run.assert_called_once()
+    assert capabilities.peek_verified_namespace("cluster-nonadmin", prepared_plan_id=plan.id) is None
+
+
+@pytest.mark.asyncio
+async def test_consume_target_namespace_reconciles_between_prepare_and_consume(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    from llm_d_lens.cluster import registry as cluster_registry
+    from llm_d_lens.deploy import application, capabilities, prepared_plans
+    from llm_d_lens.deploy.contracts import (
+        ConfigurationArtifact,
+        DeploymentCase,
+        DeploymentCreateRequest,
+        DeploymentRunCreateRequest,
+    )
+    from llm_d_lens.deploy.providers.guide_adapter import GuideDeploymentArtifact
+    from llm_d_lens.infrastructure.artifacts.manifests import configuration_checksum
+
+    monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("LLM_D_BENCH_NAMESPACE_PREFIX", "llmd-")
+    capabilities.clear_verified_namespaces()
+    monkeypatch.setattr(cluster_registry, "get_cluster", lambda _cid: None)
+    monkeypatch.setattr(cluster_registry, "cluster_kubeconfig_namespace", lambda _cid: None)
+    monkeypatch.setattr(
+        prepared_plans, "require_active_session", lambda _sid: SimpleNamespace(id="sess-1", server_id="cluster-a")
+    )
+    monkeypatch.setattr(application, "cluster_deployment_source", lambda *_args: {})
+    monkeypatch.setattr(prepared_plans, "preflight", AsyncMock(return_value={"status": "pass"}))
+    monkeypatch.setattr(capabilities, "is_bootstrap_marker_present", AsyncMock(return_value=True))
+
+    manifest_file = tmp_path / "ds.yaml"
+    manifest_file.write_text("apiVersion: v1\nkind: Service\nmetadata:\n  name: router\n", encoding="utf-8")
+
+    def make_case_and_manager(frozen_ns: str):
+        config = DeployableConfiguration(
+            type="pd",
+            format="manifest",
+            provider_ref="pd-disaggregation",
+            content={},
+            checksum=configuration_checksum({}),
+            provenance={"cluster_ref": {"id": "cluster-a"}},
+        )
+        run = DeploymentRun(source_configurations=[config], provenance={"cluster_server_id": "cluster-a"})
+        run.cases = [
+            DeploymentCase(
+                run_id=run.id,
+                ordinal=0,
+                source_configuration_ordinal=0,
+                provider_ref=config.provider_ref,
+                component="pd",
+                create_request=DeploymentCreateRequest(
+                    configuration_artifacts=[
+                        ConfigurationArtifact(
+                            schema_version="v1",
+                            kind="pd",
+                            provider_ref=config.provider_ref,
+                            media_type="application/json",
+                            content="{}",
+                            checksum=config.checksum,
+                        )
+                    ],
+                    provenance={"cluster_server_id": "cluster-a"},
+                ),
+            )
+        ]
+        artifact = GuideDeploymentArtifact(
+            guide_id="pd-disaggregation",
+            artifact_hash="hash-1",
+            manifest_ref=str(manifest_file),
+            deployment_contract={},
+        )
+        worker = SimpleNamespace(
+            prepare_case=AsyncMock(return_value=(artifact, {"namespace": frozen_ns, "runtime": {}}))
+        )
+        stored: dict[str, DeploymentRun] = {}
+
+        def create_run_fn(new_run):
+            stored[new_run.id] = new_run
+            return new_run
+
+        manager = SimpleNamespace(
+            store=SimpleNamespace(
+                list_executions=lambda: [],
+                get_run=lambda rid: stored.get(rid) or run,
+                create_run=create_run_fn,
+            ),
+            _worker=Mock(return_value=worker),
+            worker_for_run=Mock(return_value=worker),
+            _schedule_run=Mock(),
+        )
+        return config, run, manager
+
+    # Case 1: prepare(none) -> consume(frozen_ns) succeeds (post-403 recovery retry passes frozen namespace)
+    cfg1, run1, mgr1 = make_case_and_manager("llmd-frozen-1")
+    monkeypatch.setattr(prepared_plans.DeploymentPlanService, "build_run", lambda *_args: run1)
+    prep_req1 = DeploymentRunCreateRequest(
+        configurations=[cfg1], provenance={"cluster_session_id": "sess-1", "cluster_server_id": "cluster-a"}
+    )
+    plan1 = await prepared_plans.prepare(mgr1, prep_req1)
+    consume_req1 = DeploymentRunCreateRequest(
+        configurations=[cfg1],
+        prepared_plan_id=plan1.id,
+        expected_plan_digest=plan1.digest,
+        provenance={
+            "cluster_session_id": "sess-1",
+            "cluster_server_id": "cluster-a",
+            "target_namespace": "llmd-frozen-1",
+        },
+    )
+    assert await prepared_plans.consume(mgr1, consume_req1) is not None
+
+    # Case 2: prepare(frozen_ns) -> consume(none) succeeds
+    cfg2, run2, mgr2 = make_case_and_manager("llmd-frozen-2")
+    monkeypatch.setattr(prepared_plans.DeploymentPlanService, "build_run", lambda *_args: run2)
+    prep_req2 = DeploymentRunCreateRequest(
+        configurations=[cfg2],
+        provenance={
+            "cluster_session_id": "sess-1",
+            "cluster_server_id": "cluster-a",
+            "target_namespace": "llmd-frozen-2",
+        },
+    )
+    plan2 = await prepared_plans.prepare(mgr2, prep_req2)
+    consume_req2 = DeploymentRunCreateRequest(
+        configurations=[cfg2],
+        prepared_plan_id=plan2.id,
+        expected_plan_digest=plan2.digest,
+        provenance={"cluster_session_id": "sess-1", "cluster_server_id": "cluster-a"},
+    )
+    assert await prepared_plans.consume(mgr2, consume_req2) is not None
+
+    # Case 3: prepare(frozen_ns) -> consume(other_ns) MUST still reject
+    cfg3, run3, mgr3 = make_case_and_manager("llmd-frozen-3")
+    monkeypatch.setattr(prepared_plans.DeploymentPlanService, "build_run", lambda *_args: run3)
+    prep_req3 = DeploymentRunCreateRequest(
+        configurations=[cfg3],
+        provenance={
+            "cluster_session_id": "sess-1",
+            "cluster_server_id": "cluster-a",
+            "target_namespace": "llmd-frozen-3",
+        },
+    )
+    plan3 = await prepared_plans.prepare(mgr3, prep_req3)
+    consume_req3 = DeploymentRunCreateRequest(
+        configurations=[cfg3],
+        prepared_plan_id=plan3.id,
+        expected_plan_digest=plan3.digest,
+        provenance={
+            "cluster_session_id": "sess-1",
+            "cluster_server_id": "cluster-a",
+            "target_namespace": "llmd-other-ns",
+        },
+    )
+    with pytest.raises(ValueError, match="prepare a new plan"):
+        await prepared_plans.consume(mgr3, consume_req3)
+
+
+@pytest.mark.asyncio
+async def test_client_namespace_policy_exact_stripped_and_multi_case_active_execution_rejected(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+
+    from llm_d_lens.cluster import registry as cluster_registry
+    from llm_d_lens.deploy import application, capabilities, prepared_plans
+    from llm_d_lens.deploy.configuration_adapter import DeploymentConfigurationPlanner
+    from llm_d_lens.deploy.contracts import DeploymentRunCreateRequest, DeploymentStatus
+    from llm_d_lens.deploy.providers.guide_adapter import GuideDeploymentArtifact
+    from llm_d_lens.infrastructure.artifacts.manifests import configuration_checksum
+
+    monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("LLM_D_BENCH_NAMESPACE_PREFIX", "llmd-")
+    monkeypatch.setattr(cluster_registry, "get_cluster", lambda _cid: None)
+    monkeypatch.setattr(cluster_registry, "cluster_kubeconfig_namespace", lambda _cid: None)
+    monkeypatch.setattr(
+        prepared_plans, "require_active_session", lambda _sid: SimpleNamespace(id="sess-1", server_id="cluster-a")
+    )
+    monkeypatch.setattr(application, "cluster_deployment_source", lambda *_args: {})
+    monkeypatch.setattr(prepared_plans, "preflight", AsyncMock(return_value={"status": "pass"}))
+    capabilities.clear_verified_namespaces()
+
+    # 1. Client-supplied namespace_policy.exact in configuration.provenance is stripped (prefix preserved)
+    content = {"model": {"name": "Qwen/Qwen3-0.6B"}}
+    cfg = DeployableConfiguration(
+        type="pd",
+        format="helm",
+        provider_ref="pd-disaggregation",
+        content=content,
+        checksum=configuration_checksum(content),
+        provenance={
+            "cluster_ref": {"id": "cluster-a"},
+            "namespace_policy": {"exact": "llmd-victim-ns", "prefix": "llmd-custom-"},
+        },
+    )
+    planned_cases = DeploymentConfigurationPlanner().plan(
+        [cfg], run_id="run-1", provenance={"cluster_server_id": "cluster-a"}
+    )
+    assert planned_cases[0].create_request.deployment_policy.value["namespace_policy"] == {"prefix": "llmd-custom-"}
+
+    # bind_single_case_target_namespace(..., None) also strips any residual exact policy
+    dummy_run = DeploymentRun(source_configurations=[cfg], provenance={"target_namespace": "llmd-victim"})
+    planned_cases[0].create_request.deployment_policy.value["namespace_policy"] = {
+        "exact": "llmd-victim",
+        "prefix": "llmd-custom-",
+    }
+    application.bind_single_case_target_namespace(dummy_run, planned_cases[0], None)
+    assert planned_cases[0].create_request.deployment_policy.value["namespace_policy"] == {"prefix": "llmd-custom-"}
+
+    # 2. Multi-case consume() checks active execution ownership across all cases
+    manifest_file = tmp_path / "ds.yaml"
+    manifest_file.write_text("apiVersion: v1\nkind: Service\nmetadata:\n  name: router\n", encoding="utf-8")
+    ns_iter = iter(["llmd-case-1", "llmd-case-2-busy"])
+
+    async def fake_prepare_case(_case):
+        return (
+            GuideDeploymentArtifact(
+                guide_id="pd-disaggregation",
+                artifact_hash="h",
+                manifest_ref=str(manifest_file),
+                deployment_contract={},
+            ),
+            {"namespace": next(ns_iter), "runtime": {}},
+        )
+
+    worker = SimpleNamespace(prepare_case=AsyncMock(side_effect=fake_prepare_case))
+    active_exec = SimpleNamespace(execution_id="exec-2", namespace="llmd-case-2-busy", status=DeploymentStatus.READY)
+    manager = SimpleNamespace(
+        store=SimpleNamespace(list_executions=lambda: [active_exec]),
+        _worker=Mock(return_value=worker),
+        worker_for_run=Mock(return_value=worker),
+        _schedule_run=Mock(),
+    )
+    multi_req = DeploymentRunCreateRequest(
+        configurations=[cfg, cfg],
+        provenance={"cluster_session_id": "sess-1", "cluster_server_id": "cluster-a"},
+    )
+    multi_plan = await prepared_plans.prepare(manager, multi_req)
+    multi_req.prepared_plan_id = multi_plan.id
+    multi_req.expected_plan_digest = multi_plan.digest
+    with pytest.raises(ValueError, match="already used by an active deployment"):
+        await prepared_plans.consume(manager, multi_req)
+    manager._schedule_run.assert_not_called()

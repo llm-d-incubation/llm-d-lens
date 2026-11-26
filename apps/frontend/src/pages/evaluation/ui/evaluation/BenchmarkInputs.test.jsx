@@ -95,9 +95,9 @@ test('workload type is the only primary selector; custom sources share one entry
  assert.match(html, /Customize/);
  let mode;
  const tree = inputTree({workloadMode:'profile', selectWorkloadMode(value) { mode=value; }});
- findElement(tree, node => node.type==='button' && node.props.children==='Customize').props.onClick();
+ findElement(tree, node => node.props?.['aria-label']==='Request source').props.onChange('custom');
  assert.equal(mode, 'profile');
- findElement(tree, node => node.type==='select' && node.props['aria-label']==='YAML source').props.onChange({target:{value:'yaml'}});
+ findElement(tree, node => node.props?.['aria-label']==='YAML source').props.onChange({target:{value:'yaml'}});
  assert.equal(mode, 'yaml');
 });
 
@@ -120,21 +120,21 @@ test('header add actions and row remove actions update the benchmark', () => {
 
 test('prefix reuse is offered only for a relevant guide or an active imported workload', () => {
  const generic = inputTree({recommendedBenchmark:applyBenchmarkPreset('quick')});
- assert.equal(findElement(generic, node => node.type==='button' && node.props.children==='Prefix cache reuse'), undefined);
+ assert.equal(findElement(generic, node => node.props?.['aria-label']==='Request source').props.options.some(option => option.value === 'shared-prefix'), false);
  const recommendedBenchmark = {shared_prefix:{num_groups:2}};
  const prefixGuide = inputTree({recommendedBenchmark});
- assert.ok(findElement(prefixGuide, node => node.type==='button' && node.props.children==='Prefix cache reuse'));
+ assert.ok(findElement(prefixGuide, node => node.props?.['aria-label']==='Request source').props.options.some(option => option.value === 'shared-prefix'));
  const imported = inputTree({workloadMode:'shared-prefix'});
- assert.ok(findElement(imported, node => node.type==='button' && node.props.children==='Prefix cache reuse'));
+ assert.ok(findElement(imported, node => node.props?.['aria-label']==='Request source').props.options.some(option => option.value === 'shared-prefix'));
 });
 
 test('Customize opens the YAML editor from a fixed-length workload', () => {
  let mode;
  const tree = inputTree({selectWorkloadMode(value) { mode=value; }});
- findElement(tree, node => node.type==='button' && node.props.children==='Customize').props.onClick();
+ findElement(tree, node => node.props?.['aria-label']==='Request source').props.onChange('custom');
  assert.equal(mode, 'yaml');
  const yaml = inputTree({workloadMode:mode, benchmark:{workload_yaml:'load: {}'}});
- assert.ok(findElement(yaml, node => node.type==='textarea' && node.props['aria-label']==='Workload YAML'));
+ assert.ok(findElement(yaml, node => node.props?.['aria-label']==='Workload YAML'));
 });
 
 

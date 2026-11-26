@@ -3,8 +3,15 @@ title: Quickstart
 description: Start Lens, deploy a model and send your first request.
 ---
 
-Follow this path to get a model response: **install Lens → add a cluster → deploy
-a model → publish a service → send a request**.
+## Choose your path
+
+| If you want to... | Use | Next step |
+| --- | --- | --- |
+| Use the visual console, Model Catalog, and multi-cluster governance | **Web GUI** | Follow the walkthrough below |
+| Deploy and roll out llm-d stacks in one namespace without a Lens server | **Standalone `llmd` CLI** (`apps/lens`) | Install with `pip install -e ./apps/lens` and follow [CLI reference](/cli-reference) (`llmd` is the full CLI; `lens` is a `--version`/`--help` stub) |
+| Let `opencode`, Claude Code, Cursor, or Codex drive Lens | **Agent Tools via MCP** (`POST /api/mcp`) | Create a `lens-pat-*` token and follow [MCP integration](/mcp) (distinct from internal `/api/assistant/mcp`) |
+
+The walkthrough below uses the **Web GUI** path: **install Lens → add a cluster → deploy a model → publish a service → send a request**.
 
 ## 1. Install and open Lens
 
@@ -21,31 +28,33 @@ Or use `wget`:
 VERSION=main && wget -qO- "https://raw.githubusercontent.com/llm-d-incubation/llm-d-lens/${VERSION}/scripts/LensInstaller-Ubuntu-x86_64-online.sh" | bash
 ```
 
-Accept the installer defaults or enter your installation directory and ports.
-Open the URL printed at completion and sign in with the auto-generated administrator
+Accept the installer defaults (install directory `$HOME/llm-d-lens`, unified app/API port `3000`) or enter your own.
+Open the URL printed at completion (`https://localhost:3000` by default) and sign in with the auto-generated administrator
 credentials. The installer prints the path to a mode-600 file containing them;
 the file is removed when the password changes. Prompts are read from the terminal,
 and a copy of the installer is saved in the current directory after source validation.
-Use a new or empty installation directory. To run from source instead, follow
-[Installation](/installation).
+Use a new or empty installation directory. To run from source or install only the
+standalone `llmd` CLI, follow [Installation](/installation).
 
 ## 2. Add a cluster and deploy a model
 
 1. In **Clusters**, click **Add** and upload the cluster's kubeconfig.
-2. Complete the wizard's proxy, gateway, accelerator, software and model-cache steps, then follow **Review → Preflight → Execute → Complete → Done**.
-3. In **Model cache**, download the model into a cache volume and wait for it to be ready.
-4. In **Model Market**, choose the model and cluster. Select **Manual → Configure deployment** to use an llm-d Guide.
+   - **Non-admin onboarding:** A namespace-scoped `edit` kubeconfig works too — during **Preflight**, Lens splits out any cluster-scoped prerequisites into an orchestration administrator handoff script. Have an admin run it, click **Re-check**, and then click **Execute**.
+   - **Custom cluster vLLM image:** In the **llm-d stack** wizard step, you can optionally override the **vLLM image** with a custom OCI image reference (otherwise the hardware profile default is used). See [Clusters](/user-guide/clusters).
+2. Complete the proxy, gateway, accelerator, software, and model-cache steps, then follow **Review → Preflight → Execute → Complete → Done**.
+3. In **Model Cache**, download the model into a cache volume and wait for it to be ready.
+4. In **Model Catalog**, choose a built-in model (or click **Add custom model** to register your own catalog entry) and select your target cluster. Select **Manual → Configure deployment** to deploy with an llm-d Guide (or use **Agentic** planning to generate a workload-guided recommendation).
 5. Choose **optimized-baseline**, check the suggested resources, then click **Generate YAML → Confirm & generate → Next**.
 6. In **Deployments**, wait for **Ready**.
 
-For the complete field-by-field walkthrough, use [Add a cluster and deploy a model](/tutorials/bootstrap-and-deploy).
+For the complete field-by-field walkthrough, see [Add a cluster and deploy a model](/tutorials/bootstrap-and-deploy) and [Model Catalog](/user-guide/model-market).
 
 ## 3. Publish and call the model
 
-1. In **Model services**, click **Add model service**, choose the cluster, enter the public model name, and click **Create**.
-2. Click **Add model server**, choose the cluster, service and deployment, then click **Add provider**.
-3. In **API keys**, click **New key**, create a key and save it immediately.
-4. In **My services**, find the model and click **cURL**.
+1. In **Model Services**, click **Add model** in **Service Flow**.
+2. Choose the cluster, select an existing model service or enter the public model name users will call, pick the ready deployment, and click **Add**.
+3. In **My Resources → API Keys**, click **New key**, create a key (`lens-mk-...`), and save it immediately.
+4. In **My Resources → Services** (page header: *My services*), find the model and click **cURL**.
 5. Copy the request, replace `lens-mk-...` with your key, and run it in a terminal.
 
 **You are done when the request returns a model reply.** If the gateway is not

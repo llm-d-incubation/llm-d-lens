@@ -7,7 +7,6 @@ import { Input, Label, Select } from '../../../../shared/ui/FormControls';
 import { listStorageVolumes } from '../../../storage';
 import { HuggingFaceModelPickerModal } from './HuggingFaceModelPickerModal';
 import { ModelMarketPickerModal } from './ModelMarketPickerModal';
-import { MODELS } from '@repo/shared/catalog';
 
 const REPO_ID_PATTERN = /^[\w.-]+\/[\w.-]+$/;
 const ENTRY_EXISTS_CODE = 'model_cache_entry_exists';
@@ -23,14 +22,14 @@ const MODEL_SOURCES = [
     { value: 'model-market', label: 'Model Market' },
 ];
 
-export function DownloadModelModal({ clusters = [], defaultClusterId = '', defaultStorageVolumeId = '', defaultRepoId = '', onCancel, onCreate }) {
+export function DownloadModelModal({ clusters = [], defaultClusterId = '', defaultStorageVolumeId = '', defaultRepoId = '', defaultRevision = 'main', onCancel, onCreate }) {
     const [clusterId, setClusterId] = useState(defaultClusterId);
     const [storageVolumeId, setStorageVolumeId] = useState(defaultStorageVolumeId);
     const [volumes, setVolumes] = useState([]);
     const [repoId, setRepoId] = useState(defaultRepoId);
-    const [revision, setRevision] = useState('main');
+    const [revision, setRevision] = useState(defaultRevision);
     const [modelSource, setModelSource] = useState('huggingface');
-    const [selectedMarketModelId, setSelectedMarketModelId] = useState('');
+    const [selectedMarketModel, setSelectedMarketModel] = useState(null);
     const [pickerOpen, setPickerOpen] = useState(false);
     const [marketPickerOpen, setMarketPickerOpen] = useState(false);
     const [selectedModelTags, setSelectedModelTags] = useState(null);
@@ -61,34 +60,24 @@ export function DownloadModelModal({ clusters = [], defaultClusterId = '', defau
     const invalid = !clusterId || !storageVolumeId || !repoIdValid;
 
     const selectedVolume = useMemo(() => volumes.find((item) => item.id === storageVolumeId), [volumes, storageVolumeId]);
-    const selectedMarketModel = useMemo(
-        () => MODELS.find((item) => item.id === selectedMarketModelId) || null,
-        [selectedMarketModelId],
-    );
-
     const handleSourceChange = (newSource) => {
         setModelSource(newSource);
         setSelectedModelTags(null);
         setRevision('main');
         if (newSource === 'model-market') {
-            setSelectedMarketModelId('');
+            setSelectedMarketModel(null);
             setRepoId('');
             setMarketPickerOpen(true);
         } else {
-            setSelectedMarketModelId('');
+            setSelectedMarketModel(null);
             setRepoId('');
         }
     };
 
-    const handleMarketModelSelect = (marketId) => {
-        setSelectedMarketModelId(marketId);
-        const model = MODELS.find((item) => item.id === marketId);
-        if (model) {
-            setRepoId(model.repository);
-            setRevision('main');
-        } else {
-            setRepoId('');
-        }
+    const handleMarketModelSelect = model => {
+        setSelectedMarketModel(model);
+        setRepoId(model.repository);
+        setRevision(model.revision || 'main');
     };
 
     // The API refuses a model the volume already holds; show what is there and
@@ -326,7 +315,7 @@ export function DownloadModelModal({ clusters = [], defaultClusterId = '', defau
                 <ModelMarketPickerModal
                     onCancel={() => setMarketPickerOpen(false)}
                     onSelect={(model) => {
-                        handleMarketModelSelect(model.id);
+                        handleMarketModelSelect(model);
                         setMarketPickerOpen(false);
                     }}
                 />

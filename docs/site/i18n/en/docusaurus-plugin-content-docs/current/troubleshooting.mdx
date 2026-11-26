@@ -41,7 +41,7 @@ helm upgrade -i eg oci://docker.io/envoyproxy/gateway-helm \
   -f https://raw.githubusercontent.com/envoyproxy/ai-gateway/v0.7.0/examples/inference-pool/envoy-gateway-values-addon.yaml
 ```
 
-Then open **Model services**, reconcile the affected cluster, and retry the request.
+Then open **Model Services**, reconcile the affected cluster, and retry the request.
 
 ## "no matches for kind ... ensure CRDs are installed first" during Gateway install
 
@@ -63,7 +63,7 @@ sign out and back in.
 
 Check `~/.local/state/lens/logs/dev/backend.log` for the actual exception.
 Common causes: a missing Python dependency after a `[project.dependencies]`
-change (`python3 -m pip install -e '.[dev]'`), or a port already in use —
+change (`python3 -m pip install -e 'apps/backend[dev]'`), or a port already in use —
 `hack/lens-local.sh` picks free ports automatically and logs which ones it used.
 
 ## The MCP tool catalog is missing a route you just added
@@ -109,3 +109,16 @@ size, concurrency or arrival rate. Total memory reservation grows with
 do not resize existing Pods: launch a new task. Open-loop duration excludes
 request draining, and a rate above serving capacity can accumulate backlog.
 Do not interpret an OOM-terminated run as a complete successful measurement.
+
+## Standalone `llmd` CLI errors (`apps/lens`)
+
+- **`lens` prints only `--version` / `--help`:** use the `llmd` entrypoint installed from `apps/lens` (for example `.venv/bin/llmd` after `pip install -e ./apps/lens`), not `lens`.
+- **Missing cluster or render tools on `PATH`:** `llmd` requires `kubectl` (or `oc` with `--kube-cli oc` / `LLMD_KUBE_CLI=oc`), `helm`, `git`, and `kustomize`.
+- **`llmd standup --expected-digest` mismatch:** the source ref, rendered variables, or chart contents changed after `llmd plan`. Run `llmd plan` again (with `--refresh` if updating a remote branch) and pass the newly printed digest.
+
+## External Agent MCP (`POST /api/mcp`) returns `401`, `405`, or TLS errors
+
+- **`401 Unauthorized`:** create a Personal Access Token (`lens-pat-*`) under **Account → Personal access tokens**, verify your account holds `mcp:tool:invoke` or `playground:chat:use`, and send `Authorization: Bearer <token>`. For `opencode`, set `"oauth": false` in `opencode.json` so it does not hijack the `401` into an OAuth flow.
+- **`405 Method Not Allowed`:** `/api/mcp` only accepts `POST` (stateless Streamable HTTP); `GET` and `DELETE` intentionally return `405`. Configure clients to use Streamable HTTP instead of SSE fallback (for example `"type": "remote"` in `opencode` or `"type": "http"` in Cursor and Claude Code).
+- **Self-signed TLS failures:** the Ubuntu online installer enables auto-HTTPS by default. Either trust/supply the server certificate in your client, install with `--no-https` for isolated local use, or connect over `http://localhost:3000/api/mcp` in dev mode.
+- **Expected tools missing from `tools/list`:** only the `core` profile is enabled by default. Set `LENS_MCP_PROFILES` on the backend (for example `core,serving,storage,simulation`) to expose additional profiles. See [MCP integration](/mcp).

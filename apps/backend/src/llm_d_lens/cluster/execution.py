@@ -1200,7 +1200,7 @@ async def execute_lens_operation(
     elif action == "model-cache-jobs":
         from llm_d_lens.cluster.plan import plan_hash16  # noqa: PLC0415
         from llm_d_lens.model_cache import jobs  # noqa: PLC0415
-        from llm_d_lens.model_cache.contracts import ModelCacheEntry  # noqa: PLC0415
+        from llm_d_lens.model_cache.contracts import ModelCacheEntry, ModelCacheEntryStatus  # noqa: PLC0415
         from llm_d_lens.model_cache.service import ModelCacheNotFoundError  # noqa: PLC0415
         from llm_d_lens.model_cache.service import default_service as cache_service  # noqa: PLC0415
         from llm_d_lens.storage.service import default_service as storage_service  # noqa: PLC0415
@@ -1271,6 +1271,8 @@ async def execute_lens_operation(
                 fallback_message=f"model-cache job launch failed for cluster {cluster_id}: {error}",
             )
         if isinstance(updated_entry, ModelCacheEntry):
+            # The planned entry is pre-registered as ready; refresh only polls in-progress entries.
+            updated_entry.status = ModelCacheEntryStatus.DOWNLOADING
             store = getattr(service, "_store", None)
             if store is not None and callable(getattr(store, "save", None)):
                 store.save(updated_entry)

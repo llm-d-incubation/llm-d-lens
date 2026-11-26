@@ -171,7 +171,7 @@ async def test_published_default_profile_installs_bundle_after_guide_values_disa
     # values so the deployment's own proxy is disabled for the shared Gateway.
     effective = yaml.safe_load(context["router_effective_values"])
     assert effective["router"]["saved"] is True
-    assert effective["router"]["proxy"]["enabled"] is False
+    assert effective["router"]["proxy"]["enabled"] is True
     assert effective["router"]["epp"]["flags"]["secure-serving"] is False
 
 
@@ -559,13 +559,19 @@ def test_input_validation_allows_waiting_for_accelerators(tmp_path):
 
 
 def test_gateway_mode_proxy_disable_skipped_for_evaluation_owned_deployments(tmp_path):
-    from llm_d_lens.deploy.data_plane import GATEWAY_MODE_VALUES_PATH, PLAINTEXT_EPP_VALUES_PATH
+    from llm_d_lens.deploy.data_plane import PLAINTEXT_EPP_VALUES_PATH
 
     adapter, _ = _adapter(tmp_path)
-    plaintext = ["--values", str(PLAINTEXT_EPP_VALUES_PATH)]
-    shared = [*plaintext, "--values", str(GATEWAY_MODE_VALUES_PATH)]
+    plaintext = [
+        "--values",
+        str(PLAINTEXT_EPP_VALUES_PATH),
+        "--set",
+        "router.epp.flags.secure-serving=false",
+        "--set",
+        "router.proxy.enabled=true",
+    ]
 
-    assert adapter._gateway_mode_args({}) == shared
+    assert adapter._gateway_mode_args({}) == plaintext
     # Evaluation-owned deployments keep their own proxy, but the EPP is still
     # forced plaintext so the proxy's ext_proc stays consistent.
     assert adapter._gateway_mode_args({"provenance": {"evaluate_workflow": True}}) == plaintext

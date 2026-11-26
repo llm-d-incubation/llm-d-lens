@@ -4,34 +4,293 @@ description: Backend API surfaces, contracts and integration points.
 slug: /api-reference
 ---
 
-Lens exposes a same-origin HTTP API through the Python FastAPI backend
-(`llm_d_lens`). Vite proxies browser `/api/...` calls directly to it in development.
-In production, the same backend serves the built frontend, API and MCP endpoint,
-and owns validation, persistence and task execution.
+Lens exposes a same-origin HTTP API and MCP endpoints through the unified Python
+FastAPI backend (`llm_d_lens`). Vite proxies browser `/api/...` calls directly to
+it in development. In production, the same backend serves the built frontend,
+REST API, `/api/mcp` (Agent Task MCP), and `/api/assistant/mcp` (Assistant Tool
+Catalog), and owns validation, persistence, and task execution.
 
-```mermaid
-flowchart LR
-    UI["Lens UI"] --> PY["Python API (llm_d_lens) :3000"]
-    PY -->|/api/remote-deploy| SSH["Remote host over SSH"]
-    PY --> DB["Database"]
-    PY --> K8s["Kubernetes"]
-```
+<svg
+  viewBox="0 0 760 280"
+  width="100%"
+  role="img"
+  aria-label="Lens API and CLI architecture diagram"
+  style={{ maxWidth: '760px', height: 'auto', display: 'block', margin: '1.25rem 0' }}
+>
+  <rect
+    x="16"
+    y="18"
+    width="180"
+    height="64"
+    rx="10"
+    ry="10"
+    fill="var(--ifm-background-surface-color, transparent)"
+    stroke="var(--ifm-color-primary)"
+    strokeWidth="1.5"
+  />
+  <text
+    x="106"
+    y="44"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="14"
+    fontWeight="700"
+    fill="var(--ifm-font-color-base)"
+  >{'Web UI'}</text>
+  <text
+    x="106"
+    y="64"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="11"
+    fill="var(--ifm-font-color-base)"
+    fillOpacity="0.78"
+  >{'apps/frontend (/api/...)'}</text>
+  <rect
+    x="16"
+    y="108"
+    width="180"
+    height="64"
+    rx="10"
+    ry="10"
+    fill="var(--ifm-background-surface-color, transparent)"
+    stroke="var(--ifm-color-primary)"
+    strokeWidth="1.5"
+  />
+  <text
+    x="106"
+    y="134"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="14"
+    fontWeight="700"
+    fill="var(--ifm-font-color-base)"
+  >{'Agent Tools (MCP)'}</text>
+  <text
+    x="106"
+    y="154"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="11"
+    fill="var(--ifm-font-color-base)"
+    fillOpacity="0.78"
+  >{'POST /api/mcp (lens-pat-*)'}</text>
+  <rect
+    x="16"
+    y="198"
+    width="180"
+    height="64"
+    rx="10"
+    ry="10"
+    fill="var(--ifm-background-surface-color, transparent)"
+    stroke="var(--ifm-color-emphasis-600)"
+    strokeWidth="1.5"
+    strokeDasharray="5 4"
+  />
+  <text
+    x="106"
+    y="224"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="14"
+    fontWeight="700"
+    fill="var(--ifm-font-color-base)"
+  >{'Standalone llmd CLI'}</text>
+  <text
+    x="106"
+    y="244"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="11"
+    fill="var(--ifm-font-color-base)"
+    fillOpacity="0.78"
+  >{'apps/lens (no server or DB)'}</text>
+  <rect
+    x="266"
+    y="38"
+    width="228"
+    height="116"
+    rx="12"
+    ry="12"
+    fill="rgba(77, 184, 255, 0.12)"
+    stroke="var(--ifm-color-primary)"
+    strokeWidth="2"
+  />
+  <text
+    x="380"
+    y="68"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="14"
+    fontWeight="700"
+    fill="var(--ifm-font-color-base)"
+  >{'Unified Python FastAPI'}</text>
+  <text
+    x="380"
+    y="92"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="12"
+    fontWeight="600"
+    fill="var(--ifm-color-primary)"
+  >{'llm_d_lens :3000'}</text>
+  <text
+    x="380"
+    y="115"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="11"
+    fill="var(--ifm-font-color-base)"
+    fillOpacity="0.82"
+  >{'REST API · Auth/RBAC · /api/mcp'}</text>
+  <text
+    x="380"
+    y="134"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="11"
+    fill="var(--ifm-font-color-base)"
+    fillOpacity="0.82"
+  >{'/api/assistant/mcp · Production UI'}</text>
+  <rect
+    x="564"
+    y="18"
+    width="180"
+    height="58"
+    rx="10"
+    ry="10"
+    fill="var(--ifm-background-surface-color, transparent)"
+    stroke="var(--ifm-color-primary)"
+    strokeWidth="1.5"
+  />
+  <text
+    x="654"
+    y="40"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="14"
+    fontWeight="700"
+    fill="var(--ifm-font-color-base)"
+  >{'PostgreSQL'}</text>
+  <text
+    x="654"
+    y="59"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="11"
+    fill="var(--ifm-font-color-base)"
+    fillOpacity="0.78"
+  >{'State, catalog, runs'}</text>
+  <rect
+    x="564"
+    y="98"
+    width="180"
+    height="58"
+    rx="10"
+    ry="10"
+    fill="var(--ifm-background-surface-color, transparent)"
+    stroke="var(--ifm-color-primary)"
+    strokeWidth="1.5"
+  />
+  <text
+    x="654"
+    y="120"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="14"
+    fontWeight="700"
+    fill="var(--ifm-font-color-base)"
+  >{'Remote SSH'}</text>
+  <text
+    x="654"
+    y="139"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="11"
+    fill="var(--ifm-font-color-base)"
+    fillOpacity="0.78"
+  >{'/api/remote-deploy'}</text>
+  <rect
+    x="564"
+    y="188"
+    width="180"
+    height="74"
+    rx="10"
+    ry="10"
+    fill="var(--ifm-background-surface-color, transparent)"
+    stroke="var(--ifm-color-primary)"
+    strokeWidth="1.5"
+  />
+  <text
+    x="654"
+    y="216"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="14"
+    fontWeight="700"
+    fill="var(--ifm-font-color-base)"
+  >{'Kubernetes'}</text>
+  <text
+    x="654"
+    y="238"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="11"
+    fill="var(--ifm-font-color-base)"
+    fillOpacity="0.78"
+  >{'Python SDK & CLI'}</text>
+  <line x1="196" y1="50" x2="258" y2="70" stroke="var(--ifm-color-primary)" strokeWidth="1.75" />
+  <polygon points="266,73 255,64 257,75" fill="var(--ifm-color-primary)" />
+  <line x1="196" y1="140" x2="258" y2="120" stroke="var(--ifm-color-primary)" strokeWidth="1.75" />
+  <polygon points="266,117 257,115 255,126" fill="var(--ifm-color-primary)" />
+  <line x1="494" y1="68" x2="556" y2="49" stroke="var(--ifm-color-primary)" strokeWidth="1.75" />
+  <polygon points="564,47 553,44 556,55" fill="var(--ifm-color-primary)" />
+  <line x1="494" y1="108" x2="556" y2="125" stroke="var(--ifm-color-primary)" strokeWidth="1.75" />
+  <polygon points="564,127 556,119 553,130" fill="var(--ifm-color-primary)" />
+  <line x1="494" y1="136" x2="557" y2="204" stroke="var(--ifm-color-primary)" strokeWidth="1.75" />
+  <polygon points="564,211 560,200 552,207" fill="var(--ifm-color-primary)" />
+  <line
+    x1="196"
+    y1="232"
+    x2="555"
+    y2="232"
+    stroke="var(--ifm-color-emphasis-600)"
+    strokeWidth="1.75"
+    strokeDasharray="5 4"
+  />
+  <polygon points="564,232 554,226 554,238" fill="var(--ifm-color-emphasis-600)" />
+  <text
+    x="380"
+    y="220"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="11"
+    fill="var(--ifm-font-color-base)"
+    fillOpacity="0.78"
+  >{'Direct namespace-scoped K8s access'}</text>
+</svg>
+
+:::note
+For direct namespace-scoped Kubernetes workflows without running the Lens server or database, use the standalone `llmd` CLI (`apps/lens`). See [CLI Reference](/cli-reference).
+:::
 
 Deploy is part of the Lens Python backend, not a separate llm-d-bench API.
 Deployment routes run in the same process; no separate BFF upstream is required.
 Use `hack/lens-local.sh start` for local development; see
 [Installation](/installation) and [Environment variables](/environment-variables)
 for current startup and storage settings rather than host-specific `/root/...`
-paths. Requests require an authenticated Lens session and the relevant permission;
-unsafe methods also require the matching `prism_csrf` cookie and `x-prism-csrf`
-header. Unauthenticated smoke requests may return `401`, not a resource list.
+paths. Requests require an authenticated Lens session (or a `lens-pat-*` bearer
+token on `/api/mcp`) and the relevant permission; unsafe browser session methods
+also require the matching `prism_csrf` cookie and `x-prism-csrf` header.
+Unauthenticated smoke requests may return `401`, not a resource list.
 
 ## Surfaces
 
 | Surface | Description |
 | --- | --- |
-| Python API | Same-origin FastAPI routes for deploy, simulation, evaluation, storage, monitoring, auth and Playground; also serves the production frontend. |
-| MCP tools | Assistant-callable operations generated from backend routes into the MCP catalog. |
+| Python API | Same-origin FastAPI routes for deploy, simulation (`/api/simulation`), evaluation, model catalog (`/api/v1/model-catalog`), storage, monitoring, auth, and Playground; also serves the production frontend. |
+| Agent Task MCP (`/api/mcp`) | Stateless Streamable HTTP MCP server exposing 46 task-oriented tools for external coding/operations agents (see [MCP integration](/mcp)). |
+| Assistant Tool Catalog (`/api/assistant/mcp`) | Assistant-callable operations generated from backend routes into the internal MCP catalog (see [Lens Assistant](/api-reference/modules/lens-assistant)). |
 | Kubernetes backend | Server-side Kubernetes access over the official Python client, with CLI rollback. |
 
 ## Modules
@@ -42,17 +301,17 @@ scripts, tests or automation) instead of over HTTP:
 
 <CardGroup cols={3}>
   <Card title="Welcome" href="/api-reference/modules/welcome">Scoped current issues and diagnostic links.</Card>
-  <Card title="Model market" href="/api-reference/modules/model-market">Catalog hand-off (frontend-only catalog).</Card>
+  <Card title="Model Catalog" href="/api-reference/modules/model-market">Built-in and custom catalog CRUD (`/api/v1/model-catalog`) and launch defaults.</Card>
   <Card title="Deployments" href="/api-reference/modules/deployments">Runs, executions, cases, access.</Card>
   <Card title="Evaluation" href="/api-reference/modules/evaluation">Guided benchmark tasks.</Card>
-  <Card title="Simulation" href="/api-reference/modules/simulation">Trace-based simulation runs.</Card>
+  <Card title="Trace Replayer" href="/api-reference/modules/simulation">Trace replay and simulation tasks (`/api/simulation` backend prefix).</Card>
   <Card title="Model services" href="/api-reference/modules/model-services">Gateway, providers, selection policies.</Card>
   <Card title="Clusters" href="/api-reference/modules/clusters">Registration, bootstrap, overview.</Card>
   <Card title="Storage" href="/api-reference/modules/storage">Volumes and storage backends.</Card>
   <Card title="Model cache" href="/api-reference/modules/model-cache">Cached model artifacts.</Card>
   <Card title="External providers" href="/api-reference/modules/external-providers">Third-party AI providers.</Card>
   <Card title="Observability" href="/api-reference/modules/observability">Accelerator, cluster stack, GPU driver, profiling.</Card>
-  <Card title="Lens Assistant" href="/api-reference/modules/lens-assistant">Python MCP tool catalog.</Card>
+  <Card title="Lens Assistant" href="/api-reference/modules/lens-assistant">Internal assistant MCP catalog (`/api/assistant/mcp`).</Card>
   <Card title="Administration" href="/api-reference/modules/administration">Auth, RBAC and system settings.</Card>
 </CardGroup>
 

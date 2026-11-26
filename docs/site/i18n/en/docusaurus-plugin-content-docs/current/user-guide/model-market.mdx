@@ -5,7 +5,23 @@ description: Create a requirements-driven Manual or Agentic deployment and revie
 
 Open **Model Catalog** and choose a model. Search combines with category filters,
 ignores case, and requires every search word to match the model metadata.
-**Clear filters** resets both filters.
+**Clear filters** resets the active filters.
+
+Filter by **Publisher / organization** within each category. **Sort by** defaults to newest release first; oldest first and name order are also available. Models without a release date appear last in either date order. Search, category and publisher filters combine; **Clear filters** resets all three.
+
+## Manage custom models
+
+Administrators and maintainers can use **Add custom model** to save a Hugging Face
+repository, revision, display metadata and default model parameters. **Copy & customize**
+creates a custom entry from a read-only built-in model. **Edit defaults** updates a
+custom entry; deleting it retains cached weights and existing deployments.
+Custom entries are stored on the server and appear in Model Cache's catalog picker.
+Cache selection matches both repository and revision. The custom-model form requires weight size for planning; context metadata is optional.
+Model support and resource feasibility are checked during planning.
+
+Every new plan saves the model entry version and resolved parameters. Concurrent
+catalog edits require reloading and reviewing the defaults before creating a plan.
+Later catalog edits do not change existing plans or deployments.
 
 ## One workflow, two decision modes
 
@@ -91,12 +107,13 @@ modes, when AIC supports the model and hardware, its load-target recommendations
 the topologies instead; when it does not, planning continues with this KV-capacity
 sizing. A request rate (QPS, Agentic only) still requires AIC support.
 
-Catalog models with a known tool-call parser (for example Qwen3 with `hermes`) are
-deployed with `--enable-auto-tool-choice` and `--tool-call-parser`, so OpenAI-compatible
-requests that send `tools` work; requests without tools are unaffected. **vLLM options**
-takes other engine arguments, one `name=value` per line, for example `reasoning-parser`
-or a different `tool-call-parser`, which replaces the catalog default. Context, batching,
-memory and parallelism arguments are set by the plan and are edited after it is built.
+**Model parameters** shows the selected model's defaults: tool calling, tool parser,
+reasoning parser, runtime dtype, chat template and additional engine arguments.
+Tool calling is enabled for built-in models with a configured parser, and disabled
+for new custom models until explicitly configured. Enabling it requires a parser.
+Changing one parameter preserves the other defaults. **Restore model defaults**
+clears this deployment's overrides; edits here never update the catalog.
+Context, batching, memory and parallelism remain deployment-plan controls.
 
 Manual needs no workload questionnaire or LLM. Agentic shows the objective first;
 expand **Describe a goal** for an optional natural-language goal. The **AI provider**

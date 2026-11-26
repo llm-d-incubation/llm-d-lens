@@ -916,7 +916,18 @@ class RegisteredGuideCommandRunner:
         uninstall = ["helm", "uninstall", self._guide.router_release_name or "", "--namespace", namespace]
         plaintext = ["--values", str(PLAINTEXT_EPP_VALUES_PATH)]
         gateway = ["--values", str(GATEWAY_MODE_VALUES_PATH)]
-        suffixes = ([], plaintext, [*plaintext, *gateway])
+        from llm_d_lens.deploy.data_plane import router_data_plane_args
+
+        suffixes = (
+            [],
+            plaintext,
+            [*plaintext, *gateway],
+            *(
+                router_data_plane_args({"data_plane": plane, "gateway_provider": provider})
+                for plane in ("standalone_router", "shared_gateway")
+                for provider in ("istio", "gke")
+            ),
+        )
         if command != uninstall and not any(
             command == [*base, *suffix] for base in (install, neutral_install) for suffix in suffixes
         ):

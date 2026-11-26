@@ -156,6 +156,11 @@ _PERMISSIONS: tuple[Permission, ...] = (
     _permission("model-service:gateway:manage", "Install/uninstall/reload the shared Edge Envoy data plane"),
     _permission("model-service:router:manage", "Install/uninstall/start/stop a cluster's Agent Router"),
     _permission("usage:report:read", "View model usage across users/groups", READ),
+    # Global model catalog configuration, matching external provider management.
+    _permission("model-catalog:entry:read", "View model catalog", READ),
+    _permission("model-catalog:entry:create", "Add custom models"),
+    _permission("model-catalog:entry:update", "Edit model defaults"),
+    _permission("model-catalog:entry:delete", "Delete custom models"),
     # hardware
     _permission("hardware:profile:read", "View hardware profiles", READ),
     # monitoring

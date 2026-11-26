@@ -5,7 +5,7 @@ import { DEFAULT_REQUIREMENTS, OPTIMIZATION_CONTROLS } from '../api/agenticDeplo
 import { optimizationChoiceState } from '../model/deploymentPlan';
 import { OPTIMIZATION_OBJECTIVES } from '../model/inference-designer/optimizationPolicy';
 
-// Offload depends on the generated topology (not with P/D), so it is only decided and shown after generation.
+// Offload capacity and connector compatibility are resolved with the generated topology.
 const PRE_PLAN_HIDDEN = new Set(['external_kv_cache']);
 
 /** Checked optimizations are attempted; unchecked ones become forbidden features. */

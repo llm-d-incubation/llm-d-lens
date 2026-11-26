@@ -142,7 +142,7 @@ def test_pd_unknown_transport_requires_an_adapter(connector):
         compose_native_cpu_cache(base, donor(), guide="pd-disaggregation", capacity_gib=4)
 
 
-def test_pd_split_transport_roles_reject_only_cache_composition_without_mutating_source():
+def test_pd_preserves_split_transport_roles_without_mutating_source():
     base = pd_manifest()
     for doc, role in zip(base, ("kv_producer", "kv_consumer"), strict=True):
         server = doc["spec"]["template"]["spec"]["containers"][0]
@@ -150,9 +150,15 @@ def test_pd_split_transport_roles_reject_only_cache_composition_without_mutating
         connector["kv_role"] = role
         server["args"][-1] = json.dumps(connector)
     original = deepcopy(base)
-    with pytest.raises(ValueError, match="use a P/D candidate without CPU KV offload"):
-        compose_native_cpu_cache(base, donor(), guide="pd-disaggregation", capacity_gib=4)
+    result = compose_native_cpu_cache(base, donor(), guide="pd-disaggregation", capacity_gib=4)
     assert base == original
+    for doc, role in zip(result, ("kv_producer", "kv_consumer"), strict=True):
+        server = doc["spec"]["template"]["spec"]["containers"][0]
+        config = json.loads(server["args"][-1])
+        transport, cache = config["kv_connector_extra_config"]["connectors"]
+        assert config["kv_role"] == role
+        assert transport["kv_role"] == role
+        assert cache["kv_role"] == "kv_both"
 
 
 def test_pd_connector_in_command_is_replaced_once():

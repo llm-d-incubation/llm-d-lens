@@ -160,3 +160,9 @@ test('candidate bridge resolves sourceNamespace from localDisk, nfs, or default 
     );
     assert.equal(fallbackDraft.sourceNamespace, 'llm-d-bench-storage');
 });
+
+test('explicitly disabled tool calling becomes a disabling source flag', () => {
+    const tools = { request: { ...run.request, vllm_arguments: [{ name: 'enable-auto-tool-choice', value: 'false' }] } };
+    const parameters = candidateCompositionDraft(tools, candidate, catalog, profile, entry, volume).runtimeConfiguration.customParameters;
+    assert.deepEqual(parameters.map(item => [item.name, item.value]), [['no-enable-auto-tool-choice', '']]);
+});

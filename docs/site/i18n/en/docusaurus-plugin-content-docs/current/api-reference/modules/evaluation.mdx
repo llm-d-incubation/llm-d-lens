@@ -74,8 +74,8 @@ lock protects confirmation from concurrent control actions.
 Benchmark execution records may include `harness_pod_label` (the current CLI
 invocation's unique app label) and `harness_pods` (Pod names mapped to UID, phase
 and container states). The existing execution path in
-`llm_d_bench.evaluate.router` passes this label as `harness.podLabel` to upstream
-and calls `llm_d_bench.evaluate.harness_watch.watch_harness` with the same run
+`llm_d_lens.evaluation.router` passes this label as `harness.podLabel` to upstream
+and calls `llm_d_lens.evaluation.harness_watch.watch_harness` with the same run
 record. These fields are diagnostics, not user-supplied selectors. Explicit
 harness `OOMKilled` errors receive host-memory guidance; plain exit 137 remains
 unclassified.
@@ -262,9 +262,9 @@ repository profiles remain unknown. Invalid input returns `422`.
   <TabItem value="python-api" label="Python API">
 
 ```python
-from llm_d_bench.deploy.capabilities import shared_prefix_routing_workload
-from llm_d_bench.evaluate.models import BenchmarkSpec
-from llm_d_bench.evaluate.timing import benchmark_timing
+from llm_d_lens.deploy.capabilities import shared_prefix_routing_workload
+from llm_d_lens.evaluation.models import BenchmarkSpec
+from llm_d_lens.evaluation.timing import benchmark_timing
 
 spec = BenchmarkSpec(shared_prefix=shared_prefix_routing_workload())
 timing = benchmark_timing(spec)
@@ -274,7 +274,7 @@ full_spec = BenchmarkSpec(shared_prefix=shared_prefix_routing_workload(full=True
 print(benchmark_timing(full_spec))
 ```
 
-The HTTP callable is `await llm_d_bench.evaluate.router.estimate_benchmark_timing(spec)`;
+The HTTP callable is `await llm_d_lens.evaluation.router.estimate_benchmark_timing(spec)`;
 it uses the same pure function as `create_run`.
 
   </TabItem>
@@ -732,6 +732,58 @@ if run is not None and run.get("status") in {"succeeded", "failed", "cancelled"}
   </TabItem>
 </Tabs>
 
+### List benchmark run reports
+
+List the lifecycle reports the benchmark harness saved for a run: summary, per-stage and per-request files, and the harness config. Matrix runs prefix each point's files with `matrix-N/`. Reports kept only in a workspace archive are not listed individually; their directories appear in `archived_in` and the standard names can still be downloaded.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/evaluate/runs/{run_id}/artifacts`**
+
+    ```json
+    {
+      "items": [
+        {"name": "per_request_lifecycle_metrics.json", "size_bytes": 1048576},
+        {"name": "stage_0_lifecycle_metrics.json", "size_bytes": 2048}
+      ],
+      "archived_in": []
+    }
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_lens.evaluation.router import list_run_artifacts
+
+    listing = await list_run_artifacts("7d698fda-8e2e-44b2-86aa-14d24098350d")
+    print([item["name"] for item in listing["items"]])
+    ```
+  </TabItem>
+</Tabs>
+
+### Download a benchmark run report
+
+Return the raw bytes of one report, for example `per_request_lifecycle_metrics.json` for the individual request records. Files up to 64 MiB are served, from the loose file or the run's workspace archive. A name outside the lifecycle report set returns `422`; a report that was not saved or cannot be read returns `404`.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/evaluate/runs/{run_id}/artifacts/{name}`**
+
+    - Path parameters: `run_id` (`string`, required), `name` (`string`, required; `config.yaml`, `summary_lifecycle_metrics.json`, `stage_<n>_lifecycle_metrics.json` or `per_request_lifecycle_metrics.json`, optionally prefixed with `matrix-N/`)
+
+    Response: the report body, `application/json` (`application/yaml` for `config.yaml`).
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_lens.evaluation.router import get_run_artifact
+
+    response = await get_run_artifact(
+        "7d698fda-8e2e-44b2-86aa-14d24098350d", "per_request_lifecycle_metrics.json"
+    )
+    rows = response.body
+    ```
+  </TabItem>
+</Tabs>
+
 ### Start a deployment-plus-benchmark workflow
 
 Start a simple deployment-plus-benchmark workflow that first creates an optimized baseline deployment, then benchmarks it.
@@ -838,7 +890,7 @@ See [Evaluation parameters](/evaluation/parameters) for override ranges.
     - `cluster_session_id` (`string`, required)
     - `runtime` (`RuntimeSpec`)
     - `benchmark_source` (`BenchmarkSource`, optional)
-    - `benchmark_plans` (`BenchmarkPlan[]`, required)
+    - `benchmark_plans` (`BenchmarkPlan[]`, required; 1–256 plans with unique IDs)
     - `compare_configurations` (`boolean`, default `true`)
 
     ```json
@@ -1512,7 +1564,7 @@ See the full request/response schemas in the FastAPI OpenAPI schema (regenerate 
 Guide workload defaults returned through deployment capabilities use two stages
 for each recommended workload and the default P/D long-input scenario. Python
 consumers obtain the same fresh values with
-`llm_d_bench.deploy.capabilities.provider_capability(provider_id)`; saved
+`llm_d_lens.deploy.capabilities.provider_capability(provider_id)`; saved
 benchmark specifications and explicitly selected throughput presets are unchanged.
 
 ### Benchmark monitoring clock alignment
@@ -1525,11 +1577,11 @@ rate-stage slicing. If clock measurement fails, collection retains the original
 window and reports alignment as unavailable.
 
 The existing Python callable
-`llm_d_bench.monitoring.profiling.service.collect_benchmark_observability(execution_id, start, end, cluster_id=None)`
+`llm_d_lens.monitoring.profiling.service.collect_benchmark_observability(execution_id, start, end, cluster_id=None)`
 performs this alignment without changing its signature. For example:
 
 ```python
-from llm_d_bench.monitoring.profiling.service import collect_benchmark_observability
+from llm_d_lens.monitoring.profiling.service import collect_benchmark_observability
 
 observability = await collect_benchmark_observability(
     execution_id="deployment-id",

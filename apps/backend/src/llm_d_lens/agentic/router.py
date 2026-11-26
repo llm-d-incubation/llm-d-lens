@@ -14,7 +14,11 @@ from llm_d_lens.auth.contracts import Principal
 from llm_d_lens.configuration.decision_engine import optimization_choices
 from llm_d_lens.configuration.plan_models import OptimizationChoice
 from llm_d_lens.core.exceptions import ForbiddenError, UnauthenticatedError
-from llm_d_lens.deploy.capabilities import DeploymentClusterAuthError
+from llm_d_lens.deploy.capabilities import (
+    DeploymentAdminSetupRequiredError,
+    DeploymentCapabilityUnavailableError,
+    DeploymentClusterAuthError,
+)
 from llm_d_lens.deploy.guide_planning import GuideError
 from llm_d_lens.deploy.slice_capacity import ClusterInventoryAuthError
 
@@ -456,6 +460,10 @@ async def approve_agentic_deployment(
             approval=approval,
             target_namespace=target_namespace,
         )
+    except DeploymentAdminSetupRequiredError as error:
+        return JSONResponse(status_code=403, content=error.to_response_payload())
+    except DeploymentCapabilityUnavailableError as error:
+        return problem(503, "Cluster permission check unavailable", str(error), error.code)
     except GuideError as error:
         logger.warning("Agentic deployment %s approve rejected (%s): %s", run_id, error.status, error.public_message)
         raise HTTPException(status_code=error.status, detail=error.public_message) from error

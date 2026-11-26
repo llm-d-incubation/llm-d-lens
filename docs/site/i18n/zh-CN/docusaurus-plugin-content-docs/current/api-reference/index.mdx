@@ -4,32 +4,290 @@ description: 后端 API 接口、契约和集成要点。
 slug: /api-reference
 ---
 
-Lens 通过 Python FastAPI 后端（`llm_d_lens`）暴露同源 HTTP API。
+Lens 通过统一的 Python FastAPI 后端（`llm_d_lens`）暴露同源 HTTP API 和 MCP 端点。
 开发环境中，Vite 将浏览器的 `/api/...` 请求直接代理到该后端。
-生产环境中，同一后端提供构建后的前端、API 和 MCP 端点，
-并负责校验、持久化和任务执行。
+生产环境中，同一后端提供构建后的前端、REST API、`/api/mcp`（Agent Task MCP）和
+`/api/assistant/mcp`（助手工具目录），并负责校验、持久化和任务执行。
 
-```mermaid
-flowchart LR
-    UI["Lens UI"] --> PY["Python API (llm_d_lens) :3000"]
-    PY -->|/api/remote-deploy| SSH["Remote host over SSH"]
-    PY --> DB["Database"]
-    PY --> K8s["Kubernetes"]
-```
+<svg
+  viewBox="0 0 760 280"
+  width="100%"
+  role="img"
+  aria-label="Lens API 与 CLI 架构图"
+  style={{ maxWidth: '760px', height: 'auto', display: 'block', margin: '1.25rem 0' }}
+>
+  <rect
+    x="16"
+    y="18"
+    width="180"
+    height="64"
+    rx="10"
+    ry="10"
+    fill="var(--ifm-background-surface-color, transparent)"
+    stroke="var(--ifm-color-primary)"
+    strokeWidth="1.5"
+  />
+  <text
+    x="106"
+    y="44"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="14"
+    fontWeight="700"
+    fill="var(--ifm-font-color-base)"
+  >{'Web UI'}</text>
+  <text
+    x="106"
+    y="64"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="11"
+    fill="var(--ifm-font-color-base)"
+    fillOpacity="0.78"
+  >{'apps/frontend (/api/...)'}</text>
+  <rect
+    x="16"
+    y="108"
+    width="180"
+    height="64"
+    rx="10"
+    ry="10"
+    fill="var(--ifm-background-surface-color, transparent)"
+    stroke="var(--ifm-color-primary)"
+    strokeWidth="1.5"
+  />
+  <text
+    x="106"
+    y="134"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="14"
+    fontWeight="700"
+    fill="var(--ifm-font-color-base)"
+  >{'代理工具 (MCP)'}</text>
+  <text
+    x="106"
+    y="154"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="11"
+    fill="var(--ifm-font-color-base)"
+    fillOpacity="0.78"
+  >{'POST /api/mcp (lens-pat-*)'}</text>
+  <rect
+    x="16"
+    y="198"
+    width="180"
+    height="64"
+    rx="10"
+    ry="10"
+    fill="var(--ifm-background-surface-color, transparent)"
+    stroke="var(--ifm-color-emphasis-600)"
+    strokeWidth="1.5"
+    strokeDasharray="5 4"
+  />
+  <text
+    x="106"
+    y="224"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="14"
+    fontWeight="700"
+    fill="var(--ifm-font-color-base)"
+  >{'独立 llmd CLI'}</text>
+  <text
+    x="106"
+    y="244"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="11"
+    fill="var(--ifm-font-color-base)"
+    fillOpacity="0.78"
+  >{'apps/lens（无需服务端/DB）'}</text>
+  <rect
+    x="266"
+    y="38"
+    width="228"
+    height="116"
+    rx="12"
+    ry="12"
+    fill="rgba(77, 184, 255, 0.12)"
+    stroke="var(--ifm-color-primary)"
+    strokeWidth="2"
+  />
+  <text
+    x="380"
+    y="68"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="14"
+    fontWeight="700"
+    fill="var(--ifm-font-color-base)"
+  >{'统一 Python FastAPI 后端'}</text>
+  <text
+    x="380"
+    y="92"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="12"
+    fontWeight="600"
+    fill="var(--ifm-color-primary)"
+  >{'llm_d_lens :3000'}</text>
+  <text
+    x="380"
+    y="115"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="11"
+    fill="var(--ifm-font-color-base)"
+    fillOpacity="0.82"
+  >{'REST API · 认证/RBAC · /api/mcp'}</text>
+  <text
+    x="380"
+    y="134"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="11"
+    fill="var(--ifm-font-color-base)"
+    fillOpacity="0.82"
+  >{'/api/assistant/mcp · 生产 UI'}</text>
+  <rect
+    x="564"
+    y="18"
+    width="180"
+    height="58"
+    rx="10"
+    ry="10"
+    fill="var(--ifm-background-surface-color, transparent)"
+    stroke="var(--ifm-color-primary)"
+    strokeWidth="1.5"
+  />
+  <text
+    x="654"
+    y="40"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="14"
+    fontWeight="700"
+    fill="var(--ifm-font-color-base)"
+  >{'PostgreSQL'}</text>
+  <text
+    x="654"
+    y="59"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="11"
+    fill="var(--ifm-font-color-base)"
+    fillOpacity="0.78"
+  >{'状态、目录、运行记录'}</text>
+  <rect
+    x="564"
+    y="98"
+    width="180"
+    height="58"
+    rx="10"
+    ry="10"
+    fill="var(--ifm-background-surface-color, transparent)"
+    stroke="var(--ifm-color-primary)"
+    strokeWidth="1.5"
+  />
+  <text
+    x="654"
+    y="120"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="14"
+    fontWeight="700"
+    fill="var(--ifm-font-color-base)"
+  >{'远程 SSH'}</text>
+  <text
+    x="654"
+    y="139"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="11"
+    fill="var(--ifm-font-color-base)"
+    fillOpacity="0.78"
+  >{'/api/remote-deploy'}</text>
+  <rect
+    x="564"
+    y="188"
+    width="180"
+    height="74"
+    rx="10"
+    ry="10"
+    fill="var(--ifm-background-surface-color, transparent)"
+    stroke="var(--ifm-color-primary)"
+    strokeWidth="1.5"
+  />
+  <text
+    x="654"
+    y="216"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="14"
+    fontWeight="700"
+    fill="var(--ifm-font-color-base)"
+  >{'Kubernetes'}</text>
+  <text
+    x="654"
+    y="238"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="11"
+    fill="var(--ifm-font-color-base)"
+    fillOpacity="0.78"
+  >{'Python SDK 与 CLI'}</text>
+  <line x1="196" y1="50" x2="258" y2="70" stroke="var(--ifm-color-primary)" strokeWidth="1.75" />
+  <polygon points="266,73 255,64 257,75" fill="var(--ifm-color-primary)" />
+  <line x1="196" y1="140" x2="258" y2="120" stroke="var(--ifm-color-primary)" strokeWidth="1.75" />
+  <polygon points="266,117 257,115 255,126" fill="var(--ifm-color-primary)" />
+  <line x1="494" y1="68" x2="556" y2="49" stroke="var(--ifm-color-primary)" strokeWidth="1.75" />
+  <polygon points="564,47 553,44 556,55" fill="var(--ifm-color-primary)" />
+  <line x1="494" y1="108" x2="556" y2="125" stroke="var(--ifm-color-primary)" strokeWidth="1.75" />
+  <polygon points="564,127 556,119 553,130" fill="var(--ifm-color-primary)" />
+  <line x1="494" y1="136" x2="557" y2="204" stroke="var(--ifm-color-primary)" strokeWidth="1.75" />
+  <polygon points="564,211 560,200 552,207" fill="var(--ifm-color-primary)" />
+  <line
+    x1="196"
+    y1="232"
+    x2="555"
+    y2="232"
+    stroke="var(--ifm-color-emphasis-600)"
+    strokeWidth="1.75"
+    strokeDasharray="5 4"
+  />
+  <polygon points="564,232 554,226 554,238" fill="var(--ifm-color-emphasis-600)" />
+  <text
+    x="380"
+    y="220"
+    textAnchor="middle"
+    dominantBaseline="middle"
+    fontSize="11"
+    fill="var(--ifm-font-color-base)"
+    fillOpacity="0.78"
+  >{'按命名空间直连 Kubernetes'}</text>
+</svg>
+
+:::note
+如果要在不运行 Lens 服务端和数据库的情况下直接按命名空间操作 Kubernetes，请使用独立 `llmd` CLI（`apps/lens`），参见 [CLI 参考](/cli-reference)。
+:::
 
 Deploy 属于 Lens Python 后端，并非独立的 llm-d-bench API。
 部署路由在同一进程内执行，不再需要单独的 BFF 上游。
 本地开发使用 `hack/lens-local.sh start`；当前启动与存储设置参见
 [安装](/installation)和[环境变量](/environment-variables)，不要沿用主机专属的 `/root/...` 路径。
-请求需要已认证的 Lens 会话及相应权限；非安全方法还需要匹配的 `prism_csrf` Cookie
-和 `x-prism-csrf` 请求头。未登录的冒烟请求可能返回 `401`，而不是资源列表。
+请求需要已认证的 Lens 会话（或在 `/api/mcp` 上使用 `lens-pat-*` Bearer 令牌）及相应权限；
+浏览器会话的非安全方法还需要匹配的 `prism_csrf` Cookie 和 `x-prism-csrf` 请求头。
+未登录的冒烟请求可能返回 `401`，而不是资源列表。
 
 ## 接口
 
 | 接口 | 说明 |
 | --- | --- |
-| Python API | 用于部署、模拟、评估、存储、监控、认证和 Playground 的同源 FastAPI 路由；同时提供生产环境前端。 |
-| MCP 工具 | 从后端路由生成、可供助手调用的操作，纳入 MCP 目录。 |
+| Python API | 用于部署、模拟（`/api/simulation`）、评估、模型目录（`/api/v1/model-catalog`）、存储、监控、认证和 Playground 的同源 FastAPI 路由；同时提供生产环境前端。 |
+| Agent Task MCP（`/api/mcp`） | 无状态 Streamable HTTP MCP 服务端，向外部编码/运维代理暴露 46 个面向任务的工具（参见 [MCP 集成](/mcp)）。 |
+| 助手工具目录（`/api/assistant/mcp`） | 从后端路由生成的助手可调用操作，纳入内部 MCP 目录（参见 [Lens Assistant](/api-reference/modules/lens-assistant)）。 |
 | Kubernetes 后端 | 通过官方 Python 客户端进行的服务端 Kubernetes 访问，支持 CLI 回滚。 |
 
 ## 模块
@@ -40,17 +298,17 @@ Deploy 属于 Lens Python 后端，并非独立的 llm-d-bench API。
 
 <CardGroup cols={3}>
   <Card title="欢迎页" href="/api-reference/modules/welcome">按权限范围汇总当前问题和诊断链接。</Card>
-  <Card title="模型市场" href="/api-reference/modules/model-market">目录交接（仅前端目录）。</Card>
+  <Card title="模型目录（Model Catalog）" href="/api-reference/modules/model-market">内置与自定义目录 CRUD（`/api/v1/model-catalog`）及启动默认值。</Card>
   <Card title="部署" href="/api-reference/modules/deployments">运行、执行、用例、访问权限。</Card>
   <Card title="评估" href="/api-reference/modules/evaluation">引导式基准测试任务。</Card>
-  <Card title="模拟" href="/api-reference/modules/simulation">基于轨迹的模拟运行。</Card>
+  <Card title="轨迹回放（Trace Replayer）" href="/api-reference/modules/simulation">基于轨迹的回放与模拟任务（`/api/simulation` 后端前缀）。</Card>
   <Card title="模型服务" href="/api-reference/modules/model-services">网关、提供方、选择策略。</Card>
   <Card title="集群" href="/api-reference/modules/clusters">注册、引导、概览。</Card>
   <Card title="存储" href="/api-reference/modules/storage">存储卷和存储后端。</Card>
   <Card title="模型缓存" href="/api-reference/modules/model-cache">已缓存的模型制品。</Card>
   <Card title="外部服务提供方" href="/api-reference/modules/external-providers">第三方 AI 提供方。</Card>
   <Card title="可观测性" href="/api-reference/modules/observability">加速器、集群监控栈、GPU 驱动、性能分析。</Card>
-  <Card title="Lens Assistant" href="/api-reference/modules/lens-assistant">Python MCP 工具目录。</Card>
+  <Card title="Lens Assistant" href="/api-reference/modules/lens-assistant">内部助手 MCP 工具目录（`/api/assistant/mcp`）。</Card>
   <Card title="管理" href="/api-reference/modules/administration">认证、RBAC 和系统设置。</Card>
 </CardGroup>
 

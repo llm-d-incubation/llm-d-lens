@@ -217,3 +217,107 @@ AI 不能生成新的候选方案，也不能将非结构化特征解读为性�
 生成是一个工具调用（tool-calling）阶段，而不是一个可以直接部署的配置目录。服务端构建的第一条用户消息只包含 `cluster_id`、`model`、`operator_preference` 和 `deployment_intent`，并剥离了实时资源/AIC/证据相关字段。系统 prompt 固定了 provider 的许可清单/语义、最小资源拓扑原则、PD 字段契约，以及只读 MCP 许可清单。它禁止臆造 provider、硬件、AIC 结果或基准测试事实，也禁止写入、部署、审批、删除和端口转发操作。
 
 第一轮只暴露 `get_cluster_overview` 和 `search_candidates`，且要求并行调用；`sourceIds` 必须包含 `aic`。服务端使用 `cluster_id` 和 `sourceIds` 对参数进行归一化，并返回有界的结果。后续调用仍然被限制在许可清单内的只读工具范围内。模型只能通过 `submit_candidate_proposals` 提交一到十个提案；`CandidateValidator` 会独立地重新计算内存、GPU、CPU 缓冲区、PD 完整性和去重情况。当前实现不会注入任何历史基准测试先验。未来的先验必须是一个单独的有界字段，只包含经过验证的候选方案/溯源信息，不包含聚合指标、置信度、$N_{eff}$、SLO 结论或未经授权的数据。
+
+### 评分 Prompt 的构建与示例
+
+评分是一个单次的、仅做选择的调用。服务端会移除诸如 `planning_facts.performance_score_inputs` 之类的内部聚合字段，随后根据 `planning_facts`、`deployable=true` 的 `valid_candidates` 以及可选的 `operator_preference` 构建 JSON 上下文。每个候选方案仅包含经过校验的拓扑、所需 GPU、Guide、精确匹配的 AIC `performance_estimate`，以及最多五条按 `match_similarity` 降序排列的 `historical_benchmarks`。显式标注为 `not_applicable` 的 AIC 状态不得降低排名；缺失预测并不等同于零。聚合的 `PerformanceScoreInput`、置信度、$N_{eff}$、阻断性失败、确定性排名以及内部 SLO 结论永远不会传递给评分器。
+
+系统 prompt 要求仅从 `valid_candidates` 中进行选择，首先遵守硬性约束，并将操作者偏好作为主要评分条件，同时参考 TTFT、TPOT、吞吐量、资源、AIC 以及不可变的历史记录。系统 prompt 会说明 `match_confidence` 表示的是历史相关性，而非成功概率或性能保证。模型不能改写指标、结果、配置或该分数。响应必须满足针对 `candidate_id`、`candidate_ids`、`scores`、`confidence` 和 `rationale` 的 JSON schema：返回三个候选方案（不足三个时返回全部），分数位于 $[0, 1]$ 区间内，且 `candidate_id` 为所提供 ID 中得分最高的一个。服务端会校验 ID/分数集合以及最高分一致性；一旦失败则使用确定性回退。
+
+评分上下文中的候选方案示例：历史值为实测数据。当前的 `match_confidence` 仅表达配置、工作负载、时间和运行时相关性，不包含聚合 SLO 结论。将 SLO 性能匹配度纳入 `match_similarity` 已在此定义，但仍属于后续实现工作：
+
+```json
+{
+   "id": "pd-disaggregation-p1-tp2-d1-tp2",
+   "provider_ref": "pd-disaggregation",
+   "replicas": 1,
+   "tensor_parallel_size": 2,
+   "prefill_replicas": 1,
+   "prefill_tensor_parallel_size": 2,
+   "required_gpus": 4,
+   "performance_estimate_applicability": "applicable",
+   "performance_estimate": {
+      "ttft_ms": 420,
+      "tpot_ms": 28,
+      "throughput_tokens_per_sec": 760
+   },
+   "historical_benchmarks": [
+      {
+         "benchmark_id": "benchmark-20260918-042",
+         "match_confidence": 0.91,
+         "outcome": "succeeded",
+         "ttft_p95_ms": 430,
+         "tpot_p95_ms": 30,
+         "throughput_tokens_per_s": 735,
+         "failure_reason": null
+      },
+      {
+         "benchmark_id": "benchmark-20260912-007",
+         "match_confidence": 0.74,
+         "outcome": "failed",
+         "failure_reason": "OOM"
+      }
+   ]
+}
+```
+
+最小有效响应示例：`rationale` 解释决定性差异，而不重复所有参数或臆造性能事实：
+
+```json
+{
+   "candidate_id": "pd-disaggregation-p1-tp2-d1-tp2",
+   "candidate_ids": [
+      "pd-disaggregation-p1-tp2-d1-tp2",
+      "optimized-baseline-tp2-r1",
+      "precise-prefix-cache-routing-tp2-r1"
+   ],
+   "scores": {
+      "pd-disaggregation-p1-tp2-d1-tp2": 0.91,
+      "optimized-baseline-tp2-r1": 0.79,
+      "precise-prefix-cache-routing-tp2-r1": 0.68
+   },
+   "confidence": 0.82,
+   "rationale": "The preferred candidate fits the low-latency preference and has comparable AIC and historical measurements; the others are validated alternatives."
+}
+```
+
+### 用例性能预测输入
+
+在规划开始时，服务端会将用户用例、解析后的工作负载、模型元数据以及加速器规格提供给一个带版本控制的估算器，以估算 TTFT、TPOT 以及诸如支持的并发数/请求速率等工作负载上限。`UseCasePerformanceEstimate` 必须包含估算器版本、输入引用、适用性以及不确定性。输入不足或超出适用范围时返回 `unavailable`，而不是臆造数值。
+
+该估算值与显式 SLO 分开存储，显式 SLO 始终具有最高优先级；仅在缺少对应目标时，估算值才作为软目标使用。它们会传递给生成器以选择满足预期工作负载的最小资源拓扑，传递给检索器用于计算 $S_{SLO}$，并传递给确定性评分器用于将 TTFT/TPOT/容量与候选方案级别的基准测试/AIC 证据进行比较。估算值不能覆盖实时硬性约束、使被拒绝的候选方案合法化，或替代实测基准测试；过高的不确定性不能产生高相似度证据。AI 评分仅接收带有不确定性的已校验估算摘要，且不能将其描述为实测性能。
+
+### 非结构化特征与诊断
+
+服务端仅从版本固定、经过 ACL 过滤且长度受限的 Guide、GitHub 和论文摘要中构建 AI 特征包。AI 可以将其用于评估现有候选方案之间的方法适用性、版本兼容性和偏好权衡；它不能将其转化为性能实测数据、SLO、置信度、候选方案拒绝依据或新配置。
+
+日志、链路追踪、制品和快照仍仅用于诊断。所有非结构化证据仅用于补充对现有候选方案的解释；它们不能生成候选方案，也不能影响确定性规划器的数值性能决策。
+
+## 当前实现与后续步骤
+
+### 已实现
+
+- 历史记录与候选方案的相似度会计算基础相似度 $S$ 以及时间/运行时衰减，从而生成 `match_similarity` $W$。AI 评分使用 $W$ 为每个候选方案筛选并排序有界的原始历史记录。
+- 历史基准测试可以追加写入，并按当前部署条件进行过滤。重复失败或具备充分支撑的稳定性能结论会为确定性回退提供依据。
+- 在创建方案期间，AI 评分会接收有界的原始历史记录；当 AI 结果不可用或无效时，使用独立的基于聚合历史的确定性决策。
+- 可以从完全经过校验的历史记录中提取候选先验，但默认不会影响生成阶段。启用先验时，会先进行观察或校验，再决定是否接纳候选方案。
+- 可追溯的规划快照会保留完整的原始 `planner_prompt` 和解析后的 `operator_preference`，并在批准前再次检查资源。生成器和规划器的用户消息均以独立的操作者偏好部分开头，随后是 JSON 上下文。平台有效性和硬件限制优先于显式操作者要求，其次是软偏好、性能证据和多样性。多样性不得引入操作者禁止的 provider 或拓扑；规划器可以返回少于三个选项。
+- Schema 版本 2 的快照包含 `generator.requests` 和 `planner.requests`。每条记录均包含经过消息/工具转换及结构化输出变更后的精确 provider 原生 JSON 请求体、API 路径、尝试次数、时间戳、HTTP 状态码、完整原始响应以及错误类型。所有传输重试和输出格式重试均会保留，包括无效响应。生成器工具追踪会保留完整的参数/结果，而不仅仅是哈希值。
+- 阶段审计会在发送前以及收到响应/失败后写入 `session-artifacts/agentic-planning/<run_id>/requests/<timestamp>-<stage>-<uuid>.json`。即使在创建运行记录之前发生取消、回退或失败，这些审计文件也会保留。创建与细化使用独立的审计文件；最终快照保持仅追加（append-only）。文件以 `0600` 权限原子替换。Prompt 内容不会脱敏；认证请求头和 API 密钥不会被记录。请将审计文件视为受限的应用数据，而非可共享日志。现有快照无法重建未被记录的交互。
+- 历史候选种子默认关闭。启用 `AGENTIC_BENCHMARK_SEEDS_ENABLED` 时默认为 `shadow` 模式：仅记录符合条件的种子数量而不合并。只有设置 `AGENTIC_HISTORICAL_SEEDS_MODE=apply` 时，才会在 `CandidateValidator` 之后接纳种子。可空的 prefill 参数可以参与排序，而不会因 `None` 与整数比较而中断规划。
+- 快照会分别保存所选候选方案及其 `evidence`、规划证据以及 `decision_evidence_ids`。后者会对集群概览、适用的 AIC 引用、所选候选方案证据引用以及历史样本 ID 进行去重；它不包含未选中的候选方案。AI 评分的范围并非整个硬有效目录。
+- 诊断 RAG 基础设施支持对日志/链路追踪/制品进行带访问控制和制品完整性校验的检索。该 RAG 尚未集成到部署规划或 AI 评分中，也不能影响候选方案生成、选择或性能决策。
+
+### 未完成工作与后续步骤
+
+1. 将相同规则应用于方案创建和细化：AI 仅读取其硬有效候选列表的原始历史记录；聚合、失败阻断和排序仍保留在确定性回退中。
+2. 将完整的实际工作负载集成到基准测试检索中。缺失工作负载意味着历史证据不可用，而不是臆造性能。
+3. 将受控的 Guide/GitHub/论文摘要添加到 AI 评分中，并固定版本、访问范围和长度。查询失败时省略这些特征，不影响其他决策。
+4. 完善默认关闭的历史先验，仅包含经过校验的配置/溯源信息，不包含聚合结论；记录每个方案是否使用了先验。
+5. 在进行跨租户基准测试查询之前，明确所有权/授权并验证租户隔离。
+6. 在访问边界明确之后，仅将日志/链路追踪/制品暴露用于解释说明，而非 AI 推荐或确定性性能排序。
+7. 在快照中记录策略/开关，并回放历史记录以对比启用先验前后的确定性决策。
+8. 为每次 AI/确定性决策归档候选方案、最终选择及理由。在具备访问控制和固定版本的前提下，将单独准备并经策略批准的快照投影索引为 RAG 参考，用于相似决策的上下文/解释；不得暴露完整的私有 prompt 审计、将其视为实测数据或改变确定性排序。
+9. 实现两阶段云端报告检索：先通过仅用于发现的 RAG 投影进行检索，随后进行来源校验和请求本地的 `BenchmarkRecord` 归一化。不要持久化记录；使用与在线记录相同的 `match_similarity`，为每个候选方案提供最多五条联合排序的原始样本。
+10. 实现/回放带版本控制的 `EvidenceSimilarityPolicy`，支持可配置的权重、衰减和阈值，禁止任意的逐请求调参。
+11. 实现用例 + 加速器/模型估算器，在缺少显式 SLO 时，将带不确定性感知的 TTFT、TPOT 和工作负载上限作为软目标传递给生成器/评分器。验证其无法绕过硬性约束或替代实测数据。

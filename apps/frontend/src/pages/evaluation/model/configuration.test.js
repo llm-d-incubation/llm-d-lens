@@ -147,3 +147,87 @@ test('edited YAML keeps provenance and recalculates manifest and configuration c
     assert.equal(result.provenance.edited_at, 'edited-time');
     assert.deepEqual(result.provenance.cluster_ref, {id: 'cluster'});
 });
+
+
+test('legacy paired replica inputs match generated topologies', () => {
+    for (const pairs of ['2:2', '1:3,3:1', ' 2 : 2 ']) {
+        const parsed = configuration.parsePdReplicaPairs(pairs);
+        const topologies = configuration.expandConfigurationTopologies({ guide: 'pd-disaggregation', pdTopologyVariants: pairs, prefillReplicaVariants: '1', replicaVariants: '1', prefillTensorParallelVariants: '1', tensorParallelVariants: '1' });
+        assert.deepEqual(parsed, topologies.map(row => [row.prefillReplicaCount, row.replicaCount]));
+    }
+    for (const value of ['2:', '0:2', '9007199254740992:2']) assert.throws(() => configuration.parsePdReplicaPairs(value));
+});
+
+
+test('explicit PD rows generate only the entered configurations with independent replica and TP values', () => {
+    const topologies = [
+        { id: 'first', prefillReplicaCount: '2', prefillTpCount: '1', replicaCount: '2', tpCount: '4' },
+        { id: 'second', prefillReplicaCount: '1', prefillTpCount: '2', replicaCount: '3', tpCount: '1' },
+    ];
+    const inputs = { guide: 'pd-disaggregation', topologies };
+    const expanded = configuration.expandConfigurationTopologies(inputs);
+    assert.deepEqual(expanded, [
+        { prefillReplicaCount: 2, prefillTpCount: 1, replicaCount: 2, tpCount: 4, gpuCount: 10 },
+        { prefillReplicaCount: 1, prefillTpCount: 2, replicaCount: 3, tpCount: 1, gpuCount: 5 },
+    ]);
+    assert.deepEqual(configuration.expandConfigurationTopologies({ ...inputs, topologies: [topologies[0]] }), [expanded[0]]);
+    assert.deepEqual(configuration.expandSliceVariants(expanded, [1, 2]).map(row => [row.prefillReplicaCount, row.replicaCount, row.slices]), [[2, 2, 1], [2, 2, 2], [1, 3, 1], [1, 3, 2]]);
+    assert.equal(topologies[0].prefillReplicaCount, '2');
+});
+
+test('explicit rows reject invalid cells and enforce the configuration limit', () => {
+    const row = { prefillReplicaCount: 1, prefillTpCount: 1, replicaCount: 1, tpCount: 1 };
+    const expand = topologies => configuration.expandConfigurationTopologies({ guide: 'pd-disaggregation', topologies });
+    assert.equal(expand(Array(16).fill(row)).length, 16);
+    assert.throws(() => expand(Array(17).fill(row)), /1 and 16/);
+    assert.throws(() => expand([]), /1 and 16/);
+    for (const field of Object.keys(row)) {
+        for (const value of ['', ' ', '1,2', 0, -1, 1.5, NaN, Infinity, true, null, undefined, 9007199254740992]) {
+            assert.throws(() => expand([row, { ...row, [field]: value }]), /positive whole number/, `${field}: ${value}`);
+        }
+    }
+});
+
+
+test('PD ranges, lists and stepped ranges expand into one deduplicated parameter space', () => {
+    assert.deepEqual(configuration.parseTopologyValues('1-8/2,2，4,1'), [1, 2, 3, 4, 5, 7]);
+    const sweep = { ...configuration.topologySweepFromConfiguration(), prefillReplicaVariants: '1-4', replicaVariants: '1-8', prefillTensorParallelVariants: '1,2', tensorParallelVariants: '1,2' };
+    const result = configuration.analyzeConfigurationSweep(sweep);
+    assert.equal(result.rawCount, 128);
+    assert.equal(result.variants.length, 128);
+    assert.deepEqual(result.errors, []);
+    const filtered = { ...sweep, maxAccelerators: '8' };
+    const preview = configuration.analyzeConfigurationSweep(filtered);
+    assert.equal(preview.rawCount, 128);
+    assert.equal(preview.variants.length, 50);
+    assert.deepEqual(configuration.expandConfigurationTopologies({ guide: 'pd-disaggregation', sweep: filtered }), preview.variants);
+    assert.equal(configuration.analyzeConfigurationSweep({ ...sweep, relation: 'equal' }).variants.length, 16);
+    const exact = configuration.analyzeConfigurationSweep({ ...sweep, fixedAccelerators: '8', relation: 'decode' });
+    assert.ok(exact.variants.length > 0);
+    assert.ok(exact.variants.every(row => row.gpuCount === 8 && row.prefillReplicaCount <= row.replicaCount));
+});
+
+test('PD sweeps bound parsing and expansion without silently truncating results', () => {
+    for (const value of ['', '1,', '0', '8-1', '1-8/0', '1.5', '1-129', '9007199254740992']) assert.throws(() => configuration.parseTopologyValues(value));
+    const single = configuration.topologySweepFromConfiguration({ prefillReplicaCount: 2, replicaCount: 2, prefillTpCount: 1, tpCount: 1 });
+    assert.deepEqual(configuration.analyzeConfigurationSweep(single, 1).variants, [{ prefillReplicaCount: 2, replicaCount: 2, prefillTpCount: 1, tpCount: 1, gpuCount: 4 }]);
+    assert.match(configuration.analyzeConfigurationSweep({ ...single, replicaVariants: '1,2' }, 1).errors[0].message, /one configuration/);
+    assert.match(configuration.analyzeConfigurationSweep({ ...single, fixedAccelerators: '8', maxAccelerators: '4' }).errors[0].message, /No configurations/);
+    assert.match(configuration.analyzeConfigurationSweep({ ...single, prefillReplicaVariants: '1-128', replicaVariants: '1-128', tensorParallelVariants: '1-128' }).errors[0].message, /100,000/);
+    const large = { ...single, prefillReplicaVariants: '1-16', replicaVariants: '1-17' };
+    assert.equal(configuration.analyzeConfigurationSweep(large).variants.length, 272);
+    assert.throws(() => configuration.expandConfigurationTopologies({ sweep: large }), /256/);
+    assert.equal(configuration.analyzeConfigurationSweep({ ...large, relation: 'equal' }).errors.length, 0);
+    const rows = configuration.analyzeConfigurationSweep({ ...single, prefillReplicaVariants: '1-128' }).variants;
+    assert.equal(configuration.expandSliceVariants(rows, [1, 2], configuration.MAX_EVALUATION_CONFIGURATIONS).length, 256);
+    assert.throws(() => configuration.expandSliceVariants(rows, [1, 2, 3], configuration.MAX_EVALUATION_CONFIGURATIONS), /256/);
+    assert.throws(() => configuration.expandSliceVariants(Array(257).fill({}), [], configuration.MAX_EVALUATION_CONFIGURATIONS), /256/);
+});
+
+test('accepted AIC and history topologies hydrate the same scalar range fields with clear filters', () => {
+    const sweep = configuration.topologySweepFromConfiguration({ prefillReplicaCount: 2, prefillTpCount: 4, replicaCount: 3, tpCount: 2 });
+    assert.equal(sweep.relation, 'all');
+    assert.equal(sweep.maxAccelerators, '');
+    assert.equal(sweep.fixedAccelerators, '');
+    assert.deepEqual(configuration.expandConfigurationTopologies({ sweep }), [{ prefillReplicaCount: 2, prefillTpCount: 4, replicaCount: 3, tpCount: 2, gpuCount: 14 }]);
+});

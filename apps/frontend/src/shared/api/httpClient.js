@@ -57,7 +57,8 @@ export async function requestJson(url, options = {}, { fallback = {}, errorFacto
     const response = await fetch(url, { credentials: 'include', ...options, headers });
     const payload = strictJson && response.ok ? await response.json() : await readJson(response, fallback);
     if (!response.ok || (expectedStatus !== undefined && response.status !== expectedStatus)) {
-        if (response.status === 401 && typeof window !== 'undefined') {
+        const code = payload?.code || payload?.detail?.code;
+        if (response.status === 401 && (!code || code === 'unauthenticated' || code === 'session_expired') && typeof window !== 'undefined') {
             window.dispatchEvent(new CustomEvent('prism:auth-expired'));
         }
         throw errorFactory(payload, response);

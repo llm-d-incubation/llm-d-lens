@@ -641,6 +641,10 @@ Create a routing group that exposes one user-facing model name in a single clust
 
 Publish one ready deployment as a new cluster-scoped public model name without granting full group-management rights. This is the route used by **Add model** when the public name does not exist yet. The caller needs `model-service:member:manage` in the deployment's cluster. The service uses the default `random` selection policy; editing group metadata or selection policy still requires `model-service:group:manage`.
 
+Publication adds shared-Gateway routing while retaining the deployment-owned Standalone Proxy. Gateway reconciliation synchronizes EPP/proxy transport and waits for readiness before submitting routes. A `201` records publication intent, not completed routing; inspect the reconciliation operation for migration or rollout failures. Legacy Gateway-only deployments require redeployment for independent access.
+
+The same transport failures stop the non-admin publication and verification paths. The administrator handoff script waits for EPP readiness before applying routes; if an EPP protocol change would affect an independent proxy, it stops without patching EPP. Redeploy with matching transport, or repair both through Lens with sufficient permissions, then retry the handoff.
+
 **`POST /api/v1/model-service/admin/groups/publish`**
 
 Request body (`GroupPublishRequest`):
@@ -1575,7 +1579,7 @@ Health probes cannot overwrite an explicit offline decision.
 
 ### Remove a member
 
-Remove a published member. The handler schedules a reconcile of its cluster.
+Remove a published member. The handler schedules a reconcile of its cluster. The deployment-owned Standalone Proxy, EPP and model workloads remain unchanged. No reverse transport switch is needed. Direct Python callers must also reconcile the cluster after `delete_member()` to remove the published route.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">

@@ -366,6 +366,21 @@ def test_registered_guide_helm_allows_only_planned_data_plane_values(tmp_path: P
     runner._validate_helm(install)
     runner._validate_helm([*install, *plaintext])
     runner._validate_helm([*install, *plaintext, *gateway])
+    for secure in ("true", "false"):
+        for values, enabled in ((plaintext, "true"), ([*plaintext, *gateway], "false")):
+            runner._validate_helm(
+                [
+                    *install,
+                    *values,
+                    "--set",
+                    f"router.epp.flags.secure-serving={secure}",
+                    "--set",
+                    f"router.proxy.enabled={enabled}",
+                ]
+            )
+    with pytest.raises(RuntimeConfigurationError):
+        runner._validate_helm([*install, *plaintext, "--set", "router.proxy.image=unreviewed"])
+
     neutral_install = [*install[:-1], str(guide.neutral_router_values_path)]
     runner._validate_helm([*neutral_install, *plaintext])
     with pytest.raises(RuntimeConfigurationError, match="outside the registered Guide plan"):

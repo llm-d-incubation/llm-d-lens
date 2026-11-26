@@ -1011,7 +1011,7 @@ async def test_model_binding_resolves_local_disk_and_nfs_namespace(monkeypatch):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["standalone", "gateway"])
-async def test_render_router_applies_plaintext_epp_and_respects_overrides(tmp_path, monkeypatch, mode):
+async def test_render_router_applies_provider_transport_after_overrides(tmp_path, monkeypatch, mode):
     from llm_d_lens.deploy.data_plane import PLAINTEXT_EPP_VALUES_PATH
 
     archive = tmp_path / f"llm-d-router-{mode}-1.0.0.tgz"
@@ -1044,21 +1044,24 @@ async def test_render_router_applies_plaintext_epp_and_respects_overrides(tmp_pa
 
     await composition.render_router(catalog, base_body)
     args_default = calls[-1]
-    assert ["-f", str(PLAINTEXT_EPP_VALUES_PATH)] == args_default[-2:]
+    assert str(PLAINTEXT_EPP_VALUES_PATH) in args_default
+    expected_transport = args_default[-4:]
+    assert expected_transport[0] == "--set"
+    assert expected_transport[2] == "--set"
 
     override_values_body = {
         "namespace": "bench-ns",
         "router": {"mode": mode, "release": "rel", "values": [{"path": "router/tls.yaml"}]},
     }
     await composition.render_router(catalog, override_values_body)
-    assert str(PLAINTEXT_EPP_VALUES_PATH) not in calls[-1]
+    assert calls[-1][-4:] == expected_transport
 
     override_set_body = {
         **base_body,
         "router": {**base_body["router"], "set": ["router.epp.flags.secure-serving=true"]},
     }
     await composition.render_router(catalog, override_set_body)
-    assert str(PLAINTEXT_EPP_VALUES_PATH) not in calls[-1]
+    assert calls[-1][-4:] == expected_transport
 
 
 @pytest.mark.asyncio
@@ -1433,3 +1436,49 @@ def test_plan_documents_ignores_smuggled_cluster_vllm_image_and_validates_kwarg(
             {"accelerator": "nvidia"},
             cluster_vllm_image="-flag;injection",
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider,secure", [("istio", "false"), ("agentgateway", "false"), ("envoy-ai-gateway", "true"), ("gke", "true")]
+)
+@pytest.mark.parametrize("mode,enabled", [("standalone", "true"), ("gateway", "false")])
+async def test_router_render_manages_both_transport_and_proxy_after_user_overrides(
+    monkeypatch, tmp_path, provider, secure, mode, enabled
+):
+    async def archive(*args):
+        return tmp_path / "router.tgz"
+
+    calls = []
+
+    async def command(args):
+        calls.append(args)
+        return "kind: Service\nmetadata: {name: router}\n"
+
+    from contextlib import nullcontext
+
+    monkeypatch.setattr(composition, "scratch_directory", lambda: nullcontext(tmp_path))
+    monkeypatch.setattr(composition, "chart_archive", archive)
+    monkeypatch.setattr(composition, "command", command)
+    monkeypatch.setattr("llm_d_lens.cluster.registry.get_cluster", lambda _: SimpleNamespace(gateway_provider=provider))
+    result = await composition.render_router(
+        {"assets": [{"path": "router.yaml", "kind": "values", "content": "router: {}"}]},
+        {
+            "namespace": "models",
+            "clusterId": "cluster-a",
+            "router": {
+                "mode": mode,
+                "release": "qwen",
+                "version": "v1.0.0",
+                "values": [{"path": "router.yaml"}],
+                "set": ["router.epp.flags.secure-serving=wrong", "router.proxy.enabled=wrong"],
+            },
+        },
+    )
+    assert result[0]["kind"] == "Service"
+    assert calls[0][-4:] == [
+        "--set",
+        f"router.epp.flags.secure-serving={secure}",
+        "--set",
+        f"router.proxy.enabled={enabled}",
+    ]

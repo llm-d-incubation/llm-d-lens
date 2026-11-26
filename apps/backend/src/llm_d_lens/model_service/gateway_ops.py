@@ -2,7 +2,7 @@
 
 The cluster installs ONE shared Gateway (provider-selectable) at creation; each
 model service publishes an HTTPRoute -> InferencePool plus IPP model-mapping.
-Deployments own their InferencePool + EPP and run no proxy. Design reference:
+Deployments retain their InferencePool, EPP and independent standalone proxy. Design reference:
 docs/design/model-service-design.md#lens-model-service-design-per-cluster-native-llm-d sections 5/10.
 """
 
@@ -22,6 +22,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager, suppress
 from contextvars import ContextVar
+from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
@@ -81,6 +82,7 @@ from llm_d_lens.model_service.gateway_providers import (
     authz_tls_insecure_enabled,
     default_pool_name,
     ensure_istioctl,
+    epp_secure_serving,
     model_rewrite_name,
     provider_spec,
     render_inference_gateway,
@@ -666,6 +668,14 @@ def member_is_routable(member) -> bool:
         return False
     components = (member.health_json or {}).get("components") or {}
     return not any(components.get(key) == "missing" for key in ("epp", "inferencePool", "modelServer"))
+
+
+def _member_epp_key(member) -> tuple[str, str] | None:
+    bare_pool = member_pool_name(member)
+    epp_name = member.epp_ref or (f"{bare_pool}-epp" if bare_pool else "")
+    if not epp_name:
+        return None
+    return split_pool_name(member.pool_name)[0] or member.target_namespace, epp_name
 
 
 def _member_configured_for_handoff(member) -> bool:
@@ -2801,62 +2811,206 @@ class GatewayOpsService:
         )
         return self._finish(operation, ok=True, message=f"IPP removed ({name})")
 
-    async def _ensure_epp_plaintext(
-        self, cluster_id: str, namespace: str, epp_name: str, *, on_log: OnLog | None = None
+    async def _ensure_epp_transport(
+        self, cluster_id: str, namespace: str, epp_name: str, *, secure_serving: bool, on_log: OnLog | None = None
     ) -> bool:
-        """Flip a deployment's EPP to plaintext serving if it was created with TLS.
+        """Repair EPP and standalone transport together, retaining independent access.
 
-        The cluster Gateway reaches the EPP over plaintext h2c; an EPP left on the
-        default ``secure-serving=true`` resets the ext_proc stream (HTTP 500). Older
-        deployments predate the gateway-mode router values, so heal them in place.
+        Versioned ConfigMaps keep the running proxy on its old configuration
+        until the same Pod-template update switches both EPP and proxy. A
+        failed update leaves the old ConfigMap available for rollback.
         """
-        try:
+        workload = None
+        for kind in ("deploy", "statefulset"):
             result = await self._kubectl(
-                cluster_id, ["get", "deploy", epp_name, "-n", namespace, "-o", "json"], timeout=20
+                cluster_id,
+                ["get", kind, epp_name, "-n", namespace, "-o", "json", "--ignore-not-found=true"],
+                timeout=20,
             )
-        except (FileNotFoundError, TimeoutError, OSError):
-            return False
-        if result.returncode != 0:
-            return False
-        try:
-            deployment = json.loads(result.stdout or "{}")
-        except ValueError:
-            return False
-        containers = deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers") or []
+            if result.returncode:
+                raise GatewayOpsError(result.stderr or f"Cannot inspect Router {namespace}/{epp_name}")
+            workload = _kubectl_object(result.stdout)
+            if workload:
+                break
+        if not workload:
+            raise GatewayOpsError(f"Router workload not found: {namespace}/{epp_name}")
+        pod = workload.get("spec", {}).get("template", {}).get("spec", {})
+        containers = pod.get("containers") or []
+        patch = []
         for index, container in enumerate(containers):
             args = list(container.get("args") or [])
-            # Identify the EPP container (the sidecar has no --pool-name/--grpc-port).
             if not any(a.startswith("--pool-name") or a.startswith("--grpc-port") for a in args):
                 continue
             flag_index = next((i for i, a in enumerate(args) if a.startswith("--secure-serving")), None)
+            flag = f"--secure-serving={str(secure_serving).lower()}"
             if flag_index is not None:
-                if args[flag_index] == "--secure-serving=false":
-                    return False
-                patch = [
-                    {
-                        "op": "replace",
-                        "path": f"/spec/template/spec/containers/{index}/args/{flag_index}",
-                        "value": "--secure-serving=false",
-                    }
-                ]
+                if (
+                    args[flag_index] == "--secure-serving"
+                    and flag_index + 1 < len(args)
+                    and args[flag_index + 1] in {"true", "false"}
+                ):
+                    del args[flag_index + 1]
+                args[flag_index] = flag
             else:
-                patch = [
-                    {
-                        "op": "add",
-                        "path": f"/spec/template/spec/containers/{index}/args/-",
-                        "value": "--secure-serving=false",
-                    }
-                ]
-            await self._log(on_log, f"EPP {namespace}/{epp_name}: set secure-serving=false (plaintext ext_proc)")
+                args.append(flag)
+            if args != container.get("args"):
+                patch.append({"op": "replace", "path": f"/spec/template/spec/containers/{index}/args", "value": args})
+            break
+        else:
+            raise GatewayOpsError(f"EPP container not found in Router {namespace}/{epp_name}")
+
+        proxy_patch = await self._prepare_proxy_transport(cluster_id, namespace, workload, secure_serving)
+        patch.extend(proxy_patch)
+        # Refuse to patch a different Pod template if an operator changed it
+        # while its proxy configuration was being prepared.
+        if patch:
+            patch.insert(0, {"op": "test", "path": "/spec/template/spec", "value": pod})
+            await self._log(on_log, f"Router {namespace}/{epp_name}: synchronize EPP and standalone proxy transport")
             applied = await self._kubectl(
                 cluster_id,
-                ["patch", "deploy", epp_name, "-n", namespace, "--type=json", "-p", json.dumps(patch)],
+                ["patch", kind, epp_name, "-n", namespace, "--type=json", "-p", json.dumps(patch)],
                 timeout=30,
             )
-            if applied.returncode != 0:
-                await self._log(on_log, f"EPP patch failed: {(applied.stderr or '').strip()}")
-            return applied.returncode == 0
-        return False
+            if applied.returncode:
+                raise GatewayOpsError(applied.stderr or "Router transport update failed")
+        # A retry after a timed-out rollout must still wait for the new Pods.
+        ready = await self._kubectl(
+            cluster_id, ["rollout", "status", f"{kind}/{epp_name}", "-n", namespace, "--timeout=120s"], timeout=130
+        )
+        if ready.returncode:
+            raise GatewayOpsError(ready.stderr or "Router transport rollout is not ready")
+        return bool(patch)
+
+    async def _prepare_proxy_transport(
+        self, cluster_id: str, namespace: str, workload: dict, secure: bool, *, allow_changes: bool = True
+    ) -> list[dict]:
+        """Stage compatible standalone ConfigMaps without changing running Pods."""
+        pod = workload.get("spec", {}).get("template", {}).get("spec", {})
+        proxies = [
+            c
+            for c in pod.get("containers", [])
+            if any(
+                token in f"{c.get('name', '')} {c.get('image', '')}".lower()
+                for token in ("envoy", "agentgateway", "proxy")
+            )
+        ]
+        if not proxies and allow_changes:
+            # Service-mode proxies are separate workloads. Validate their
+            # transport before touching EPP; changing both requires a planned
+            # redeployment rather than two independent live rollouts.
+            name = workload.get("metadata", {}).get("name", "")
+            if name.endswith("-epp"):
+                proxy_name = name.removesuffix("-epp") + "-proxy"
+                result = await self._kubectl(
+                    cluster_id,
+                    ["get", "deploy", proxy_name, "-n", namespace, "-o", "json", "--ignore-not-found=true"],
+                    timeout=20,
+                )
+                if result.returncode:
+                    raise GatewayOpsError(result.stderr or f"Cannot inspect standalone proxy {proxy_name}")
+                separate = _kubectl_object(result.stdout)
+                if separate:
+                    await self._prepare_proxy_transport(cluster_id, namespace, separate, secure, allow_changes=False)
+        mounts = {m["name"] for c in proxies for m in c.get("volumeMounts", [])}
+        patch = []
+        recognized = not proxies
+        for index, volume in enumerate(pod.get("volumes", [])):
+            if volume.get("name") not in mounts or "configMap" not in volume:
+                continue
+            name = volume["configMap"]["name"]
+            result = await self._kubectl(
+                cluster_id, ["get", "configmap", name, "-n", namespace, "-o", "json"], timeout=20
+            )
+            if result.returncode:
+                raise GatewayOpsError(result.stderr or f"Cannot read standalone configuration {namespace}/{name}")
+            configmap = _kubectl_object(result.stdout) or {}
+            data = deepcopy(configmap.get("data") or {})
+            changed = False
+            for key, content in data.items():
+                try:
+                    config = yaml.safe_load(content)
+                except yaml.YAMLError:
+                    continue
+                if not isinstance(config, dict):
+                    continue
+                original = deepcopy(config)
+                # The upstream agentgateway standalone config uses plaintext
+                # endpointPicker.host. Do not invent a TLS migration for it.
+                for bind in config.get("binds") or []:
+                    for listener in bind.get("listeners") or []:
+                        for route in listener.get("routes") or []:
+                            for backend in route.get("backends") or []:
+                                picker = ((backend.get("policies") or {}).get("inferenceRouting") or {}).get(
+                                    "endpointPicker"
+                                )
+                                if picker:
+                                    if secure or set(picker) != {"host"}:
+                                        raise GatewayOpsError(
+                                            "Standalone agentgateway transport is incompatible; "
+                                            "redeploy with an Envoy proxy before publishing"
+                                        )
+                                    recognized = True
+                clusters = (config.get("static_resources") or {}).get("clusters") or []
+                for cluster in clusters:
+                    if cluster.get("name") != "ext_proc":
+                        continue
+                    recognized = True
+                    if secure:
+                        cluster.setdefault(
+                            "transport_socket",
+                            {
+                                "name": "envoy.transport_sockets.tls",
+                                "typed_config": {
+                                    "@type": (
+                                        "type.googleapis.com/"
+                                        "envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext"
+                                    ),
+                                    "common_tls_context": {"validation_context": {}},
+                                },
+                            },
+                        )
+                    else:
+                        cluster.pop("transport_socket", None)
+                    for check in cluster.get("health_checks") or []:
+                        if secure:
+                            check.setdefault("tls_options", {"alpn_protocols": ["h2"]})
+                        else:
+                            check.pop("tls_options", None)
+                if config != original:
+                    data[key] = yaml.safe_dump(config, sort_keys=False)
+                    changed = True
+            if not changed:
+                continue
+            if not allow_changes:
+                raise GatewayOpsError(
+                    "Separate standalone proxy requires a transport update; redeploy before publishing"
+                )
+            digest = hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:12]
+            base_name = re.sub(r"-transport-[0-9a-f]{12}$", "", name)[:220]
+            new_name = f"{base_name}-transport-{digest}"
+            metadata = {"name": new_name, "namespace": namespace}
+            owner = workload.get("metadata", {})
+            if owner.get("uid"):
+                metadata["ownerReferences"] = [
+                    {
+                        "apiVersion": workload.get("apiVersion", "apps/v1"),
+                        "kind": workload.get("kind", "Deployment"),
+                        "name": owner["name"],
+                        "uid": owner["uid"],
+                    }
+                ]
+            prepared = {"apiVersion": "v1", "kind": "ConfigMap", "metadata": metadata, "data": data}
+            applied = await self._apply_documents(cluster_id, [yaml.safe_dump(prepared, sort_keys=False)])
+            if applied.returncode:
+                raise GatewayOpsError(applied.stderr or "Cannot prepare standalone proxy transport")
+            patch.append(
+                {"op": "replace", "path": f"/spec/template/spec/volumes/{index}/configMap/name", "value": new_name}
+            )
+        if not recognized:
+            raise GatewayOpsError(
+                "Standalone proxy configuration is unsupported; regenerate the deployment before publishing"
+            )
+        return patch
 
     # --- non-admin handoff & remediation ------------------------------------
     def _load_handoff_locked(self, cluster_id: str) -> tuple[GatewayOperation | None, dict[str, Any]]:
@@ -3209,17 +3363,26 @@ class GatewayOpsService:
             )
             routable_namespaces = {split_pool_name(m.pool_name)[0] or m.target_namespace for m in routable}
             if routable:
-                if gw_provider in ("istio", "agentgateway"):
-                    for member in routable:
-                        epp_ns = split_pool_name(member.pool_name)[0] or member.target_namespace
-                        if epp_ns not in caps.permitted_member_namespaces:
-                            continue
-                        bare_pool = member_pool_name(member)
-                        epp_name = member.epp_ref or (f"{bare_pool}-epp" if bare_pool else "")
-                        if epp_name and (epp_ns, epp_name) not in healed_epps:
-                            healed_epps.add((epp_ns, epp_name))
-                            with suppress(Exception):
-                                await self._ensure_epp_plaintext(cluster_id, epp_ns, epp_name, on_log=on_log)
+                for member in routable:
+                    epp_ns = split_pool_name(member.pool_name)[0] or member.target_namespace
+                    if epp_ns not in caps.permitted_member_namespaces:
+                        continue
+                    bare_pool = member_pool_name(member)
+                    epp_name = member.epp_ref or (f"{bare_pool}-epp" if bare_pool else "")
+                    if epp_name and (epp_ns, epp_name) not in healed_epps:
+                        healed_epps.add((epp_ns, epp_name))
+                        try:
+                            await self._ensure_epp_transport(
+                                cluster_id,
+                                epp_ns,
+                                epp_name,
+                                secure_serving=epp_secure_serving(provider=gw_provider),
+                                on_log=on_log,
+                            )
+                        except (GatewayOpsError, ValueError, OSError, TimeoutError) as error:
+                            raise GatewayOpsError(
+                                f"Router {epp_ns}/{epp_name} transport reconciliation failed: {error}"
+                            ) from error
                 permitted_bindings = [
                     PoolBinding(
                         member_pool_name(m),
@@ -3640,7 +3803,8 @@ class GatewayOpsService:
             jsonpath_rows = '\'{range .spec.template.spec.containers[*]}{.name}{"\\t"}{.args[*]}{"\\n"}{end}\''
             lines.extend(
                 [
-                    "patch_epp_plaintext() {",
+                    f"EPP_SECURE_SERVING={str(epp_secure_serving(provider=gw_provider)).lower()}",
+                    "patch_epp_transport() {",
                     '  local ns="$1"',
                     '  local name="$2"',
                     "  local cidx=0",
@@ -3650,8 +3814,24 @@ class GatewayOpsService:
                     "  fi",
                     '  if kubectl get deploy "$name" -n "$ns" -o jsonpath='
                     + jsonpath_args
-                    + " 2>/dev/null | grep -Fq -- '--secure-serving=false'; then",
+                    + ' 2>/dev/null | grep -Fq -- "--secure-serving=$EPP_SECURE_SERVING"; then',
+                    '    kubectl rollout status "deploy/$name" -n "$ns" --timeout=120s || return 1',
                     "    return 0",
+                    "  fi",
+                    '  local proxies separate_proxy=""',
+                    '  proxies="$(kubectl get deploy "$name" -n "$ns" -o '
+                    "'jsonpath={range .spec.template.spec.containers[*]}"
+                    '{.name}{" "}{.image}{"\\n"}{end}\')" || return 1',
+                    '  if [[ "$name" == *-epp ]]; then',
+                    '    separate_proxy="$(kubectl get deploy "${name%-epp}-proxy" -n "$ns"'
+                    ' --ignore-not-found=true -o name)" || return 1',
+                    "  fi",
+                    '  if [[ -n "$separate_proxy" ]] || printf \'%s\\n\' "$proxies" '
+                    "| grep -Eiq 'envoy|agentgateway|proxy'; then",
+                    "    printf 'Router %s/%s retains an independent proxy; "
+                    "redeploy with matching EPP/proxy transport or repair both through Lens "
+                    'before retrying.\\n\' "$ns" "$name" >&2',
+                    "    return 1",
                     "  fi",
                     "  while IFS=$'\\t' read -r cname cargs; do",
                     '    if [[ " $cargs " == *" --pool-name"* || " $cargs " == *" --grpc-port"* ]]; then',
@@ -3671,12 +3851,13 @@ class GatewayOpsService:
                     "      if [[ $found_flag -eq 1 ]]; then",
                     '        kubectl patch deploy "$name" -n "$ns" --type=json -p '
                     + '"[{\\"op\\":\\"replace\\",\\"path\\":\\"/spec/template/spec/containers/${cidx}'
-                    + '/args/${flag_idx}\\",\\"value\\":\\"--secure-serving=false\\"}]"',
+                    + '/args/${flag_idx}\\",\\"value\\":\\"--secure-serving=${EPP_SECURE_SERVING}\\"}]"',
                     "      else",
                     '        kubectl patch deploy "$name" -n "$ns" --type=json -p '
                     + '"[{\\"op\\":\\"add\\",\\"path\\":\\"/spec/template/spec/containers/${cidx}'
-                    + '/args/-\\",\\"value\\":\\"--secure-serving=false\\"}]"',
+                    + '/args/-\\",\\"value\\":\\"--secure-serving=${EPP_SECURE_SERVING}\\"}]"',
                     "      fi",
+                    '      kubectl rollout status "deploy/$name" -n "$ns" --timeout=120s || return 1',
                     "      return 0",
                     "    fi",
                     "    cidx=$((cidx + 1))",
@@ -3720,6 +3901,13 @@ class GatewayOpsService:
                 )
             op_id = f"delete-{kind}-{ns or 'all'}-{name}"
             lines.append(f"append_done {shlex.quote(op_id)}")
+            lines.append("")
+
+        # Verify EPP transport before publishing routes; retain independent proxies.
+        for epp_ns, epp_name in epp_targets:
+            lines.append(f"patch_epp_transport {shlex.quote(epp_ns)} {shlex.quote(epp_name)}")
+            lines.append(f"append_done {shlex.quote(f'patch-epp-{epp_ns}-{epp_name}')}")
+        if epp_targets:
             lines.append("")
 
         # 2. Apply Gateway / Route / ConfigMap / ReferenceGrant / InferenceModelRewrite manifests
@@ -3798,13 +3986,6 @@ class GatewayOpsService:
                 f"-n {shlex.quote(gw_ns)} --timeout=180s"
             )
             lines.append("append_done 'install-ipp'")
-            lines.append("")
-
-        # 4. EPP plaintext patches
-        for epp_ns, epp_name in epp_targets:
-            lines.append(f"patch_epp_plaintext {shlex.quote(epp_ns)} {shlex.quote(epp_name)}")
-            lines.append(f"append_done {shlex.quote(f'patch-epp-{epp_ns}-{epp_name}')}")
-        if epp_targets:
             lines.append("")
 
         lines.append("discover_gateway_endpoint || true")
@@ -3996,34 +4177,34 @@ class GatewayOpsService:
                                     summary=f"Apply {doc_kind} {doc_ns}/{doc_name} for {group.name}",
                                 )
                             )
-                    if gw_provider in ("istio", "agentgateway"):
-                        for m in routable:
-                            bare_pool = member_pool_name(m)
-                            epp_name = m.epp_ref or (f"{bare_pool}-epp" if bare_pool else "")
-                            if not epp_name:
-                                continue
-                            epp_raw_ns = split_pool_name(m.pool_name)[0] or m.target_namespace
-                            epp_ns = _validate_dns1123_label(epp_raw_ns, "eppNamespace")
-                            epp_sub = _validate_dns1123_subdomain(epp_name, "eppName")
-                            key = (epp_ns, epp_sub)
-                            if key not in seen_all_epp:
-                                seen_all_epp.add(key)
-                                all_routable_epp_targets.append(key)
-                            if epp_raw_ns in effective_caps.permitted_member_namespaces:
-                                continue
-                            if key not in seen_epp:
-                                seen_epp.add(key)
-                                epp_targets.append(key)
-                                pending_ops.append(
-                                    PendingOperationItem(
-                                        id=f"patch-epp-{epp_ns}-{epp_sub}",
-                                        action="patch",
-                                        kind="Deployment",
-                                        namespace=epp_ns,
-                                        name=epp_sub,
-                                        summary=f"Ensure EPP {epp_ns}/{epp_sub} uses plaintext ext_proc",
-                                    )
+                    epp_transport = "TLS" if epp_secure_serving(provider=gw_provider) else "plaintext"
+                    for m in routable:
+                        bare_pool = member_pool_name(m)
+                        epp_name = m.epp_ref or (f"{bare_pool}-epp" if bare_pool else "")
+                        if not epp_name:
+                            continue
+                        epp_raw_ns = split_pool_name(m.pool_name)[0] or m.target_namespace
+                        epp_ns = _validate_dns1123_label(epp_raw_ns, "eppNamespace")
+                        epp_sub = _validate_dns1123_subdomain(epp_name, "eppName")
+                        key = (epp_ns, epp_sub)
+                        if key not in seen_all_epp:
+                            seen_all_epp.add(key)
+                            all_routable_epp_targets.append(key)
+                        if epp_raw_ns in effective_caps.permitted_member_namespaces:
+                            continue
+                        if key not in seen_epp:
+                            seen_epp.add(key)
+                            epp_targets.append(key)
+                            pending_ops.append(
+                                PendingOperationItem(
+                                    id=f"patch-epp-{epp_ns}-{epp_sub}",
+                                    action="patch",
+                                    kind="Deployment",
+                                    namespace=epp_ns,
+                                    name=epp_sub,
+                                    summary=f"Ensure EPP {epp_ns}/{epp_sub} uses {epp_transport} ext_proc",
                                 )
+                            )
                     for m in g_members:
                         if m in routable:
                             continue
@@ -5039,6 +5220,14 @@ class GatewayOpsService:
                                     advisory = bool(caps.can_read_gateway_namespace and k8s_routes_ok)
                                     if advisory:
                                         detail_msg = "Gateway route returned 404; K8s HTTPRoute is ready."
+                                elif code == 503 and not resp.content.strip():
+                                    # ext_authz status_on_error: Envoy never reached Lens' authorize endpoint.
+                                    r_status = "degraded"
+                                    advisory = True
+                                    detail_msg = (
+                                        "Gateway could not reach Lens authorization (empty 503); "
+                                        "run gateway repair so the authz hop matches Lens' HTTP/HTTPS scheme."
+                                    )
                                 elif code in (502, 503, 504):
                                     r_status = "loading"
                                     advisory = True
@@ -5603,9 +5792,12 @@ class GatewayOpsService:
                 mode in ("routes", "gateway_repair", "all")
                 and refreshed_caps.permitted_member_namespaces - synced_member_ns
             ):
-                await self._sync_permitted_member_namespaces(
-                    cluster_id, cluster, caps=refreshed_caps, provider=provider, on_log=on_log
-                )
+                try:
+                    await self._sync_permitted_member_namespaces(
+                        cluster_id, cluster, caps=refreshed_caps, provider=provider, on_log=on_log
+                    )
+                except GatewayOpsError as error:
+                    return self._finish(operation, ok=False, message=str(error))
                 synced_member_ns.update(refreshed_caps.permitted_member_namespaces)
             resolved_marker_ns = self._resolve_marker_namespace(
                 cluster_id, cluster, explicit=saved_state.get("markerNamespace")
@@ -5651,9 +5843,12 @@ class GatewayOpsService:
         if caps.probe_conclusive and not caps.can_reconcile_routes:
             # Apply/clean safe permitted subset in writable member namespaces first.
             if caps.permitted_member_namespaces:
-                await self._sync_permitted_member_namespaces(
-                    cluster_id, cluster, caps=caps, provider=provider, on_log=on_log
-                )
+                try:
+                    await self._sync_permitted_member_namespaces(
+                        cluster_id, cluster, caps=caps, provider=provider, on_log=on_log
+                    )
+                except GatewayOpsError as error:
+                    return self._finish(operation, ok=False, message=str(error))
                 synced_member_ns.update(caps.permitted_member_namespaces)
             return await _handoff_locked("Orchestration administrator route sync required")
 
@@ -5696,8 +5891,9 @@ class GatewayOpsService:
         by_group = {}
         for member in self.members.list_by_cluster(cluster_id):
             by_group.setdefault(member.group_id, []).append(member)
-        # Heal members whose EPP predates the plaintext gateway-mode requirement.
-        await self._heal_member_epps(cluster_id, provider=provider, on_log=on_log)
+        # Repair both sides of the deployment transport before publishing routes;
+        # a Router that cannot be repaired is withheld without blocking healthy ones.
+        unrepaired_epps = await self._heal_member_epps(cluster_id, provider=provider, on_log=on_log)
         applied_names: set[str] = set()
         rewrite_documents: list[str] = []
         applied_rewrites: set[tuple[str, str]] = set()
@@ -5713,6 +5909,18 @@ class GatewayOpsService:
             published = [m for m in cluster_members if member_is_routable(m)]
             if not published:
                 continue
+            route_name = resource_name(f"{group.name}-{group.id}")
+            if any(_member_epp_key(m) in unrepaired_epps for m in published):
+                # Leave this model's live route untouched until its Router transport is repaired.
+                applied_names.add(route_name)
+                applied_rewrites.update(
+                    (
+                        split_pool_name(m.pool_name)[0] or m.target_namespace or namespace,
+                        model_rewrite_name(route_name, member_pool_name(m)),
+                    )
+                    for m in published
+                )
+                continue
             bindings = [
                 PoolBinding(
                     member_pool_name(member),
@@ -5726,7 +5934,6 @@ class GatewayOpsService:
                 return self._finish(
                     operation, ok=False, message=f"model {group.name}: requires at most 16 distinct pools"
                 )
-            route_name = resource_name(f"{group.name}-{group.id}")
             public_model = group.base_model or group.model_ref
             applied_names.add(route_name)
             documents.append(
@@ -5845,6 +6052,16 @@ class GatewayOpsService:
                 return self._finish(
                     operation, ok=False, message=(deleted.stderr or "stale model map removal failed").strip()
                 )
+        if unrepaired_epps:
+            routers = "; ".join(f"{ns}/{name}: {error}" for (ns, name), error in sorted(unrepaired_epps.items()))
+            return self._finish(
+                operation,
+                ok=False,
+                message=(
+                    f"Router transport reconciliation failed for {routers}; their model routes were left unchanged "
+                    f"and {len(documents)} other model route(s) were reconciled"
+                ),
+            )
         _, existing_handoff = self._load_handoff_locked(cluster_id)
         if existing_handoff.get("reconcileStatus") == "admin_handoff_required":
             self._save_handoff_locked(
@@ -6170,40 +6387,44 @@ class GatewayOpsService:
             await self.install_ipp(cluster_id, actor=None)
         except Exception as error:  # noqa: BLE001 - best effort; the probe retries
             logger.warning("data-plane auto-heal IPP failed for %s: %s", cluster_id, error)
-        await self._heal_member_epps(cluster_id)
+        try:
+            await self._heal_member_epps(cluster_id)
+        except Exception as error:  # noqa: BLE001 - best effort; the probe retries
+            logger.warning("data-plane auto-heal Router failed for %s: %s", cluster_id, error)
 
     async def _heal_member_epps(
         self, cluster_id: str, *, provider: str | None = None, on_log: OnLog | None = None
-    ) -> None:
-        """Force plaintext ext_proc on published EPPs that still default to TLS.
+    ) -> dict[tuple[str, str], str]:
+        """Synchronize both EPP and retained standalone proxy for publication.
 
-        Only istio/agentgateway reach the EPP over plaintext h2c; envoy-ai-gateway
-        and gke expect TLS, so forcing plaintext there would break the ext_proc.
-        An unhealthy probe can be the secure-serving symptom itself, so status does
-        not suppress healing; only explicitly disabled members are skipped.
+        Returns the Routers whose transport could not be reconciled so callers
+        can withhold only those members instead of blocking the whole cluster.
         """
         cluster = get_cluster(cluster_id)
         if cluster is None:
-            return
+            return {}
         provider = provider or cluster.gateway_provider or DEFAULT_PROVIDER
-        if provider not in ("istio", "agentgateway"):
-            return
+        secure = epp_secure_serving(provider=provider)
         groups = {group.id: group for group in self.groups.list()}
         healed: set[tuple[str, str]] = set()
+        failed: dict[tuple[str, str], str] = {}
         for member in self.members.list_by_cluster(cluster_id):
             group = groups.get(member.group_id)
-            if member.status == "disabled" or group is None or group.status == "disabled":
+            if group is None or group.status == "disabled" or not member_is_routable(member):
                 continue
-            bare_pool = member_pool_name(member)
-            epp_name = member.epp_ref or (f"{bare_pool}-epp" if bare_pool else "")
-            if not epp_name:
+            epp_key = _member_epp_key(member)
+            if epp_key is None or epp_key in healed:
                 continue
-            epp_ns = split_pool_name(member.pool_name)[0] or member.target_namespace
-            key = (epp_ns, epp_name)
-            if key in healed:
-                continue
-            healed.add(key)
-            await self._ensure_epp_plaintext(cluster_id, epp_ns, epp_name, on_log=on_log)
+            healed.add(epp_key)
+            try:
+                await self._ensure_epp_transport(cluster_id, *epp_key, secure_serving=secure, on_log=on_log)
+            except (GatewayOpsError, ValueError, OSError, TimeoutError) as error:
+                failed[epp_key] = str(error)
+                message = f"Router {epp_key[0]}/{epp_key[1]} transport reconciliation failed: {error}"
+                logger.warning("%s (cluster %s)", message, cluster_id)
+                if on_log is not None:
+                    await on_log(message)
+        return failed
 
     @staticmethod
     def _non_admin_route_handoff_pending(saved_state: Mapping[str, Any], group_id: str) -> bool:
@@ -6909,6 +7130,7 @@ class GatewayOpsService:
         saved_state = dict(saved_op.detail_json or {}) if saved_op else {}
         handoff_ns = saved_state.get("markerNamespace")
         desired_hash = saved_state.get("desiredHash")
+        handoff_blocked = False
         if (
             caps.access_mode == "non_admin"
             or not caps.can_reconcile_routes
@@ -7224,8 +7446,13 @@ class GatewayOpsService:
                 )
             except GatewayValidationError:
                 pass
+            except GatewayOpsError as error:
+                logger.warning("handoff verification blocked by member transport for %s: %s", cluster_id, error)
+                handoff_blocked = True
         reconcile_status: GatewayReconcileStatus = (
-            "admin_handoff_required" if saved_state.get("reconcileStatus") == "admin_handoff_required" else "synced"
+            "admin_handoff_required"
+            if handoff_blocked or saved_state.get("reconcileStatus") == "admin_handoff_required"
+            else "synced"
         )
         fallback_mode_raw = saved_state.get("mode") or "routes"
         fallback_mode: GatewayRemediationMode = (

@@ -76,15 +76,17 @@ def compose_native_cpu_cache(base, donor, *, guide, capacity_gib):
         config = deepcopy(connectors[0])
         config["kv_connector_extra_config"]["cpu_bytes_to_use"] = extra_bytes
         if guide == "pd-disaggregation":
+            expected_role = {"prefill": "kv_producer", "decode": "kv_consumer"}.get(workload["role"])
             if (
                 existing.get("kv_connector") != "NixlConnector"
-                or existing.get("kv_role") != "kv_both"
+                or existing.get("kv_role") not in {"kv_both", expected_role}
                 or existing.get("kv_connector_module_path")
             ):
                 raise ValueError(
                     "Adding CPU KV cache to P/D is not yet supported for this transport. "
-                    "The cache adapter requires the built-in NixlConnector with kv_both; "
-                    "use a P/D candidate without CPU KV offload to preserve the original transport."
+                    "The cache adapter requires the built-in NixlConnector with its role-preserving "
+                    "kv_both, kv_producer, or kv_consumer configuration; use a P/D candidate without "
+                    "CPU KV offload to preserve the original transport."
                 )
             # Keep transport-specific settings in the child; engine identity belongs
             # to the wrapper and is inherited by both children in MultiConnector.
@@ -165,14 +167,19 @@ def composed_cache_config(connector, *, pd=False):
         raise ValueError("Composed KV connector must be an object.")
     if pd:
         children = connector.get("kv_connector_extra_config", {}).get("connectors")
+        transport_role = (
+            children[0].get("kv_role")
+            if isinstance(children, list) and children and isinstance(children[0], dict)
+            else None
+        )
         if (
             connector.get("kv_connector") != "MultiConnector"
-            or connector.get("kv_role") != "kv_both"
             or not isinstance(children, list)
             or len(children) != 2
             or not all(isinstance(child, dict) for child in children)
             or children[0].get("kv_connector") != "NixlConnector"
-            or children[0].get("kv_role") != "kv_both"
+            or transport_role not in {"kv_both", "kv_producer", "kv_consumer"}
+            or connector.get("kv_role") != transport_role
             or any(child.get("kv_connector_module_path") for child in [connector, *children])
         ):
             raise ValueError("P/D composition requires ordered NixlConnector and OffloadingConnector children.")

@@ -98,6 +98,26 @@ def current_serving_port() -> int | None:
     return _SERVING_PORT
 
 
+_SERVING_TLS = False
+
+
+def serving_tls_from_argv(argv: list[str] | None = None) -> bool:
+    """Whether the ASGI server was launched with a TLS certificate (``--ssl-certfile``)."""
+    args = sys.argv if argv is None else argv
+    return any(arg == "--ssl-certfile" or arg.startswith("--ssl-certfile=") for arg in args)
+
+
+def remember_serving_tls(enabled: bool) -> None:
+    """Record whether this Lens backend serves HTTPS (so clusters must originate TLS)."""
+    global _SERVING_TLS
+    _SERVING_TLS = bool(enabled)
+
+
+def current_serving_tls() -> bool:
+    """Whether Lens was last observed serving HTTPS."""
+    return _SERVING_TLS
+
+
 def lens_address(host: str | None, port: int | None = None) -> str | None:
     """Combine a Lens host/IP with its serving port into a ``host:port`` address.
 

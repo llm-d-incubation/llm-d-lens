@@ -903,7 +903,9 @@ def test_new_storage_handoff_routes_registered_in_auth_and_mcp_skips():
     assert perms[("POST", "/api/v1/storage/volumes/{volume_id}/delete-preflight")] == "storage:volume:delete"
     assert perms[("POST", "/api/v1/storage/volumes/{volume_id}/verify-delete")] == "storage:volume:delete"
 
-    defs = json.loads((Path(__file__).resolve().parents[3] / "src/llm_d_lens/mcp/definitions.json").read_text())
+    defs = json.loads(
+        (Path(__file__).resolve().parents[3] / "src/llm_d_lens/assistant_tools/definitions.json").read_text()
+    )
     skips = set(defs["intentionalSkips"])
     assert {
         "POST /api/v1/storage/volumes/preflight",

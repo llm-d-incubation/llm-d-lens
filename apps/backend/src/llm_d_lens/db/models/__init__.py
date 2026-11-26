@@ -23,6 +23,7 @@ from llm_d_lens.db.models import group as group  # noqa: F401
 from llm_d_lens.db.models import identity_provider as identity_provider  # noqa: F401
 from llm_d_lens.db.models import model_access_token as model_access_token  # noqa: F401
 from llm_d_lens.db.models import model_cache_entry as model_cache_entry  # noqa: F401
+from llm_d_lens.db.models import model_catalog_entry as model_catalog_entry  # noqa: F401
 from llm_d_lens.db.models import (  # noqa: F401
     model_service_gateway_operation as model_service_gateway_operation,
 )
@@ -37,6 +38,7 @@ from llm_d_lens.db.models import (  # noqa: F401
 from llm_d_lens.db.models import (  # noqa: F401
     monitoring_cluster_stack_operation as monitoring_cluster_stack_operation,
 )
+from llm_d_lens.db.models import personal_access_token as personal_access_token  # noqa: F401
 from llm_d_lens.db.models import public_benchmark_record as public_benchmark_record  # noqa: F401
 from llm_d_lens.db.models import role as role  # noqa: F401
 from llm_d_lens.db.models import session as session  # noqa: F401

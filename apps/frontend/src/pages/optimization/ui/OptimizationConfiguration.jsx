@@ -23,7 +23,7 @@ import { MultiSelectDropdown } from '../../../shared/ui/MultiSelectDropdown';
 import { listStorageVolumes } from '../../storage';
 import { listModelCacheEntries } from '../../model-cache';
 import { sourceRepository } from '../../model-cache';
-import { configurationCustomRows, expandConfigurationTopologies, expandSliceVariants, runtimeControlOverrides, configurationRuntimeValues, maxFeasibleSlices, sliceEvidenceProfiles, sliceHistoryMatches, sliceRecommendation, sloTargetsLabel } from '../../evaluation';
+import { analyzeConfigurationSweep, topologySweepFromConfiguration, MAX_EVALUATION_CONFIGURATIONS, configurationCustomRows, expandConfigurationTopologies, expandSliceVariants, runtimeControlOverrides, configurationRuntimeValues, maxFeasibleSlices, sliceEvidenceProfiles, sliceHistoryMatches, sliceRecommendation, sloTargetsLabel } from '../../evaluation';
 import { normalizeGuideSettings } from '@repo/shared/evaluation/guide-settings';
 import { createPlanningSession } from '../../evaluation';
 import { ConfigurationField, FieldHelp } from '../../evaluation';
@@ -465,19 +465,24 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
     const [validationSubmitted, setValidationSubmitted] = useState(false);
     const [serverFieldErrors, setServerFieldErrors] = useState([]);
     const [replicaVariants, setReplicaVariants] = useState(() => String(sharedContext?.replicas || 1));
-    const replicas = Number(replicaVariants.split(',')[0]);
-    const setReplicas = value => setReplicaVariants(String(value));
     const [tensorParallelVariants, setTensorParallelVariants] = useState(() => String(sharedContext?.tensorParallelSize || 1));
-    const tensorParallelSize = Number(tensorParallelVariants.split(',')[0]);
+    const [pdSweep, setPdSweep] = useState(() => topologySweepFromConfiguration({
+        prefillReplicaCount: sharedContext?.prefillReplicas || 1,
+        prefillTpCount: sharedContext?.prefillTensorParallelSize || 1,
+        replicaCount: sharedContext?.replicas || 1,
+        tpCount: sharedContext?.tensorParallelSize || 1,
+    }));
+    const isPd = selection.guide === 'pd-disaggregation';
+    const pdSweepResult = useMemo(() => analyzeConfigurationSweep(pdSweep, singleConfiguration ? 1 : MAX_EVALUATION_CONFIGURATIONS), [pdSweep, singleConfiguration]);
+    const firstPdTopology = pdSweepResult.variants[0] || {};
+    const replicas = isPd ? (firstPdTopology.replicaCount || 1) : Number(replicaVariants.split(',')[0]);
+    const tensorParallelSize = isPd ? (firstPdTopology.tpCount || 1) : Number(tensorParallelVariants.split(',')[0]);
+    const prefillReplicas = (firstPdTopology.prefillReplicaCount || 1);
+    const prefillTensorParallelSize = (firstPdTopology.prefillTpCount || 1);
+    const setReplicas = value => setReplicaVariants(String(value));
     const setTensorParallelSize = value => setTensorParallelVariants(String(value));
-    const [prefillReplicaVariants, setPrefillReplicaVariants] = useState(() => String(sharedContext?.prefillReplicas || 1));
-    const prefillReplicas = Number(prefillReplicaVariants.split(',')[0]);
-    const setPrefillReplicas = value => setPrefillReplicaVariants(String(value));
-    const [prefillTensorParallelVariants, setPrefillTensorParallelVariants] = useState(() => String(sharedContext?.prefillTensorParallelSize || 1));
-    const prefillTensorParallelSize = Number(prefillTensorParallelVariants.split(',')[0]);
-    const setPrefillTensorParallelSize = value => setPrefillTensorParallelVariants(String(value));
-    const [pdTopologyVariants, setPdTopologyVariants] = useState('');
     const [guideVariant, setGuideVariant] = useState('vllm');
+    const explicitGuideVariant = useRef(initialArtifact?.deployable_configuration?.provider_ref || null);
     const [customRows, setCustomRows] = useState([]);
     const [guideSettings, setGuideSettings] = useState({});
     const [disaggregatedSet, setDisaggregatedSet] = useState({});
@@ -530,6 +535,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
     const buildSourceUrl = sharedContext?.buildSourceUrl ?? localBuildSourceUrl;
     const [planning, setPlanning] = useState(false);
     const [planResult, setPlanResult] = useState(null);
+    const [editedManifest, setEditedManifest] = useState(null);
     useEffect(() => {
         if (!embedded || !planResult) return undefined;
         const frame = window.requestAnimationFrame(() => {
@@ -602,14 +608,9 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
         const tp = decode.tensorParallelSize ?? decode.tensor_parallel_size ?? 1;
         const prefillReplicas = prefill.replicaCount ?? prefill.replicas ?? 1;
         const prefillTp = prefill.tensorParallelSize ?? prefill.tensor_parallel_size ?? 1;
-        setReplicas(replicas);
         setReplicaVariants(String(replicas));
-        setTensorParallelSize(tp);
         setTensorParallelVariants(String(tp));
-        setPrefillReplicas(prefillReplicas);
-        setPrefillReplicaVariants(String(prefillReplicas));
-        setPrefillTensorParallelSize(prefillTp);
-        setPrefillTensorParallelVariants(String(prefillTp));
+        setPdSweep(topologySweepFromConfiguration({ replicaCount: replicas, tpCount: tp, prefillReplicaCount: prefillReplicas, prefillTpCount: prefillTp }));
         setGuideVariant(content.guideVariant || content.guide_variant || 'vllm');
         const values = configurationRuntimeValues(content);
         setMaxModelLen(values.maxModelLen);
@@ -811,6 +812,11 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
         setTensorParallelSize(requested.decode_tensor_parallel_size || requested.tensor_parallel_size || 1);
         setReplicaVariants(String(requested.decode_replicas || requested.replicas || 1));
         setTensorParallelVariants(String(requested.decode_tensor_parallel_size || requested.tensor_parallel_size || 1));
+        setPdSweep(topologySweepFromConfiguration({ replicaCount: requested.decode_replicas || requested.replicas || 1,
+            tpCount: requested.decode_tensor_parallel_size || requested.tensor_parallel_size || 1,
+            prefillReplicaCount: requested.prefill_replicas || 1,
+            prefillTpCount: requested.prefill_tensor_parallel_size || 1,
+        }));
         setImageMode(pendingIntent?.runtime?.image_mode || 'use-upstream-image');
         const intentImage = pendingIntent?.runtime?.image || pendingIntent?.runtime?.build_image_name || '';
         if (intentImage) {
@@ -866,10 +872,10 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                 // an NVIDIA cluster never keeps the Intel XPU `vllm`/`vllm-rdma`.
                 const requestedVariant = initialTarget.variant;
                 let defaultVariant = requestedVariant || '';
-                const discoveredVariants = modelServer?.variants || [];
+                const discoveredVariants = guideVariantOptions(accelerator?.modelServers, modelServer?.id).map(option => option.value);
                 defaultVariant = requestedVariant && discoveredVariants.includes(requestedVariant)
                     ? requestedVariant : (discoveredVariants.includes('base') ? 'base' : discoveredVariants[0] || '');
-                setGuideVariant(defaultVariant);
+                setGuideVariant(current => explicitGuideVariant.current === guide?.id && discoveredVariants.includes(current) ? current : defaultVariant);
                 if (!pendingIntent?.baseline_types && !pendingIntent?.baseline_type) {
                     setBaselineTypes(guide?.id === 'precise-prefix-cache-routing' ? ['kubernetes-service'] : []);
                 }
@@ -948,8 +954,11 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
     const guideVariants = variantOptions.map(option => option.value);
     const variantLabel = value => variantOptions.find(option => option.value === value)?.label || value;
     useEffect(() => {
-        setGuideVariant(current => selectedGuideVariant(variantOptions, current));
-    }, [variantOptions]);
+        setGuideVariant(current => selectedGuideVariant(variantOptions, current, {
+            preferRdma: explicitGuideVariant.current !== selection.guide && selection.guide === 'pd-disaggregation'
+                && (catalog?.rdmaAccelerators || []).includes(selection.accelerator),
+        }));
+    }, [variantOptions, catalog, selection.guide, selection.accelerator]);
     const unavailableGuideVariants = useMemo(
         () => (selection.guide === 'pd-disaggregation'
             ? selectedGuide?.deploymentCapability?.unavailable_variants_by_accelerator?.[selection.accelerator] || []
@@ -973,14 +982,17 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
         ),
         [model, budget],
     );
-    const topologyInputs = {
+    const topologyInputs = isPd ? { guide: selection.guide, sweep: pdSweep, maxConfigurations: singleConfiguration ? 1 : MAX_EVALUATION_CONFIGURATIONS } : {
         guide: selection.guide,
         replicaVariants: singleConfiguration ? String(replicas) : replicaVariants,
         tensorParallelVariants: singleConfiguration ? String(tensorParallelSize) : tensorParallelVariants,
-        prefillReplicaVariants: singleConfiguration ? String(prefillReplicas) : prefillReplicaVariants,
-        prefillTensorParallelVariants: singleConfiguration ? String(prefillTensorParallelSize) : prefillTensorParallelVariants,
-        pdTopologyVariants: singleConfiguration ? '' : pdTopologyVariants,
     };
+    const supportsDisaggregatedSet = Boolean(sourceCapabilities?.disaggregatedSet || planResult?.workloadSummary?.disaggregatedSet || Object.keys(disaggregatedSet).length > 0);
+    const canPrepareSource = guideSourceMode === 'official' && Boolean(selection.guide && selection.accelerator && selection.modelServer);
+    // Accelerator totals in the topology fields are per Slice; a DisaggregatedSet multiplies them.
+    const sweepAvailable = supportsDisaggregatedSet && !singleConfiguration && !deployOnPublish;
+    const sweepCounts = sweepAvailable && sliceSweep.enabled ? sliceSweep.counts : [];
+    const sliceMultiplier = supportsDisaggregatedSet ? (sweepCounts.length ? Math.max(...sweepCounts) : disaggregatedSet.slices ?? recommendation?.guideDefault?.slices ?? 1) : 1;
     const guideSourceSummary = guideSourceMode === 'local'
         ? localGuidePath.trim() || 'Local guide path not set'
         : guideSourceMode === 'remote'
@@ -1016,6 +1028,10 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
         runtime: { image, maxModelLen, maxNumSeqs, gpuMemoryUtilization, blockSize, maxNumBatchedTokens },
         availableAccelerators: clusterHardware?.usableGpuCount ?? clusterHardware?.availableGpuCount,
     });
+    if (isPd && !pdSweepResult.errors.length) {
+        try { expandSliceVariants(pdSweepResult.variants, sweepCounts, singleConfiguration ? 1 : MAX_EVALUATION_CONFIGURATIONS); }
+        catch (error) { configurationInputErrors.push({ field: 'topologies', message: error.message }); }
+    }
     if (embedded && onPublished && !singleConfiguration && !deployOnPublish) {
         try { selectedOptimizationPlan(selection.guide, optimizationSelection); }
         catch (error) { configurationInputErrors.push({ field: 'optimizationSelection', message: error.message }); }
@@ -1125,12 +1141,6 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
 
     const updateCustomRows = (rows) => setCustomRows(rows);
 
-    const supportsDisaggregatedSet = Boolean(sourceCapabilities?.disaggregatedSet || planResult?.workloadSummary?.disaggregatedSet || Object.keys(disaggregatedSet).length > 0);
-    const canPrepareSource = guideSourceMode === 'official' && Boolean(selection.guide && selection.accelerator && selection.modelServer);
-    // Accelerator totals in the topology fields are per Slice; a DisaggregatedSet multiplies them.
-    const sweepAvailable = supportsDisaggregatedSet && !singleConfiguration && !deployOnPublish;
-    const sweepCounts = sweepAvailable && sliceSweep.enabled ? sliceSweep.counts : [];
-    const sliceMultiplier = supportsDisaggregatedSet ? (sweepCounts.length ? Math.max(...sweepCounts) : disaggregatedSet.slices ?? recommendation?.guideDefault?.slices ?? 1) : 1;
     const requiredAccelerators = topologyPreviewVariants.length ? Math.max(...topologyPreviewVariants.map(row => row.gpuCount)) * sliceMultiplier : null;
     const applyHistoryEntry = (entry) => {
         setDisaggregatedSet(current => ({
@@ -1138,15 +1148,16 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
             ...(entry.slices ? { slices: entry.slices } : {}),
             ...(entry.placementPolicy ? { placementPolicy: entry.placementPolicy } : {}),
         }));
-        if (entry.prefillReplicas) setPrefillReplicaVariants(String(entry.prefillReplicas));
-        if (entry.prefillTensorParallelSize) setPrefillTensorParallelVariants(String(entry.prefillTensorParallelSize));
+        setPdSweep(topologySweepFromConfiguration({ prefillReplicaCount: entry.prefillReplicas || 1,
+            prefillTpCount: entry.prefillTensorParallelSize || 1,
+            replicaCount: entry.decodeReplicas || 1, tpCount: entry.decodeTensorParallelSize || 1,
+        }));
         if (entry.decodeReplicas) setReplicaVariants(String(entry.decodeReplicas));
         if (entry.decodeTensorParallelSize) setTensorParallelVariants(String(entry.decodeTensorParallelSize));
-        if (entry.prefillReplicas || entry.decodeReplicas) setPdTopologyVariants('');
         setPlanResult(null);
     };
-    const previewInputs = JSON.stringify({ selection, model, modelSource, modelPath, image, guideSourceMode, localGuidePath, remoteGuideRepository, remoteGuideRef, remoteGuidePath, replicas, tensorParallelSize, prefillReplicas, prefillTensorParallelSize, replicaVariants, tensorParallelVariants, prefillReplicaVariants, prefillTensorParallelVariants, pdTopologyVariants, guideVariant, guideSettings, disaggregatedSet, maxModelLen, maxNumSeqs, gpuMemoryUtilization, blockSize, maxNumBatchedTokens, customParametersText });
-    useEffect(() => { setPlanResult(null); setServerFieldErrors([]); }, [previewInputs]);
+    const previewInputs = JSON.stringify({ selection, model, modelSource, modelPath, image, guideSourceMode, localGuidePath, remoteGuideRepository, remoteGuideRef, remoteGuidePath, replicas, tensorParallelSize, prefillReplicas, prefillTensorParallelSize, replicaVariants, tensorParallelVariants, pdSweep, guideVariant, guideSettings, disaggregatedSet, maxModelLen, maxNumSeqs, gpuMemoryUtilization, blockSize, maxNumBatchedTokens, customParametersText });
+    useEffect(() => { setPlanResult(null); setEditedManifest(null); setServerFieldErrors([]); }, [previewInputs]);
 
     useEffect(() => {
         setSourceCapabilities(null);
@@ -1170,7 +1181,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
     }, [canPrepareSource, selection, guideVariant, selectedClusterId, model, sourceRetry]);
 
     const showServerErrors = (messages) => {
-        const mapped = configurationServerErrors(messages, { customRows, sweepEnabled: !singleConfiguration, pdTopologyVariants: topologyInputs.pdTopologyVariants, embedded });
+        const mapped = configurationServerErrors(messages, { customRows, sweepEnabled: !singleConfiguration, topologyRows: isPd, embedded });
         setServerFieldErrors(mapped);
         setValidationSubmitted(true);
         if (mapped.length) window.requestAnimationFrame(() => focusConfigurationError(editorRef.current, mapped));
@@ -1221,6 +1232,7 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
         setPlanning(true);
         setPlanError('');
         setPlanResult(null);
+        setEditedManifest(null);
         setProgress('Preparing YAML and checking cluster capacity…');
         try {
             if (modelSource === 'auto-cache' && modelCacheValidation.state !== 'ready') {
@@ -1260,7 +1272,11 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
             const targetCluster = await requireSelectedCluster();
             if (configurationInputErrors.length) throw new Error(configurationInputErrors.map(error => error.message).join(' '));
             if (sweepAvailable && sliceSweep.enabled && sliceSweep.counts.length < 2) throw new Error('A Slice sweep needs at least two Slice counts; widen the range or disable the sweep.');
-            const variants = expandSliceVariants(expandConfigurationTopologies({ ...topologyInputs, guide: workload.guide }), sweepCounts);
+            const variants = expandSliceVariants(expandConfigurationTopologies({ ...topologyInputs, guide: workload.guide }), sweepCounts, isPd ? MAX_EVALUATION_CONFIGURATIONS : 16);
+            if (editedManifest !== null) {
+                validateImportManifest(editedManifest);
+                if (variants.length !== 1) throw new Error('Save YAML edits for one topology at a time. Select a single replica / TP / Slice combination.');
+            }
             const sweepGroup = sweepCounts.length ? `slice-sweep-${shortUuid()}` : null;
             const customParameters = customRows;
             const savedArtifacts = [];
@@ -1305,7 +1321,8 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                     guide_ref: workload.guide,
                     template_ref: variantPlan.source?.files?.[0],
                     guide_source: variantPlan.source,
-                    rendered_manifest: variantPlan.plannedDeployment?.content,
+                    rendered_manifest: editedManifest ?? variantPlan.plannedDeployment?.content,
+                    ...(editedManifest !== null ? { reference_manifest: variantPlan.plannedDeployment?.content } : {}),
                     deployment_bundle: variantPlan.deploymentBundle,
                     cluster_ref: {
                         id: targetCluster.serverId,
@@ -1455,22 +1472,6 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
         publishWorkload(workload, 'manual', advance);
     };
 
-    const usePdReportPreset = () => {
-        // Apply the report's topology ratios to the currently selected model.
-        const tp = liveModelAdvice?.recommendedTp || Number(tensorParallelSize) || 1;
-        setPrefillReplicas(1);
-        setReplicas(1);
-        setPrefillTensorParallelSize(tp);
-        setTensorParallelSize(tp);
-        // Preserve the report's four P:D ratios; capacity validation checks each one.
-        setPdTopologyVariants('1:1,2:2,1:3,3:1');
-        setPrefillReplicaVariants('1');
-        setReplicaVariants('1');
-        setPrefillTensorParallelVariants(String(tp));
-        setTensorParallelVariants(String(tp));
-        setPlanResult(null);
-    };
-
     const runAic = async (pdOnly = false) => {
         const availableGpus = budget;
         const aicSystem = aicSystemNameForHardware(clusterHardware);
@@ -1528,12 +1529,10 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
             return;
         }
         setSelection({ guide: guide.id, accelerator: accelerator.id, modelServer: sharedContext?.modelServer?.toLowerCase() || modelServer.id });
-        setPrefillReplicas(isPd ? candidate.prefillReplicas || 1 : 1);
-        setPrefillTensorParallelSize(isPd ? candidate.prefillTp || 1 : 1);
-        setReplicas(candidate.decodeReplicas || 1);
-        setTensorParallelSize(candidate.decodeTp || 1);
-        // Explicit P:D pairs otherwise override the recommended replica counts.
-        setPdTopologyVariants('');
+        setPdSweep(topologySweepFromConfiguration({ prefillReplicaCount: candidate.prefillReplicas || 1,
+            prefillTpCount: candidate.prefillTp || 1,
+            replicaCount: candidate.decodeReplicas || 1, tpCount: candidate.decodeTp || 1,
+        }));
         setReplicaVariants(String(candidate.decodeReplicas || 1));
         setTensorParallelVariants(String(candidate.decodeTp || 1));
         setAicCandidates(null);
@@ -1707,9 +1706,9 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                                 </div>
                                 <div className="mt-3 grid gap-3 md:grid-cols-3">
                                     <ConfigurationField field="image"><span className={labelClass}>Runtime image</span><input className={inputClass} list="runtime-image-suggestions" value={image} onChange={(event) => { setImageTouched(true); setImage(event.target.value); }} /><datalist id="runtime-image-suggestions">{[...new Set([effectiveDefaultImage, ...(sharedContext?.cachedRuntimeImages || [])].filter(Boolean))].map((cachedImage) => <option key={cachedImage} value={cachedImage} />)}</datalist></ConfigurationField>
-                                    <ConfigurationField field="replicaVariants"><span className={labelClass}>{selection.guide === 'pd-disaggregation' ? 'Decode replicas' : 'Replicas'}</span><input type="number" min="1" step="1" className={inputClass} value={replicas} onChange={(event) => setReplicas(event.target.value)} /></ConfigurationField>
-                                    <ConfigurationField field="tensorParallelVariants"><span className={labelClass}>{selection.guide === 'pd-disaggregation' ? 'Decode TP' : 'TP'}</span><input type="number" min="1" step="1" className={inputClass} value={tensorParallelSize} onChange={(event) => setTensorParallelSize(event.target.value)} /></ConfigurationField>
-                                    {selection.guide === 'pd-disaggregation' && <><ConfigurationField field="prefillReplicaVariants"><span className={labelClass}>Prefill replicas</span><input type="number" min="1" step="1" className={inputClass} value={prefillReplicas} onChange={(event) => setPrefillReplicas(event.target.value)} /></ConfigurationField><ConfigurationField field="prefillTensorParallelVariants"><span className={labelClass}>Prefill TP</span><input type="number" min="1" step="1" className={inputClass} value={prefillTensorParallelSize} onChange={(event) => setPrefillTensorParallelSize(event.target.value)} /></ConfigurationField></>}
+                                    {!isPd && <><ConfigurationField field="replicaVariants"><span className={labelClass}>Replicas</span><input type="number" min="1" step="1" className={inputClass} value={replicas} onChange={(event) => setReplicas(event.target.value)} /></ConfigurationField>
+                                    <ConfigurationField field="tensorParallelVariants"><span className={labelClass}>TP</span><input type="number" min="1" step="1" className={inputClass} value={tensorParallelSize} onChange={(event) => setTensorParallelSize(event.target.value)} /></ConfigurationField></>}
+
                                 </div>
                                 <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-400">
                                     <span>Accelerators: {requiredAccelerators ?? '—'} / {budget}</span>
@@ -1753,10 +1752,10 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                             </div>
                         )}
                         {selection.guide === 'pd-disaggregation' && <div className="mt-3 grid gap-3 md:grid-cols-2">
-                                <ConfigurationField field="guideVariant"><span className={labelClass}>P/D Guide variant</span><select className={inputClass} value={guideVariant} onChange={(event) => { setGuideVariant(event.target.value); setGuideSettings(current => ({ routerValues: current.routerValues || '' })); }}>{guideVariants.map((variant) => <option key={variant} value={variant}>{variantLabel(variant)}</option>)}{unavailableGuideVariants.map((item) => <option key={item.id} value={item.id} disabled>{`${item.label} (unavailable)`}</option>)}</select><FieldHelp>Set NIC count in Cache & network. Network selectors and alignment constraints come from the selected Guide.</FieldHelp></ConfigurationField>
+                                <ConfigurationField field="guideVariant"><span className={labelClass}>P/D Guide variant</span><select className={inputClass} value={guideVariant} onChange={(event) => { explicitGuideVariant.current = selection.guide; setGuideVariant(event.target.value); setGuideSettings(current => ({ routerValues: current.routerValues || '' })); }}>{guideVariants.map((variant) => <option key={variant} value={variant}>{variantLabel(variant)}</option>)}{unavailableGuideVariants.map((item) => <option key={item.id} value={item.id} disabled>{`${item.label} (unavailable)`}</option>)}</select><FieldHelp>RDMA is selected by default when the cluster advertises the profile’s RDMA device class. Set NIC count in Cache & network. Network selectors and alignment constraints come from the selected Guide.</FieldHelp></ConfigurationField>
                             </div>}
                         {selection.guide === 'tiered-prefix-cache' && <div className="mt-3 grid gap-3 md:grid-cols-2">
-                                <ConfigurationField field="guideVariant"><span className={labelClass}>Tiered-prefix-cache variant</span><select className={inputClass} value={guideVariant} onChange={(event) => { setGuideVariant(event.target.value); setGuideSettings(current => ({ routerValues: current.routerValues || '' })); }}>{guideVariants.map((variant) => <option key={variant} value={variant}>{variantLabel(variant)}</option>)}</select><FieldHelp>Create separate base and offload artifacts, then select both in one Evaluation for a direct pairwise comparison.</FieldHelp></ConfigurationField>
+                                <ConfigurationField field="guideVariant"><span className={labelClass}>Tiered-prefix-cache variant</span><select className={inputClass} value={guideVariant} onChange={(event) => { explicitGuideVariant.current = selection.guide; setGuideVariant(event.target.value); setGuideSettings(current => ({ routerValues: current.routerValues || '' })); }}>{guideVariants.map((variant) => <option key={variant} value={variant}>{variantLabel(variant)}</option>)}</select><FieldHelp>Create separate base and offload artifacts, then select both in one Evaluation for a direct pairwise comparison.</FieldHelp></ConfigurationField>
 
                             </div>}
                         {!['pd-disaggregation', 'tiered-prefix-cache'].includes(selection.guide) && guideVariants.length > 1 && <div className="mt-3 grid gap-3 md:grid-cols-2">
@@ -1819,15 +1818,17 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                                 </div>)}
                             </div>}
                         </section>}
-                        {!singleConfiguration && <fieldset className="configuration-comparison mt-3 min-w-0 rounded-lg border border-slate-800 p-4">
-                            <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-xs text-slate-400">Enter one value, or comma-separated values to compare up to 16 configurations.</p>{selection.guide === 'pd-disaggregation' && <button type="button" onClick={usePdReportPreset} className="text-xs text-violet-300 underline">Apply P:D ratios (1:1, 2:2, 1:3, 3:1)</button>}</div>
-                            <div className="mt-3 grid gap-3 md:grid-cols-2">
-                                {selection.guide === 'pd-disaggregation' && <><ConfigurationField field="pdTopologyVariants" className="md:col-span-2"><span className={labelClass}>P:D replica pairs</span><input className={inputClass} value={pdTopologyVariants} placeholder="1:1,2:2,1:3,3:1" onChange={(event) => setPdTopologyVariants(event.target.value)} /><FieldHelp>Each P:D pair becomes one configuration and replaces the Prefill/Decode replica fields below, which are then disabled. Without pairs, every Prefill × Decode value combination is tested. TP fields still apply. For a DisaggregatedSet Guide these are replicas per Slice.</FieldHelp></ConfigurationField><ConfigurationField field="prefillReplicaVariants"><span className={labelClass}>Prefill replicas</span><input className={inputClass} value={prefillReplicaVariants} disabled={Boolean(pdTopologyVariants.trim())} placeholder="1,2,3" onChange={(event) => setPrefillReplicaVariants(event.target.value)} /><span className="mt-2 flex items-center gap-2"><span className="text-[10px] text-slate-500">Quick select</span>{['1', '1,2', '1,2,3'].map(value => <button key={value} type="button" disabled={selection.guide === 'pd-disaggregation' && Boolean(pdTopologyVariants.trim())} onClick={() => setPrefillReplicaVariants(value)} aria-pressed={prefillReplicaVariants === value} className={`rounded-md border px-2.5 py-1.5 text-[10px] transition disabled:opacity-40 ${prefillReplicaVariants === value ? 'border-cyan-400/60 bg-cyan-400/10 text-cyan-200' : 'border-slate-700 text-slate-400 hover:border-cyan-500/50 hover:text-cyan-200'}`}>{value}</button>)}</span></ConfigurationField>
-<ConfigurationField field="prefillTensorParallelVariants" suggestion={liveModelAdvice && String(prefillTensorParallelVariants).split(',').some(value => Number(value) < liveModelAdvice.recommendedTp) && <button type="button" className="mt-1 block text-xs text-amber-300 underline" onClick={() => { setPrefillTensorParallelVariants(String(liveModelAdvice.recommendedTp)); setPlanResult(null); }}>Apply suggested TP ({liveModelAdvice.recommendedTp})</button>}><span className={labelClass}>Prefill tensor parallel size</span><input className={inputClass} value={prefillTensorParallelVariants} placeholder="4" onChange={(event) => setPrefillTensorParallelVariants(event.target.value)} /><span className="mt-2 flex items-center gap-2"><span className="text-[10px] text-slate-500">Quick select</span>{['1', '1,2', '1,2,4'].map(value => <button key={value} type="button" disabled={false} onClick={() => setPrefillTensorParallelVariants(value)} aria-pressed={prefillTensorParallelVariants === value} className={`rounded-md border px-2.5 py-1.5 text-[10px] transition disabled:opacity-40 ${prefillTensorParallelVariants === value ? 'border-cyan-400/60 bg-cyan-400/10 text-cyan-200' : 'border-slate-700 text-slate-400 hover:border-cyan-500/50 hover:text-cyan-200'}`}>{value}</button>)}</span></ConfigurationField></>}
-<ConfigurationField field="replicaVariants"><span className={labelClass}>{selection.guide === 'pd-disaggregation' ? 'Decode replicas' : 'Replicas'}</span><input className={inputClass} value={replicaVariants} disabled={selection.guide === 'pd-disaggregation' && Boolean(pdTopologyVariants.trim())} placeholder="1,2,3" onChange={(event) => setReplicaVariants(event.target.value)} /><span className="mt-2 flex items-center gap-2"><span className="text-[10px] text-slate-500">Quick select</span>{['1', '1,2', '1,2,3'].map(value => <button key={value} type="button" disabled={selection.guide === 'pd-disaggregation' && Boolean(pdTopologyVariants.trim())} onClick={() => setReplicaVariants(value)} aria-pressed={replicaVariants === value} className={`rounded-md border px-2.5 py-1.5 text-[10px] transition disabled:opacity-40 ${replicaVariants === value ? 'border-cyan-400/60 bg-cyan-400/10 text-cyan-200' : 'border-slate-700 text-slate-400 hover:border-cyan-500/50 hover:text-cyan-200'}`}>{value}</button>)}</span></ConfigurationField><ConfigurationField field="tensorParallelVariants" suggestion={liveModelAdvice && String(tensorParallelVariants).split(',').some(value => Number(value) < liveModelAdvice.recommendedTp) && <button type="button" className="mt-1 block text-xs text-amber-300 underline" onClick={() => { setTensorParallelVariants(String(liveModelAdvice.recommendedTp)); setPlanResult(null); }}>Apply suggested TP ({liveModelAdvice.recommendedTp})</button>}><span className={labelClass}>{selection.guide === 'pd-disaggregation' ? 'Decode tensor parallel size' : 'Tensor parallel size'}</span><input className={inputClass} value={tensorParallelVariants} placeholder="4" onChange={(event) => setTensorParallelVariants(event.target.value)} /><span className="mt-2 flex items-center gap-2"><span className="text-[10px] text-slate-500">Quick select</span>{['1', '1,2', '1,2,4'].map(value => <button key={value} type="button" disabled={false} onClick={() => setTensorParallelVariants(value)} aria-pressed={tensorParallelVariants === value} className={`rounded-md border px-2.5 py-1.5 text-[10px] transition disabled:opacity-40 ${tensorParallelVariants === value ? 'border-cyan-400/60 bg-cyan-400/10 text-cyan-200' : 'border-slate-700 text-slate-400 hover:border-cyan-500/50 hover:text-cyan-200'}`}>{value}</button>)}</span></ConfigurationField>
-                            </div>
-                        </fieldset>}
-                        {!singleConfiguration && <TopologyPreview variants={topologyPreviewVariants} isPd={selection.guide === 'pd-disaggregation'} />}
+                        {isPd ? <TopologyPreview variants={pdSweepResult.variants} sweep={pdSweep} analysis={pdSweepResult} isPd onChange={setPdSweep} maxConfigurations={singleConfiguration ? 1 : MAX_EVALUATION_CONFIGURATIONS} perSlice={supportsDisaggregatedSet}
+                            suggestion={liveModelAdvice && topologyPreviewVariants.some(row => row.tpCount < liveModelAdvice.recommendedTp || row.prefillTpCount < liveModelAdvice.recommendedTp) && <Button type="button" variant="link" size="sm" onClick={() => setPdSweep(current => ({ ...current, prefillTensorParallelVariants: String(liveModelAdvice.recommendedTp), tensorParallelVariants: String(liveModelAdvice.recommendedTp) }))}>Apply suggested TP ({liveModelAdvice.recommendedTp}) to all configurations</Button>} /> : !singleConfiguration && <>
+                            <fieldset className="configuration-comparison mt-3 min-w-0 rounded-lg border border-slate-800 p-4">
+                                <p className="text-xs text-slate-400">Enter one value, or comma-separated values to compare up to 16 configurations.</p>
+                                <div className="mt-3 grid gap-3 md:grid-cols-2">
+                                    <ConfigurationField field="replicaVariants"><span className={labelClass}>Replicas</span><input className={inputClass} value={replicaVariants} placeholder="1,2,3" onChange={event => setReplicaVariants(event.target.value)} /><span className="mt-2 flex items-center gap-2"><span className="text-[10px] text-theme-muted">Quick select</span>{['1', '1,2', '1,2,3'].map(value => <Button key={value} type="button" variant={replicaVariants === value ? 'secondary' : 'ghost'} size="xs" aria-pressed={replicaVariants === value} onClick={() => setReplicaVariants(value)}>{value}</Button>)}</span></ConfigurationField>
+                                    <ConfigurationField field="tensorParallelVariants" suggestion={liveModelAdvice && String(tensorParallelVariants).split(',').some(value => Number(value) < liveModelAdvice.recommendedTp) && <Button type="button" variant="link" size="sm" onClick={() => setTensorParallelVariants(String(liveModelAdvice.recommendedTp))}>Apply suggested TP ({liveModelAdvice.recommendedTp})</Button>}><span className={labelClass}>Tensor parallel size</span><input className={inputClass} value={tensorParallelVariants} placeholder="1,2,4" onChange={event => setTensorParallelVariants(event.target.value)} /><span className="mt-2 flex items-center gap-2"><span className="text-[10px] text-theme-muted">Quick select</span>{['1', '1,2', '1,2,4'].map(value => <Button key={value} type="button" variant={tensorParallelVariants === value ? 'secondary' : 'ghost'} size="xs" aria-pressed={tensorParallelVariants === value} onClick={() => setTensorParallelVariants(value)}>{value}</Button>)}</span></ConfigurationField>
+                                </div>
+                            </fieldset>
+                            <TopologyPreview variants={topologyPreviewVariants} />
+                        </>}
                         {(selection.guide === 'pd-disaggregation' || supportsDisaggregatedSet) && <DisaggregatedSetSettings
                             available={supportsDisaggregatedSet} preparation={sourcePreparation} canRetry={canPrepareSource}
                             onRetry={() => setSourceRetry(current => current + 1)} disaggregatedSet={disaggregatedSet}
@@ -1923,12 +1924,13 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                             </div>
                             {(validation.errors || []).filter(error => !serverFieldErrors.some(item => item.message === error) && !String(planError || '').includes(error)).map((error) => <p key={error} className="mb-1 text-xs text-red-300">Error: {error}</p>)}
                             {(validation.warnings || []).map((warning) => <p key={warning} className="mb-1 text-xs text-amber-300">Warning: {warning}</p>)}
-                            {summary.recommendedTensorParallelSize && (summary.recommendedTensorParallelSize > Number(tensorParallelSize) || (selection.guide === 'pd-disaggregation' && summary.recommendedTensorParallelSize > Number(prefillTensorParallelSize))) && <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border border-cyan-500/30 bg-cyan-500/5 p-3"><p className="text-xs text-cyan-100">Recommended topology for this model and selected card budget: {selection.guide === 'pd-disaggregation' ? `P TP ${summary.recommendedTensorParallelSize} · D TP ${summary.recommendedTensorParallelSize}` : `${Math.max(1, Math.min(Number(replicas), summary.maxRecommendedReplicas || 1))} replica × TP ${summary.recommendedTensorParallelSize}`}.</p><button type="button" onClick={() => { const nextReplicas = Math.max(1, Math.min(Number(replicas), summary.maxRecommendedReplicas || 1)); setReplicas(nextReplicas); setReplicaVariants(String(nextReplicas)); setTensorParallelSize(summary.recommendedTensorParallelSize); setTensorParallelVariants(String(summary.recommendedTensorParallelSize)); if (selection.guide === 'pd-disaggregation') { setPrefillTensorParallelSize(summary.recommendedTensorParallelSize); setPrefillTensorParallelVariants(String(summary.recommendedTensorParallelSize)); } setPlanResult(null); }} className="border border-cyan-500 px-3 py-1.5 text-[10px] font-semibold text-cyan-200">Apply recommendation</button></div>}
+                            {summary.recommendedTensorParallelSize && (summary.recommendedTensorParallelSize > Number(tensorParallelSize) || (selection.guide === 'pd-disaggregation' && summary.recommendedTensorParallelSize > Number(prefillTensorParallelSize))) && <div className="mt-3 flex flex-wrap items-center justify-between gap-3 border border-cyan-500/30 bg-cyan-500/5 p-3"><p className="text-xs text-cyan-100">Recommended topology for this model and selected card budget: {selection.guide === 'pd-disaggregation' ? `P TP ${summary.recommendedTensorParallelSize} · D TP ${summary.recommendedTensorParallelSize}` : `${Math.max(1, Math.min(Number(replicas), summary.maxRecommendedReplicas || 1))} replica × TP ${summary.recommendedTensorParallelSize}`}.</p><button type="button" onClick={() => { const nextReplicas = Math.max(1, Math.min(Number(replicas), summary.maxRecommendedReplicas || 1)); setReplicas(nextReplicas); setReplicaVariants(String(nextReplicas)); setTensorParallelSize(summary.recommendedTensorParallelSize); setTensorParallelVariants(String(summary.recommendedTensorParallelSize)); if (isPd) setPdSweep(current => ({ ...current, prefillTensorParallelVariants: String(summary.recommendedTensorParallelSize), tensorParallelVariants: String(summary.recommendedTensorParallelSize) })); setPlanResult(null); }} className="border border-cyan-500 px-3 py-1.5 text-[10px] font-semibold text-cyan-200">Apply recommendation</button></div>}
                             <div className="mt-3">
                                 <div className="mb-1 flex items-center gap-2 text-[11px] text-slate-400">
                                     <FileCode className="h-3.5 w-3.5" /> Deployment configuration preview (published artifact is the deployment source)
                                 </div>
-                                <YamlPreview content={planResult.plannedDeployment?.content || ''} prominent />
+                                <YamlPreview content={editedManifest ?? planResult.plannedDeployment?.content ?? ''} onChange={setEditedManifest} disabled={operationBusy} prominent />
+                <p className="mt-2 text-xs text-theme-muted">Edit YAML before saving. Formatting and resource annotations are supported; use the configuration fields for model, topology, runtime and storage changes. Edits are validated when you continue.</p>
                             </div>
                             <div className="mt-4 flex flex-wrap items-center justify-end gap-3">
                                 <button type="button" disabled={validation.status === 'invalid' || publishing} onClick={() => sendGuideToEvaluate()}
@@ -1966,7 +1968,8 @@ export default function OptimizationConfiguration({ onNavigate, onCancel, onPubl
                     <p className="mt-1 text-[10px] text-slate-500">Source {planResult.deploymentBundle.sourceCommit} · Router {planResult.deploymentBundle.helm?.version}. These inputs are saved and reused during deployment.</p>
                     {[...(planResult.deploymentBundle.helm?.values || []), ...(planResult.deploymentBundle.resources || [])].map(file => <YamlPreview key={file.name} title={file.name} content={file.content} defaultOpen={false} />)}
                 </div>}
-                <YamlPreview content={planResult.plannedDeployment?.content || ''} prominent />
+                <YamlPreview content={editedManifest ?? planResult.plannedDeployment?.content ?? ''} onChange={setEditedManifest} disabled={operationBusy} prominent />
+                <p className="mt-2 text-xs text-theme-muted">Edit YAML before saving. Formatting and resource annotations are supported; use the configuration fields for model, topology, runtime and storage changes. Edits are validated when you continue.</p>
             </section>}
             {embedded && planResult?.plannedDeployment?.content && <div className="flex justify-end gap-2">
                 {!deployOnPublish && <button type="button" disabled={validation.status === 'invalid' || publishing} onClick={() => sendGuideToEvaluate('another')} className="inline-flex h-9 items-center rounded-lg border border-slate-700 px-4 text-xs text-slate-200 hover:border-cyan-500/50 disabled:opacity-40">Save &amp; add another</button>}

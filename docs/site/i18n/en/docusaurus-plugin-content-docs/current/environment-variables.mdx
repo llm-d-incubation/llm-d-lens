@@ -1,12 +1,9 @@
 ---
 title: Environment Variables
-description: Environment variables that configure the Lens backend, database, and Model Service gateway.
+description: Environment variables that configure the Lens backend, database, Model Service gateway, Agent Tools (MCP), and standalone llmd CLI.
 ---
 
-Set these before starting the backend (`hack/run-backend.sh`) or export
-them in your shell/Compose/Helm values. Most have working defaults for local
-development; production and Model Service gateway deployments typically need
-to set the auth and gateway groups explicitly.
+Set these before starting the backend (`hack/run-backend.sh`), exporting them in your shell/Compose/Helm values, or configuring the standalone `llmd` CLI (`apps/lens`). Most have working defaults for local development; production and Model Service gateway deployments typically need to set the auth and gateway groups explicitly.
 
 ## Auth and security
 
@@ -31,7 +28,7 @@ to set the auth and gateway groups explicitly.
 
 ## Model Service gateway (shared llm-d Gateway)
 
-Gateway Mode: the cluster installs one shared Gateway (provider-selectable at cluster creation); model services publish HTTPRoute/IPP resources against it. Lens keeps no Edge proxy or tunnel.
+Gateway Mode: the cluster installs one shared Gateway (provider-selectable at cluster creation); model services publish `HTTPRoute` / Inference Payload Processor (IPP) resources against it. Lens keeps no Edge proxy or tunnel.
 
 | Variable | Description | Default |
 | --- | --- | --- |
@@ -39,28 +36,47 @@ Gateway Mode: the cluster installs one shared Gateway (provider-selectable at cl
 | `LENS_PUBLIC_HOST` | Hostname/IP external clients use to reach the Lens host; combined with each cluster's exposed port for the Gateway URL. Defaults to the request host. | `""` |
 | `LENS_GATEWAY_SERVICE_TYPE` | Sets the Gateway data-plane Service type for clusters without a LoadBalancer (e.g. local kind). `LoadBalancer`, `NodePort`, or `ClusterIP`; unset keeps the provider default. Rendered through the provider's own mechanism: an `EnvoyProxy` for Envoy AI Gateway, a `ConfigMap` `infrastructure.parametersRef` for Istio. | unset |
 | `LENS_NODE_SYSCTL_IMAGE` | Image the node-sysctl DaemonSet runs to set `fs.inotify.max_user_instances` on every node (needs `sh`/`nsenter`/`sysctl`); override when a cluster cannot pull the default. | `busybox:1.36` |
-| `LENS_MODEL_HEALTH_INTERVAL_SECONDS` | How often published providers are health-checked (each run re-probes HTTPRoute / InferencePool / EPP / model server). | `10` |
+| `LENS_MODEL_HEALTH_INTERVAL_SECONDS` | How often published providers are health-checked (each run re-probes `HTTPRoute` / `InferencePool` / EPP / model server). | `10` |
 | `LENS_MODEL_RECONCILE_INTERVAL_SECONDS` | How often the shared Gateway and model routes are reconciled automatically. | `300` |
 | `LENS_GATEWAY_EXPOSURE_INTERVAL_SECONDS` | How often Lens re-establishes the public `0.0.0.0` tunnel for each cluster's exposed Gateway port. | `60` |
 | `LENS_GATEWAY_USAGE_INTERVAL_SECONDS` | How often Lens syncs llm-d EPP token counters from each cluster's Prometheus into the usage ledger. Set `0` to disable. | `60` |
 | `LENS_WELCOME_CHECK_INTERVAL_SECONDS` | How often Lens refreshes and stores the Welcome page issue snapshot. Set `0` to disable the background check. | `60` |
-| `LENS_MODEL_GATEWAY_AUTHZ_HOST` | Fallback Lens ext_authz address when a cluster leaves its per-cluster **Lens authz address** unset. Prefer the per-cluster value (create/edit cluster form → `GET /api/cluster/lens-hosts`). When set, the Gateway injects the caller identity (`x-llm-d-inference-fairness-id`) for per-user usage. | *(unset)* |
-| `LENS_MODEL_GATEWAY_AUTHZ_PORT` | Port of the Lens ext_authz backend used by the Gateway. | `8081` |
 | `LENS_MODEL_GATEWAY_AUTHZ_TLS_INSECURE` | Originate TLS from the Istio shared Gateway to the `lens-authz` Service while **skipping certificate verification**. Only needed when Lens serves authz over HTTPS with a certificate Istio cannot verify, such as the local self-signed certificate. **Security warning:** this allows an on-path attacker to impersonate the authz service, forge approval, and inject identity headers; use only on a trusted local/dev network, never in production. The insecure DestinationRule is removed when the switch is disabled. `hack/lens-local.sh` and the installer-generated `lensctl.sh` enable it automatically when they serve HTTPS. Disable it only when authz uses plain HTTP or a certificate the cluster trusts; otherwise authz fails closed. | unset (auto-HTTPS: `1`) |
 
-The Inference Payload Processor's Helm chart and version are not environment-configurable — they're
-fixed constants in `llm_d_lens/versions/__init__.py` (`oci://ghcr.io/llm-d/charts/payload-processor`)
-and the pinned version in `llm_d_lens/versions/llm_d_stack.yaml`.
+The `ext_authz` host is configured per cluster via `gatewayAuthzHost` (create/edit cluster form → `GET /api/cluster/lens-hosts`) and automatically targets Lens' live serving port, while the in-cluster `lens-authz` Service port stays fixed at `8081`. The Inference Payload Processor (IPP) Helm chart and version are not environment-configurable — they are fixed constants in `llm_d_lens/versions/__init__.py` (`oci://ghcr.io/llm-d/charts/payload-processor`) and the pinned version in `llm_d_lens/versions/llm_d_stack.yaml`.
+
+## Agent Tools (Lens MCP) and Assistant
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `LENS_MCP_PROFILES` | Comma-separated tool profiles exposed by the Agent Task MCP endpoint (`POST /api/mcp`): `core`, `serving`, `storage`, `simulation`, `lens-settings`, `cluster-admin`. `core` is always enabled. | `core` |
+| `LENS_MCP_GATEWAY_TOKEN` | Optional model inference token (`lens-mk-*`) created in the Lens UI and passed to the server environment for the `model_service_test` MCP tool. | unset |
+| `LENS_MCP_STORAGE_PATH_PREFIXES` | Comma-separated absolute directory prefixes allowed for `hostPath` volumes in `storage_volume_create`. When unset, `hostPath` volume creation via MCP is disabled. | unset |
+| `PRISM_GUIDE_LOCAL_ROOTS` | OS-path-separated (`:` on Linux/macOS) allowed root directories on the Lens host when a deployment or experiment specifies `source.mode="local"`. | current working directory (`os.getcwd()`) |
+| `PRISM_MCP_URL` | Streamable HTTP URL used by the internal agentic planning client (`AgenticMcpClient`) to call Lens Assistant's catalog endpoint. | `http://127.0.0.1:3000/api/assistant/mcp` |
+| `PRISM_MCP_CA_FILE` | Optional CA bundle file path used by `AgenticMcpClient` to verify TLS when `PRISM_MCP_URL` uses HTTPS. | unset |
 
 ## Storage and cache paths
 
 | Variable | Description | Default |
 | --- | --- | --- |
+| `LENS_DATA_DIR` | Root directory for Lens persistent application data (credentials, evaluations, and `llmd` local state under `<LENS_DATA_DIR>/llmd`). | `$XDG_DATA_HOME/lens` (`~/.local/share/lens` on Linux; `%LOCALAPPDATA%\lens\data` on Windows) |
+| `LENS_CACHE_DIR` | Root directory for Lens caches, including `llm-d` checkouts (`$LENS_CACHE_DIR/llm-d`) and `llmd` cloned repositories (`$LENS_CACHE_DIR/repos`). | `$XDG_CACHE_HOME/lens` (`~/.cache/lens` on Linux; `%LOCALAPPDATA%\lens\cache` on Windows) |
 | `MODEL_CACHE_DIR` | Where downloaded model weights are cached per cluster. | `~/.llm-d-bench/model-cache` (legacy import fallback) |
 | `STORAGE_VOLUME_DIR` | Root for managed storage volumes. | `~/.cache/llm-d-bench/storage` (legacy import fallback) |
 | `AI_PROVIDER_DIR` | Where external-provider configuration is persisted. | `~/.cache/llm-d-bench/ai-providers` (legacy import fallback) |
 | `LENS_RUNTIME_DIR` / `LENS_SCRATCH_DIR` | Runtime/scratch directories for backend-managed processes (port-forwards, temp files). | `LENS_RUNTIME_DIR`: `$XDG_RUNTIME_DIR/lens` if `XDG_RUNTIME_DIR` is set; otherwise `~/.cache/lens/tmp/runtime`<br />`LENS_SCRATCH_DIR`: `~/.cache/lens/tmp` |
 | `HF_TOKEN` | Hugging Face token used to download gated models. | — (required, no default) |
+
+## Standalone CLI (`llmd`)
+
+These variables configure the standalone `llmd` engine CLI (`apps/lens`, package `llm-d-lens-engine`), in addition to `LENS_DATA_DIR` and `LENS_CACHE_DIR` above:
+
+| Variable | Description | Default |
+| --- | --- | --- |
+| `LLMD_NAMESPACE` | Default target Kubernetes/OpenShift namespace when `-n` / `--namespace` is omitted. | unset (uses current kube context namespace; `llmd render` falls back to `default`) |
+| `LLMD_STATE_DIR` | Local directory for registered stack sources (`sources.yaml`) and rollout drainer logs; overridden by `--state-dir`. | `$LENS_DATA_DIR/llmd` |
+| `LLMD_KUBE_CLI` | Default Kubernetes CLI binary (`kubectl` or `oc`); overridden by `--kube-cli`. | `kubectl` |
 
 ## Evaluation, simulation and agentic planning
 
@@ -87,14 +103,13 @@ and the pinned version in `llm_d_lens/versions/llm_d_stack.yaml`.
 | `LLM_D_BENCH_NAMESPACE_PREFIX` | Prefix for namespaces created by the deployment runtime. | `llmd-` |
 | `LLM_D_BENCH_READINESS_TIMEOUT_SECONDS` / `LLM_D_BENCH_KUBECTL_TIMEOUT_SECONDS` | Deployment readiness and command timeouts. | `900` / `300` |
 | `LLM_D_BENCH_RETAIN_NAMESPACE_ON_FAILURE` | Retains failed deployment namespaces for troubleshooting. | `true` |
-| `PRISM_MODEL_API_PUBLIC_HOST` | Optional externally reachable host for Model API port-forward listeners. | `""` (localhost only) |
+| `LENS_IMAGE_PULLER_IMAGE` | Container image used by the `lens-image-puller` DaemonSet (`lens-images` namespace) to pre-pull runtime and router images onto cluster nodes via `nsenter`/`crictl`. | `busybox:1.36` |
+| `LENS_KUBECONFIG_EGRESS_ALLOWLIST` | Comma-separated hostnames or CIDRs permitted for kubeconfig API server connections in addition to the default egress policy (can allow loopback/link-local for local development, never cloud metadata endpoints). | unset |
+| `PRISM_MODEL_API_PUBLIC_HOST` | *(Legacy; unused in the current backend)* Passed through by `hack/lens-local.sh` for legacy port-forward listeners. | `""` |
 | `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | Standard proxy variables; the backend always adds each cluster's own API server host to `NO_PROXY` regardless of what's inherited, to avoid tunneling cluster-local traffic through an outbound proxy. | `HTTP_PROXY`: `""`<br />`HTTPS_PROXY`: `""`<br />`NO_PROXY`: `""` |
 | `LENS_TRUSTED_AI_PROVIDER_PROXY` | Optional exact HTTPS proxy URL for external AI providers. When unset, an inherited `HTTPS_PROXY`/`ALL_PROXY` is trusted by default so the original hostname and SNI are sent through it. A mismatched value keeps application-side IP pinning. | unset |
 
-The local launcher does not load a target-node configuration file or inject
-`LLM_D_BENCH_*` defaults. These deployment defaults belong to the backend;
-explicit environment overrides still work. See [CLI Reference](/cli-reference)
-for target-node preflight and argument precedence.
+The local launcher does not load a target-node configuration file or inject `LLM_D_BENCH_*` defaults. These deployment defaults belong to the backend; explicit environment overrides still work. See [CLI Reference](/cli-reference) for target-node preflight and argument precedence.
 
 ### Kubernetes backend selection
 
@@ -106,17 +121,8 @@ for target-node preflight and argument precedence.
 | Only `PRISM_KUBERNETES_READ_BACKEND=sdk` | SDK | CLI |
 | Only `PRISM_KUBERNETES_READ_BACKEND=cli` | CLI | CLI |
 
-The full backend variable overrides the legacy read-only variable. Invalid
-values fail. Restart the backend after changing its environment. Dependencies
-come from `apps/backend/pyproject.toml`; from the repository root install them
-in the backend environment with `pip install -e apps/backend`.
+The full backend variable overrides the legacy read-only variable. Invalid values fail. Restart the backend after changing its environment. Dependencies come from `apps/backend/pyproject.toml`; from the repository root install them in the backend environment with `pip install -e apps/backend`.
 
-Unsupported command forms choose CLI **before execution**; an SDK request failure
-never retries through CLI. Keep kubectl installed: client-side apply, Helm/Kustomize,
-exec, port-forward, streaming/workload-selector logs, unsupported rollout/wait
-and advanced flags retain CLI behavior. SDK mode does not eliminate those tools
-or guarantee remote API reachability.
+Unsupported command forms choose CLI **before execution**; an SDK request failure never retries through CLI. Keep kubectl installed: client-side apply, Helm/Kustomize, exec, port-forward, streaming/workload-selector logs, unsupported rollout/wait, and advanced flags retain CLI behavior. SDK mode does not eliminate those tools or guarantee remote API reachability.
 
-Grep `os.environ.get(...)`/`os.getenv(...)` under `apps/backend/src/llm_d_lens/` for the full,
-authoritative list — this page covers the ones you're most likely to need to
-set.
+Grep `os.environ.get(...)`/`os.getenv(...)` under `apps/backend/src/llm_d_lens/` (and `apps/lens/lens/` for `llmd`) for the full, authoritative list — this page covers the ones you're most likely to need to set.

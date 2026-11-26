@@ -33,7 +33,7 @@ The standalone Optimization prototype (`optimization-workspace`, `opt-define`,
 `opt-search`, `opt-deploy`, `opt-benchmark`, `opt-performance`) and the
 `optimization-deploy` workspace have been removed. Old links now open your first
 accessible sidebar page. Use **Inference → Model Catalog** for deployment configuration and
-**Evaluation → New Task** for benchmarks. Evaluation and Simulation task details
+**Evaluation → New Task** for benchmarks. Evaluation and Trace Replayer task details
 remain available from their task lists; existing configurations, deployments and
 results are unchanged.
 
@@ -86,6 +86,43 @@ physical total is insufficient, reduce replicas / TP before generating YAML.
 **View YAML** lets you inspect a saved configuration. Editing its YAML saves a new
 configuration and keeps the original.
 
+
+The generated deployment YAML is editable before **Next** / **Save & add another**.
+For direct YAML edits, select one topology (including Slice count) at a time. Edits
+are validated against the generated reference; formatting and resource annotations
+are supported. Use configuration fields for model, topology, runtime or storage
+changes, then regenerate, so deployment facts stay consistent. Regenerating clears
+manual YAML edits.
+
+For P/D, **Configurations** uses one parameter-range editor for a single configuration
+or a batch. Prefill replicas, Prefill TP, Decode replicas and Decode TP each accept
+one value (`2`), a list (`1,2,4`), a range (`1-8`), or a stepped range (`1-8/2`).
+Duplicate values are removed. Four single values generate one configuration.
+
+**Filter combinations** can restrict the P/D replica relationship (`P = D`, `P ≤ D`,
+`P ≥ D`), maximum accelerators, or exact accelerator count. For DisaggregatedSets,
+these replica counts and resource filters are **per Slice**. Accelerator totals use
+`P replicas × P TP + D replicas × D TP`. The page shows raw and matching counts,
+a sortable, paginated preview, and **Export CSV** for the entire filtered set.
+For example, P replicas `1-4`, D replicas `1-8`, and both TP fields `1,2` produce
+128 combinations; an eight-accelerator maximum keeps 50.
+
+Preview, YAML generation and saving use the same filtered configurations. Preview
+sorting and pagination do not change which configurations are saved. AIC and saved
+configurations populate these same fields. Generation validates Guide and model
+compatibility; preview counts alone do not certify deployability.
+Each parameter supports up to 128 distinct values and the raw search space is
+bounded at 100,000 combinations. Narrow the ranges or filters to at most **256
+configurations per Evaluation**, including Slice combinations. Direct deployment
+requires one matching configuration. Generation saves configurations sequentially;
+Evaluation executes cases sequentially and retains its existing cancellation controls.
+The selected configurations and their differences are paginated after saving.
+
+If the cluster advertises the hardware profile's RDMA DeviceClass and
+the selected Guide provides an RDMA variant, new configurations default to that
+variant. Explicit choices and saved configurations are preserved; deployment
+checks still validate the required network resources.
+
 ### Compare Slice counts
 
 For a DisaggregatedSet Guide, **Slice Configuration** in the configuration editor has a
@@ -93,8 +130,8 @@ For a DisaggregatedSet Guide, **Slice Configuration** in the configuration edito
 to choose a range of at least two Slice counts, up to the current **Max feasible**. Each count
 is listed with its accelerator total and marked if it was measured before. Each count is saved
 as a separate configuration with the same per-Slice P/D replicas, TP, placement and routing;
-the Evaluation deploys, benchmarks and removes them one at a time. Up to 16 combinations are
-allowed, including any replica/TP variants.
+the Evaluation deploys, benchmarks and removes them one at a time. P/D supports up to 256 combinations including replica/TP variants; other Guides
+retain the 16-combination limit.
 
 A Slice sweep requires the **Prefix cache reuse** workload with at least two request-rate stages
 and a TTFT or TPOT target, because candidates are compared by their highest SLO-stable request

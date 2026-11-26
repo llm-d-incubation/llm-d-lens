@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import math
 from time import monotonic
 from typing import Any
@@ -26,9 +27,15 @@ from .models import (
     AICSupportResponse,
 )
 
+logger = logging.getLogger(__name__)
+
 
 class AICError(RuntimeError):
-    """A user-visible AISimulate integration failure."""
+    """An AISimulate failure with an optional safe, actionable UI explanation."""
+
+    def __init__(self, message: str, *, public: bool = False):
+        super().__init__(message)
+        self.public_message = message if public else None
 
 
 class _SearchBudgetExceededError(Exception):
@@ -40,7 +47,14 @@ def _cli():
         from aisimulate.legacy_cli import cli_default, cli_exp, cli_support
     except ImportError as error:
         raise AICError(
-            "AISimulate is unavailable; install the project dependencies with python -m pip install -e ."
+            "AISimulate is unavailable; install the project dependencies with python -m pip install -e .",
+            public=True,
+        ) from error
+    except Exception as error:
+        logger.exception("AISimulate initialization failed")
+        raise AICError(
+            "AISimulate could not initialize. Check the backend dependency installation and server logs.",
+            public=True,
         ) from error
     return cli_default, cli_exp, cli_support
 
@@ -97,8 +111,26 @@ async def check_support(request: AICRequest) -> AICSupportResponse:
 
 
 def _candidate(mode: str, row: dict[str, Any]) -> dict[str, Any]:
+    # Native experiment keys are user-defined names, not serving modes.
+    if mode not in {"agg", "disagg"}:
+        if "(p)tp" in row and "(d)tp" in row:
+            mode = "disagg"
+        elif "tp" in row:
+            mode = "agg"
+        else:
+            raise AICError("AISimulate returned a result without a serving topology", public=True)
+    topology_fields = (
+        ("tp", "num_total_gpus") if mode == "agg" else ("(p)tp", "(d)tp", "(p)workers", "(d)workers", "num_total_gpus")
+    )
+    for field in topology_fields:
+        if row.get(field) is not None:
+            value = float(row[field])
+            if not math.isfinite(value) or not value.is_integer() or value < 1:
+                raise AICError(
+                    "AISimulate returned an invalid topology; try another model or hardware target.", public=True
+                )
+    row = _plain(dict(row))
     scale = max(1, int(row.get("replicas_needed") or 1))
-    row = dict(row)
     row["num_total_gpus"] = int(row.get("num_total_gpus") or row.get("tp") or 1) * scale
     if row.get("tokens/s") is not None:
         row["tokens/s"] *= scale
@@ -132,9 +164,8 @@ def _candidate(mode: str, row: dict[str, Any]) -> dict[str, Any]:
 def _result_candidates(result: Any, limit: int) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     for mode, frame in result.best_configs.items():
-        normalized_mode = "agg" if mode == "agg" else "disagg"
         records = frame.head(limit).to_dict(orient="records")
-        candidates.extend(_plain(_candidate(normalized_mode, row)) for row in records)
+        candidates.extend(_plain(_candidate(mode, row)) for row in records)
     return candidates
 
 
@@ -331,13 +362,16 @@ def experiments_sync(request: AICExperimentRequest) -> AICExperimentResponse:
         raise
     except Exception as error:
         raise AICError(str(error)) from error
-    experiments: list[dict[str, Any]] = []
-    for mode, frame in result.best_configs.items():
-        for index, row in enumerate(frame.to_dict(orient="records")):
-            item = _candidate("agg" if mode == "agg" else "disagg", row)
-            item.update({"name": f"{mode}-{index + 1}", "is_chosen": mode == result.chosen_exp})
-            experiments.append(_plain(item))
-    return AICExperimentResponse(experiments=experiments)
+    try:
+        experiments: list[dict[str, Any]] = []
+        for mode, frame in result.best_configs.items():
+            for index, row in enumerate(frame.to_dict(orient="records")):
+                item = _candidate(mode, row)
+                item.update({"name": f"{mode}-{index + 1}", "is_chosen": mode == result.chosen_exp})
+                experiments.append(_plain(item))
+        return AICExperimentResponse(experiments=experiments)
+    except Exception as error:
+        raise AICError("AISimulate returned an invalid experiment result", public=True) from error
 
 
 async def experiments(request: AICExperimentRequest) -> AICExperimentResponse:

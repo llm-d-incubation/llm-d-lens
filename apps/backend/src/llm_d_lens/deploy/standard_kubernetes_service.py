@@ -36,6 +36,11 @@ class StandardKubernetesServiceRequest(BaseModel):
     enable_prefix_caching: bool = True
     enforce_eager: bool = False
     vllm_arguments: list[dict[str, str]] = Field(default_factory=list)
+    model_catalog_id: str | None = None
+    model_catalog_version: int | None = Field(default=None, ge=1)
+    model_catalog_snapshot: dict | None = None
+    model_revision: str | None = None
+    serving_overrides: dict | None = None
     use_cluster_proxy: bool = True
     http_proxy: str = Field(default="", max_length=1000)
     https_proxy: str = Field(default="", max_length=1000)
@@ -145,6 +150,15 @@ def build_standard_kubernetes_service_configuration(
         checksum=configuration_checksum(content),
         provenance={
             "source": "standard-kubernetes-service.v1",
+            **(
+                {
+                    "model_catalog_id": request.model_catalog_id,
+                    "model_catalog_version": request.model_catalog_version,
+                    "model_catalog_snapshot": request.model_catalog_snapshot,
+                }
+                if request.model_catalog_id
+                else {}
+            ),
             "deployment_name": request.deployment_name,
             "description": request.description.strip(),
             "storage_type": request.storage_type,

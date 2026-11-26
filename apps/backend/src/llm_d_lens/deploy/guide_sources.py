@@ -95,6 +95,24 @@ async def load_guide_paths(request, selection: dict) -> dict:
     return {"paths": paths, "commit": commit, "localRoot": root, "ref": cluster.llm_d_ref or ""}
 
 
+async def rdma_accelerators(cluster_id: str) -> list[str]:
+    """Discover advertised RDMA classes using the registered hardware profiles."""
+    from llm_d_lens.infrastructure.kubernetes import scoped_runner
+
+    if not cluster_id:
+        return []
+    profiles = [profile for profile in all_profiles() if profile.dranet_device_class]
+    if not profiles:
+        return []
+    result = await scoped_runner(cluster_id).run(
+        ["kubectl", "get", "deviceclasses.resource.k8s.io", "-o", "json"], timeout=10
+    )
+    if not result.ok:
+        return []
+    classes = {item.get("metadata", {}).get("name") for item in json.loads(result.stdout).get("items", [])}
+    return [profile.upstream_variant for profile in profiles if profile.dranet_device_class in classes]
+
+
 def catalog_from_paths(paths: list[str]) -> list[dict]:
     guides = {}
     for path in paths:

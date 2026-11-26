@@ -265,7 +265,7 @@ export function DeploymentSummary({
             {error && <FormError message={error} />}
             {submitted ? onOpen && <Button size="md" className="w-full" onClick={onOpen}>Open deployment</Button> : <>
                 <Button size="md" className="w-full" disabled={locked || editing || !plan || endpointMissing || Boolean(adminHandoff) || (checked && deployBlocked)} isLoading={busy} onClick={checked ? onDeploy : onCheck}>{checked ? confirmLabel : 'Retry checks'}</Button>
-                {checked && <Button variant="secondary" className="w-full" disabled={locked || editing || busy} onClick={onCheck}>Recheck resources</Button>}
+                {checked && <Button variant="secondary" className="w-full" disabled={locked || editing || busy || Boolean(adminHandoff?.verifying) || Boolean(adminHandoff?.generating)} onClick={onCheck}>Recheck resources</Button>}
                 <Button variant="ghost" className="w-full" disabled={locked || editing} onClick={onRequirements}>Change workload &amp; limits</Button>
                 <p className="text-xs leading-relaxed text-theme-muted">Deploys exactly this configuration.</p>
             </>}
@@ -335,7 +335,9 @@ export function DeploymentWorkflow({ draft, mode = 'agentic', embedded = false, 
             ...(current.checksum === nextChecksum && current.namespace ? { namespace: current.namespace } : {}),
             ...(current.checksum === nextChecksum && current.prepared ? { prepared: current.prepared } : {}),
         } : null);
-        setAdminHandoff(current => (keepReview && current && current.runId === value.id && current.checksum === nextChecksum) ? current : null);
+        setAdminHandoff(current => (keepReview && current && current.runId === value.id && current.checksum === nextChecksum)
+            ? { ...current, generating: false, verifying: false }
+            : null);
         const endpoints = value.configuration_plan?.endpoints || [];
         setEndpoint(current => endpoints.some(item => item.value === current) ? current : defaultInferenceEndpoint(endpoints));
         sessionStorage.setItem(key, value.id);
@@ -460,6 +462,7 @@ export function DeploymentWorkflow({ draft, mode = 'agentic', embedded = false, 
             manifest: deploymentPlanManifest(currentPlan),
             namespaceLabels: rawLabels,
             agenticDeploymentRunId: run?.id,
+            preparedPlanId: approval?.prepared?.id,
             deploymentName: draft.deploymentName,
             providerRef: run?.selected_candidate?.provider_ref,
             storageVolumeId: draft.storageVolumeId,
@@ -483,7 +486,8 @@ export function DeploymentWorkflow({ draft, mode = 'agentic', embedded = false, 
         setAdminHandoff(prev => (prev ? { ...prev, generating: true, error: '', ...(validOverride ? { subjectOverride: validOverride } : {}) } : prev));
         try {
             const remediation = await generateDeploymentBootstrapScript(buildPermissionPayload({
-                namespace: current?.namespace || undefined,
+                namespace: current?.namespace || approval?.namespace || approval?.prepared?.cases?.[0]?.namespace || undefined,
+                preparedPlanId: current?.preparedPlanId || approval?.prepared?.id || undefined,
                 subjectOverride: validOverride,
             }));
             if (!mounted.current || version !== requestVersion.current) return;
@@ -504,13 +508,17 @@ export function DeploymentWorkflow({ draft, mode = 'agentic', embedded = false, 
         }
     };
     const openAdminSetupFromError = (failure, fallbackNamespace = '', showFailureError = false) => {
-        const body = failure?.body && typeof failure.body === 'object' ? failure.body : {};
+        const rawBody = failure?.body && typeof failure.body === 'object' ? failure.body : {};
+        const body = rawBody.detail && typeof rawBody.detail === 'object' && !Array.isArray(rawBody.detail)
+            ? { ...rawBody.detail, ...rawBody }
+            : rawBody;
         const seed = {
             runId: run.id,
             checksum: approval.checksum,
+            preparedPlanId: body.preparedPlanId || body.prepared_plan_id || failure?.preparedPlanId || approval?.prepared?.id || null,
             report: body,
             verifyResult: null,
-            namespace: body.namespace || fallbackNamespace || '',
+            namespace: body.namespace || failure?.preparedNamespace || fallbackNamespace || approval?.prepared?.cases?.[0]?.namespace || '',
             identity: body.identity || null,
             subjectOverride: adminHandoff?.subjectOverride || null,
             script: typeof body.script === 'string' ? body.script : '',
@@ -520,7 +528,7 @@ export function DeploymentWorkflow({ draft, mode = 'agentic', embedded = false, 
             warnings: Array.isArray(body.warnings) ? body.warnings : [],
             generating: false,
             verifying: false,
-            error: showFailureError ? (failure.message || body.detail || '') : '',
+            error: showFailureError ? (failure.message || (typeof body.detail === 'string' ? body.detail : '') || '') : '',
         };
         setError('');
         setAdminHandoff(seed);
@@ -529,31 +537,63 @@ export function DeploymentWorkflow({ draft, mode = 'agentic', embedded = false, 
     };
     const executeApprove = async (targetNamespace = '', activeVersion = requestVersion.current) => {
         const normalizedNamespace = typeof targetNamespace === 'string' ? targetNamespace.trim() : '';
-        const result = await api(`/api/agentic-deployments/${encodeURIComponent(run.id)}/approve`, {
+        const basePayload = {
             configuration_checksum: approval.checksum,
             ...(plan?.source_bundle ? { endpoint } : {}),
             ...(normalizedNamespace ? { namespace: normalizedNamespace } : {}),
+        };
+        let result = await api(`/api/agentic-deployments/${encodeURIComponent(run.id)}/approve`, {
+            ...basePayload,
             ...(approval?.prepared ? {
                 prepared_plan_id: approval.prepared.id,
                 expected_plan_digest: approval.prepared.digest,
-                acknowledge_unknown: approval.prepared.preflight.status === 'unknown',
+                acknowledge_unknown: approval.prepared.preflight?.status === 'unknown',
             } : {}),
         });
         if (!mounted.current || activeVersion !== requestVersion.current) return null;
-        const prepared = result?.configuration_plan?.validation?.preparedDeployment;
-        if (prepared && !result?.deployment_run_id) {
+        let prepared = result?.configuration_plan?.validation?.preparedDeployment;
+        if (!approval?.prepared && prepared && !result?.deployment_run_id && prepared.preflight?.status === 'pass') {
+            const frozenNamespace = prepared.cases?.[0]?.namespace || normalizedNamespace || '';
             setRun(result);
             setApproval(prev => ({
                 runId: result.id,
                 checksum: approval.checksum,
                 prepared,
-                ...(normalizedNamespace || prev?.namespace ? { namespace: normalizedNamespace || prev.namespace } : {}),
+                ...(frozenNamespace || prev?.namespace ? { namespace: frozenNamespace || prev.namespace } : {}),
+            }));
+            try {
+                result = await api(`/api/agentic-deployments/${encodeURIComponent(run.id)}/approve`, {
+                    ...basePayload,
+                    ...(frozenNamespace ? { namespace: frozenNamespace } : {}),
+                    prepared_plan_id: prepared.id,
+                    expected_plan_digest: prepared.digest,
+                    acknowledge_unknown: false,
+                });
+            } catch (step2Failure) {
+                if (step2Failure && typeof step2Failure === 'object') {
+                    step2Failure.preparedPlanId = prepared.id;
+                    if (frozenNamespace) step2Failure.preparedNamespace = frozenNamespace;
+                }
+                throw step2Failure;
+            }
+            if (!mounted.current || activeVersion !== requestVersion.current) return null;
+            prepared = result?.configuration_plan?.validation?.preparedDeployment;
+        }
+        if (prepared && !result?.deployment_run_id) {
+            const frozenNamespace = prepared.cases?.[0]?.namespace || normalizedNamespace || '';
+            setRun(result);
+            setApproval(prev => ({
+                runId: result.id,
+                checksum: approval.checksum,
+                prepared,
+                ...(frozenNamespace || prev?.namespace ? { namespace: frozenNamespace || prev.namespace } : {}),
             }));
             setAdminHandoff(null);
             return result;
         }
         if (!result?.deployment_run_id) {
             accept(result, true);
+            setAdminHandoff(null);
             return result;
         }
         accept(result, false);
@@ -568,10 +608,13 @@ export function DeploymentWorkflow({ draft, mode = 'agentic', embedded = false, 
             setApproval(null); setAdminHandoff(null); setError('The configuration changed. Review the current plan before deploying.'); return;
         }
         const version = ++requestVersion.current;
-        let checkedNamespace = approval.namespace || '';
+        let checkedNamespace = approval.namespace || approval.prepared?.cases?.[0]?.namespace || '';
         setBusy(true); setError('');
         try {
-            const checkResult = await checkDeploymentPermissions(buildPermissionPayload(checkedNamespace ? { namespace: checkedNamespace } : {}));
+            const checkResult = await checkDeploymentPermissions(buildPermissionPayload({
+                ...(checkedNamespace ? { namespace: checkedNamespace } : {}),
+                ...(approval.prepared?.id ? { preparedPlanId: approval.prepared.id } : {}),
+            }));
             if (!mounted.current || version !== requestVersion.current) return;
             checkedNamespace = checkResult?.namespace || checkedNamespace;
             if (checkResult?.sufficient || checkResult?.status === 'sufficient') {
@@ -585,6 +628,7 @@ export function DeploymentWorkflow({ draft, mode = 'agentic', embedded = false, 
             const seed = {
                 runId: run.id,
                 checksum: approval.checksum,
+                preparedPlanId: approval.prepared?.id || null,
                 report: checkResult,
                 verifyResult: null,
                 namespace: checkedNamespace,
@@ -641,13 +685,14 @@ export function DeploymentWorkflow({ draft, mode = 'agentic', embedded = false, 
         let verifyResult = null;
         try {
             verifyResult = await verifyDeploymentBootstrap(buildPermissionPayload({
-                namespace: handoffSnapshot.namespace || undefined,
+                namespace: handoffSnapshot.namespace || approval?.namespace || approval?.prepared?.cases?.[0]?.namespace || undefined,
+                preparedPlanId: handoffSnapshot.preparedPlanId || approval?.prepared?.id || undefined,
                 subjectOverride: override,
                 expectedDigest: handoffSnapshot.bootstrapDigest || undefined,
             }));
             if (!mounted.current || version !== requestVersion.current) return;
             if (verifyResult?.verified) {
-                const approvedNamespace = verifyResult?.namespace || handoffSnapshot.namespace || '';
+                const approvedNamespace = verifyResult?.namespace || handoffSnapshot.namespace || approval?.namespace || approval?.prepared?.cases?.[0]?.namespace || '';
                 if (approvedNamespace) setApproval(prev => (prev ? { ...prev, namespace: approvedNamespace } : prev));
                 setAdminHandoff(prev => (prev ? { ...prev, verifyResult, namespace: approvedNamespace || prev.namespace } : prev));
                 const approvedRun = await executeApprove(approvedNamespace, version);
@@ -713,7 +758,7 @@ export function DeploymentWorkflow({ draft, mode = 'agentic', embedded = false, 
     const enabled = plan?.decisions?.filter(item => ['enabled', 'dependency'].includes(item.status)) || [];
     const sourceReview = Boolean(plan?.source_bundle && plan.source_draft);
     const frozenPlan = approval?.prepared;
-    const preflightStatus = frozenPlan?.preflight.status;
+    const preflightStatus = frozenPlan?.preflight?.status;
     const summary = run && <>
         {frozenPlan && <section className="space-y-2 text-sm">
             <strong>{preflightStatus === 'unknown' ? 'Deployment not started: scheduling constraints need review' : `Deployment preflight: ${preflightStatus}`}</strong>
@@ -735,12 +780,15 @@ export function DeploymentWorkflow({ draft, mode = 'agentic', embedded = false, 
             endpoint={endpoint}
             onEndpointChange={value => {
                 setEndpoint(value);
-                if (frozenPlan) {
-                    setApproval(prev => ({
-                        runId: run.id,
-                        checksum: approval.checksum,
-                        ...(prev?.namespace ? { namespace: prev.namespace } : {}),
-                    }));
+                if (frozenPlan || adminHandoff) {
+                    setAdminHandoff(null);
+                    if (frozenPlan) {
+                        setApproval(prev => ({
+                            runId: run.id,
+                            checksum: approval.checksum,
+                            ...(prev?.namespace ? { namespace: prev.namespace } : {}),
+                        }));
+                    }
                 }
             }}
             onDeploy={deploy}

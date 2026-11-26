@@ -22,7 +22,8 @@ export const requirementCapability = id => ({
     'kv-transport': 'pd_disaggregation',
 }[id]);
 
-const UNSUPPORTED_KEY = 'lens-unsupported-source-combinations';
+// Bump the version whenever the backend composition adapter starts accepting new transports.
+const UNSUPPORTED_KEY = 'lens-unsupported-source-combinations:v2';
 // Rejections fixed by the pinned source transport, not by cluster state.
 const SOURCE_FIXED_REJECTIONS = [/Adding CPU KV cache to P\/D is not yet supported/];
 
@@ -84,7 +85,7 @@ export function candidateCompositionDraft(run, candidate, catalog, profile, entr
             podPlacement: run.request.placement_replicas || 'prefer-same-node',
             nodeLabel: run.request.placement_node_label || undefined,
             // Source overrides render an empty value as a bare flag; the legacy path spells it "true".
-            customParameters: run.request.vllm_arguments.map(item => ({ ...item, value: BARE_FLAGS.has(item.name) && item.value === 'true' ? '' : item.value, target: 'both', kind: 'argument' })),
+            customParameters: run.request.vllm_arguments.map(item => ({ ...item, name: BARE_FLAGS.has(item.name) && item.value === 'false' ? `no-${item.name}` : item.name, value: BARE_FLAGS.has(item.name) && ['true', 'false'].includes(item.value) ? '' : item.value, target: 'both', kind: 'argument' })),
         },
     };
     if (candidate.guide_variant) draft.sourceVariables[guide] = {
@@ -107,7 +108,8 @@ export async function renderDeploymentPlan(run, { compare = false, editedDraft, 
     const profile = profiles.find(item => item.id === selectedProfile) || (!selectedProfile && profiles.length === 1 ? profiles[0] : null);
     if (!profile?.upstream_variant) throw Object.assign(new Error('Select a supported accelerator profile for this cluster, then retry resource generation.'), { profiles });
     const entry = entries.find(item => item.status === 'ready' && !hasPendingSync(item)
-        && sourceRepository(item) === run.request.model && item.storageVolumeId === run.request.storage_volume_id);
+        && sourceRepository(item).toLowerCase() === run.request.model.toLowerCase()
+        && (!run.request.model_revision || (item.source?.huggingface?.revision || 'main') === run.request.model_revision) && item.storageVolumeId === run.request.storage_volume_id);
     const volume = volumes.find(item => item.id === entry?.storageVolumeId && item.status === 'ready');
     if (!entry || !volume) throw new Error('The selected cached model is no longer ready and synchronized.');
     const candidates = compare ? run.candidates : run.candidates.filter(item => item.id === run.selected_candidate.id);

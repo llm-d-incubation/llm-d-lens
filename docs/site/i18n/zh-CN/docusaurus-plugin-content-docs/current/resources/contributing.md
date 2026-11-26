@@ -3,10 +3,37 @@ title: 贡献指南
 slug: /resources/contributing
 ---
 
-# 为 Lens 贡献代码
+## 治理结构
 
-请将改动范围限定在 [README.md](https://github.com/llm-d-incubation/llm-d-lens/blob/main/README.md)
-中列出的 10 个页面及其配套工作流内。
+`llm-d-lens` 采用如下层级化的技术治理结构：
+
+- **贡献者（contributors）** 社区：负责提交 issue 和 pull request。
+- **核心维护者（core maintainers）** 团队：整体负责 `llm-d-lens` 并推动其演进。
+
+所有贡献均应遵循核心维护者执行的 `llm-d-lens` 设计原则与最佳实践。我们非常欢迎并鼓励高质量的 pull request，但所有维护者均有权自行决定优先处理各自的工作，因此贡献者不应预期其提交会立即得到评审。
+
+在向维护者发送 PR 之前达到高质量标准，可以最大限度地提高贡献被接纳的机会。
+
+### 核心维护者
+
+核心维护者主导 `llm-d-lens` 的开发，并为更广泛的 `llm-d` 项目定义基准测试基础设施与策略。其职责包括：
+
+- 为 `llm-d` 提议、实现并评审负载画像、参数配置、运行规则、数据采集及工作负载分析
+- 执行代码质量标准并确保遵循核心设计原则
+
+核心维护者应公开阐述其决策过程，并分享决策、否决及争议解决背后的理由。
+
+核心维护者名单见 [OWNERS](https://github.com/llm-d-incubation/llm-d-lens/blob/main/OWNERS) 文件。
+
+### 决策机制
+
+#### 无争议变更
+
+我们致力于接纳符合质量标准的常规功能性 Bug 修复——前提是包含精简的单元测试以避免未来回归。性能改进通常也属于此类，但若核心维护者认为其收益与复杂度之间的权衡不够理想，则可能被拒绝。既不修复已知功能问题也不改善性能的设计变更，将被自动视为存在争议的变更。
+
+#### 有争议变更
+
+更具争议性的设计变更（例如对工作负载画像、负载生成器、运行规则或数据采集与分析工具的破坏性变更）将由核心维护者根据具体情况进行主观评估。
 
 ## Issue 与 Pull Request
 
@@ -16,6 +43,24 @@ slug: /resources/contributing
 每个 Pull Request 都应描述问题、产生的行为以及验证方式。请说明任何已知的
 失败项或未经测试的外部集成。请遵循 [.agents/skills/ui/SKILL.md](https://github.com/llm-d-incubation/llm-d-lens/blob/main/.agents/skills/ui/SKILL.md)
 中共享的 UI 约定以及[行为准则](https://github.com/llm-d-incubation/llm-d-lens/blob/main/CODE_OF_CONDUCT.md)。
+
+提交 Pull Request 前，请确保完成以下步骤：
+
+1. [为你的提交签名](https://docs.github.com/en/authentication/managing-commit-signature-verification/signing-commits)
+2. 在推送 PR 内容**之前**，确保已运行 [pre-commit](https://pre-commit.com/) 钩子并通过检查。参见下方的[开发与验证](#开发与验证)。
+
+## 发布在线安装程序
+
+在 `main` 分支中保持 `LENS_SOURCE_VERSION="main"`。发布版本时，请从目标提交创建发布分支，并在打 tag 前为在线安装程序写入版本标记：
+
+```bash
+bash scripts/LensInstaller-Ubuntu-x86_64-online.sh release stamp vX.Y.Z
+bash scripts/LensInstaller-Ubuntu-x86_64-online.sh release check vX.Y.Z
+```
+
+将 `vX.Y.Z` 替换为实际的 tag。提交已打标脚本并打上该 tag，待该 tag 上的 **Installer checks** 通过后再公布原始下载 URL。保持发布 tag 不可变。不要将已打标的版本合回 `main`；`main` 与 PR 检查要求版本为 `main`，而 tag 检查要求与 tag 名称完全一致。该工作流仅校验 tag，不会创建 GitHub Release 或强制执行 tag 保护。不支持为没有在线安装入口的旧 tag 追溯打标。
+
+唯一的公开安装入口是 `scripts/LensInstaller-Ubuntu-x86_64-online.sh`。同一脚本内包含下载阶段、安装引擎和 Shell 发布版本命令。下载源码归档后，它会以内部源码安装模式调用归档中的副本，而不会递归下载。CI 会在 Ubuntu 22.04 及其系统 Python 3.10 环境下检查 Shell 语法/lint、版本一致性、独立帮助信息、私有 Python 环境准备以及宿主机 OS 层命令行（`check`、`info`、`packages missing`），同时使用 `bash -n` 和 `shellcheck` 检查生成的 `lensctl.sh`，并在宿主机 OS 层源码变更时触发运行。
 
 ## 仓库语言
 
@@ -30,6 +75,18 @@ slug: /resources/contributing
 `docs/site/i18n/en/` 下的英文正文仍完整参与扫描。
 
 ## 开发与验证
+
+### 定期完整本地验证
+
+`npm run verify:full`（`make verify-full`）是一个手动检查点，用于在不依赖缓存通过结果的情况下，运行仓库范围的构建、lint、英文检查、JavaScript/Python/工具测试、前端构建以及双语文档构建。请先安装工作区及 Python 开发/嵌入式数据库依赖；如果 Python 不在 `.venv/bin/python`，请设置 `PRISM_PYTHON_BIN`（回退为 `python3`）。每项检查都会打印 `PASS`/`FAIL`，并将完整日志保存在打印出的 `.cache/reuse/full-validation/` 下的唯一目录中。某项失败不会阻止后续检查，任何失败或缺少工具都会使命令以非零状态退出。测试数据相互隔离。这是一个简单的 Makefile 入口，而非证据/报告框架。运行期间请勿编辑源码；在相关源码或环境变更后重新运行。日常修复请使用定向测试；Agent 仅读取失败日志。真实集群/提供方验收、容器、在线栈检查、模型冒烟测试以及下方的安全要求均独立进行；测试跳过项和构建警告会保留在日志中。
+
+可选的仓库钩子（`git config core.hooksPath hack/hooks`）会检查暂存区的空白字符和英文文本，而不运行回归测试套件。pre-commit 框架配置仍可用于暂存区文件卫生与 linter 检查。完整回归检查属于 CI；请勿在每次提交前同时运行完整套件和子集套件。
+
+前端源码变更请使用 Vite 热重载。`hack/lens-local.sh restart backend` 或 `restart server` 仅重启所请求的服务。端口/环境变更以及会改变服务端 MCP 目录的 API 变更请使用 `restart all`。实际服务端口会记录下来以供定向重启使用。对于使用旧版启动器启动的会话，请运行一次 `restart all` 以初始化该状态。
+
+失败的 Deploy Kubernetes 命令会在后端日志中输出 `deployment_kubernetes_command_failed`。该结构化记录会标识传输方式、命名空间、CLI PID、所选 API 来源、kubeconfig/缓存路径、脱敏后的代理来源，以及每个 `NO_PROXY` 变体中的字面 API 主机条目。此诊断不会评估 CIDR/域名绕过规则。凭据、完整命令参数和原始 kubeconfig 内容不会被记录；命令结果与重试行为保持不变。
+
+当在同一进程中运行迁移命令时，Alembic 日志配置会保持现有应用 logger 处于启用状态。
 
 在修改行为之前，请遵循 [AGENTS.md](https://github.com/llm-d-incubation/llm-d-lens/blob/main/AGENTS.md)
 以及[复用优先工作流](https://github.com/llm-d-incubation/llm-d-lens/blob/main/docs/design/reuse-workflow.md)。

@@ -134,11 +134,11 @@ def _pin_runtime_image(content: dict[str, Any], *, cluster_id: str | None = None
 
 def render_configuration(request: RenderRequest) -> RenderResponse:
     candidate = request.candidate_config
-    if request.render.template_ref.startswith("upload/"):
+    if request.render.template_ref.startswith("upload/") and not request.render.reference_manifest:
+        raise ValueError("Uploaded YAML requires a generated reference from the configuration editor.")
+    if request.render.reference_manifest is not None:
         from llm_d_lens.configuration.manifest_edits import validate_manifest_edit
 
-        if not request.render.reference_manifest:
-            raise ValueError("Uploaded YAML requires a generated reference from the configuration editor.")
         validate_manifest_edit(request.render.reference_manifest, request.render.rendered_manifest)
     session = require_active_session(request.render.cluster_ref.session_id)
     if session.server_id != request.render.cluster_ref.id:

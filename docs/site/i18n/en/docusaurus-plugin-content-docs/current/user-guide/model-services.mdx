@@ -4,14 +4,40 @@ description: Publish deployments as OpenAI-compatible model services behind a sh
 ---
 
 Publish a ready deployment so applications can call it with an API key.
-To call an existing service, start with **My services**; to publish one, use **Model services**.
+To call an existing service, start with **My Resources → Services** (whose page header displays **My services**); to publish one, use **Model services**.
 
 Istio is the default Gateway provider when no provider is configured for the
 cluster. An explicitly configured provider is preserved.
 
+## Standalone deployment and Gateway publication
+
+New llm-d Router deployments retain their own Standalone Proxy, EPP and model
+workloads. The independent HTTP endpoint works without publishing a Model Service
+or running a shared Gateway. Deployment-targeted tests use this endpoint.
+
+Publishing adds an HTTPRoute through the cluster's shared Gateway to the
+deployment's InferencePool. The standalone endpoint remains available and uses
+the same EPP. Calls to the published Model Service use its Gateway URL, public
+model name and API key. Direct standalone calls use the engine's model name and
+are not protected by Model Service Gateway authorization.
+
+Removing the deployment from a Model Service updates or removes the published
+route. It keeps the standalone endpoint, Proxy, EPP and model workloads; there
+is no mode switch or deployment restart just for detachment.
+
+EPP and the standalone proxy use one transport policy from deployment creation:
+plaintext for Istio/agentgateway, TLS for Envoy AI Gateway/GKE. Publication repairs
+older Envoy sidecar configurations together and waits for rollout. A separate
+proxy workload needing a protocol change, or an unsupported custom proxy config,
+requires redeployment; reconciliation reports the problem before changing EPP.
+Existing Gateway-only deployments keep their recorded behavior and require
+redeployment to gain a standalone endpoint.
+
+The same transport failures stop the non-admin publication and verification paths. The administrator handoff script waits for EPP readiness before applying routes; if an EPP protocol change would affect an independent proxy, it stops without patching EPP. Redeploy with matching transport, or repair both through Lens with sufficient permissions, then retry the handoff.
+
 ## Browse published models and copy request examples
 
-1. Open **My services**.
+1. Open **My Resources → Services** (page header: **My services**).
 2. In **Gateway connections**, click **Copy** beside the cluster you want to call.
 3. Find the model you want to call and click **cURL**.
 4. In **cURL examples**, copy the request you need. Keep its URL and headers unchanged.
@@ -49,7 +75,7 @@ Update those clients with the replacement key.
 5. Under **Model name mapping**, check the read-only **Provider model name**, filled from the selected deployment.
 6. Below **Exposed to users as**, choose an existing **Public model name** from the dropdown or type a name, for example `team-chat`. The dropdown only suggests names from the selected cluster. A name that does not exist creates a new model when you click **Add**. Applications use this value in the `model` field of Chat Completions API requests, rather than the provider model name.
 7. Click **Add**. A new public name creates the model service and its model server together. An existing public name in the same cluster adds the deployment to that model and reuses its HTTPRoute; it does not create another service. Click **Cancel** or the dimmed backdrop to discard the form before submission.
-8. Check the service's status in **Service flow**, then open **My services** and send a copied **cURL** request.
+8. Check the service's status in **Service flow**, then open **My Resources → Services** and send a copied **cURL** request.
 
 When the public name differs from the provider model name, Lens creates an
 `InferenceModelRewrite` for the service's InferencePool. The shared Gateway uses

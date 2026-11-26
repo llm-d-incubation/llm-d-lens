@@ -132,6 +132,14 @@ def apply_runtime_overrides(container: dict, overrides: list[dict]):
             container["env"] = [entry for entry in container.get("env", []) if entry.get("name") != name]
             container["env"].append({"name": name, "value": value})
             continue
+        boolean_names = {"enable-auto-tool-choice", "enable-prefix-caching", "enforce-eager"}
+        base_name = name.removeprefix("no-")
+        if base_name in boolean_names and value in {"true", "false"}:
+            negated = name.startswith("no-") == (value == "true")
+            name, value = (f"no-{base_name}" if negated else base_name), ""
+        aliases = {name}
+        if base_name in boolean_names and value == "":
+            aliases = {base_name, f"no-{base_name}"}
         script = shell_script(container)
         if script:
             parts, index = script
@@ -141,9 +149,9 @@ def apply_runtime_overrides(container: dict, overrides: list[dict]):
             words = shell_words(text)
             spans = []
             for word_index, (word, start, end) in enumerate(words):
-                if word.startswith(f"--{name}="):
+                if any(word.startswith(f"--{alias}=") for alias in aliases):
                     spans.append((start, end))
-                elif word == f"--{name}":
+                elif word in {f"--{alias}" for alias in aliases}:
                     following = words[word_index + 1] if word_index + 1 < len(words) else None
                     has_value = following and not following[0].startswith("--")
                     if not has_value and value != "":
@@ -167,12 +175,12 @@ def apply_runtime_overrides(container: dict, overrides: list[dict]):
                 index = len(parts) - 1
                 while index >= 0:
                     token = parts[index]
-                    if token == f"--{name}":
+                    if token in {f"--{alias}" for alias in aliases}:
                         has_value = index + 1 < len(parts) and not str(parts[index + 1]).startswith("--")
                         if not has_value and value != "":
                             raise ValueError(f"Existing --{name} is valueless; leave its value empty.")
                         del parts[index : index + (2 if has_value else 1)]
-                    elif str(token).startswith(f"--{name}="):
+                    elif any(str(token).startswith(f"--{alias}=") for alias in aliases):
                         del parts[index]
                     index -= 1
             container["args"] = [*args, f"--{name}" + (f"={value}" if value != "" else "")]

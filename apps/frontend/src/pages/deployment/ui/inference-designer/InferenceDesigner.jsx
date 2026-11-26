@@ -77,7 +77,7 @@ export function InferenceDesigner({ initialDraft, initialResult, clusterName, di
     const locked = disabled || saving || loading || !catalog || stale;
     const blocked = Object.fromEntries(graph.capabilities.map(cap => {
         const patch = capabilityTogglePatch(cap, draft, catalog);
-        return [cap.id, !catalog ? 'Source catalog unavailable.' : cap.id === 'cache' && !cap.enabled && draft.nativeCpuCacheGiB && draft.capabilityOverrides.prefix === false ? 'Enable prefix caching before restoring CPU KV cache.'
+        return [cap.id, !catalog ? 'Source catalog unavailable.'
             : cap.required ? 'Required by the selected configuration. Change the dependent optimization or source recipe first.'
             : cap.selection === 'recipe' || cap.selection === 'parameter' ? 'Controlled by source parameters; edit this node or its Guide in Technical details.'
                 : ['external-operation', 'requires-adapter', 'unavailable'].includes(cap.generation)
@@ -87,6 +87,7 @@ export function InferenceDesigner({ initialDraft, initialResult, clusterName, di
     const enableable = item => item?.kind === 'capability' && !item.enabled && !blocked[item.id] && Boolean(capabilityTogglePatch(item, draft));
     const canConfigure = item => nodeParameterPaths(item, draft).length > 0
         || plan?.choices?.some(choice => choice.guide === item?.guide) || ['prefix', 'chunked'].includes(item?.id)
+        || (item?.id === 'cache' && (draft.nativeCpuCacheGiB != null || enableable(item)))
         || (isDisaggregatedDraft(draft) && item?.id === 'transfer')
         || (Boolean(draft.runtimeConfiguration) && (item?.enabled || item?.inPlan || enableable(item))
             && (item?.kind === 'capability' ? Boolean(nodeResourceKinds(item)) || item.id === 'cache'
@@ -125,7 +126,7 @@ export function InferenceDesigner({ initialDraft, initialResult, clusterName, di
         select(id);
         const cap = graph.capabilities.find(item => item.id === id);
         if (!cap || locked) return;
-        if (toggleRequirement(id, !cap.enabled)) return;
+        if (id !== 'cache' && toggleRequirement(id, !cap.enabled)) return;
         if (blocked[id]) { setError(blocked[id]); return false; }
         const patch = capabilityTogglePatch(cap, draft, catalog);
         return patch ? change(patch) : false;
@@ -134,7 +135,7 @@ export function InferenceDesigner({ initialDraft, initialResult, clusterName, di
         select(id);
         const item = [...graph.nodes, ...graph.capabilities].find(item => item.id === id);
         const open = !locked && item && !item.unavailable && canConfigure(item) && (enable || !enableable(item));
-        if (open && enableable(item) && toggleRequirement(id, true)) return;
+        if (open && enableable(item) && id !== 'cache' && toggleRequirement(id, true)) return;
         if (open && enableable(item) && !change(capabilityTogglePatch(item, draft))) return;
         setParameters(open ? 'node' : null);
     };

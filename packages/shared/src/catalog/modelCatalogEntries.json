@@ -1,0 +1,1416 @@
+[
+  {
+    "releaseDate": "2026-08-09",
+    "repository": "meta-models/Muse-Glimmer-30B",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2026-06-05",
+    "repository": "google/gemma-4-12B-it-qat-w4a16-ct",
+    "dtype": "INT4",
+    "modelType": "any-to-any",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2026-04-22",
+    "repository": "deepseek-ai/DeepSeek-V4-Flash",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-01-01",
+    "repository": "Qwen/Qwen3-0.6B",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": true,
+      "toolParser": "hermes",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-04-29",
+    "repository": "Qwen/Qwen3-8B",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": true,
+      "toolParser": "hermes",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2026-03-24",
+    "repository": "CohereLabs/cohere-transcribe-03-2026",
+    "dtype": "BF16",
+    "modelType": "automatic-speech-recognition",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2026-03-18",
+    "repository": "baidu/Qianfan-OCR",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2026-03-11",
+    "repository": "google/gemma-4-31B-it",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2026-03-11",
+    "repository": "google/gemma-4-26B-A4B-it",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2026-03-10",
+    "repository": "RedHatAI/Ministral-3-3B-Instruct-2512",
+    "dtype": "FP8",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2026-03-03",
+    "repository": "sarvamai/sarvam-30b",
+    "dtype": "FP32",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2026-02-24",
+    "repository": "Qwen/Qwen3.5-35B-A3B",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2026-02-12",
+    "repository": "ATH-MaaS/Ovis2.6-30B-A3B",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2026-01-30",
+    "repository": "zai-org/GLM-OCR",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2026-01-28",
+    "repository": "Qwen/Qwen3-ASR-1.7B",
+    "dtype": "BF16",
+    "modelType": "automatic-speech-recognition",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2026-01-27",
+    "repository": "deepseek-ai/DeepSeek-OCR-2",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2026-01-19",
+    "repository": "zai-org/GLM-4.7-Flash",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2026-01-19",
+    "repository": "RedHatAI/granite-4.0-h-tiny-FP8-dynamic",
+    "dtype": "FP8",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2026-01-13",
+    "repository": "stepfun-ai/Step3-VL-10B",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-12-30",
+    "repository": "IQuestLab/IQuest-Coder-V1-40B-Loop-Instruct",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-12-30",
+    "repository": "IQuestLab/IQuest-Coder-V1-40B-Instruct",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-12-14",
+    "repository": "allenai/Molmo2-4B",
+    "dtype": "FP32",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-12-10",
+    "repository": "PerceptronAI/Isaac-0.2B-Preview",
+    "dtype": "FP32",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-12-09",
+    "repository": "inceptionai/Jais-2-8B-Chat",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-12-01",
+    "repository": "arcee-ai/Trinity-Nano-Base",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-11-19",
+    "repository": "allenai/Olmo-3-7B-Instruct",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-11-18",
+    "repository": "tencent/HunyuanOCR",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-10-31",
+    "repository": "mistralai/Ministral-3-14B-Instruct-2512",
+    "dtype": "FP8",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-10-30",
+    "repository": "FreedomIntelligence/openPangu-Embedded-7B-V1.1",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-10-24",
+    "repository": "pfnet/plamo-3-nict-2b-base",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-10-24",
+    "repository": "nvidia/audio-flamingo-3-hf",
+    "dtype": "BF16",
+    "modelType": "audio-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-10-20",
+    "repository": "lightonai/LightOnOCR-1B-1025",
+    "dtype": "BF16",
+    "modelType": "image-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-10-16",
+    "repository": "PaddlePaddle/PaddleOCR-VL",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-10-16",
+    "repository": "ibm-granite/granite-3.3-8b-instruct-FP8",
+    "dtype": "FP8",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-09-18",
+    "repository": "RedHatAI/Apertus-8B-Instruct-2509-FP8-dynamic",
+    "dtype": "FP8",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-09-09",
+    "repository": "Qwen/Qwen3-Next-80B-A3B-Thinking",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": true,
+      "toolParser": "hermes",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-09-09",
+    "repository": "Qwen/Qwen3-Next-80B-A3B-Instruct",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": true,
+      "toolParser": "hermes",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-09-02",
+    "repository": "inclusionAI/Ling-mini-2.0",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-08-26",
+    "repository": "Kwai-Keye/Keye-VL-1_5-8B",
+    "dtype": "BF16",
+    "modelType": "video-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-08-25",
+    "repository": "OpenGVLab/InternVL3_5-8B",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-08-25",
+    "repository": "OpenGVLab/InternVL3_5-38B",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-08-25",
+    "repository": "OpenGVLab/InternVL3_5-30B-A3B",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-08-25",
+    "repository": "OpenGVLab/InternVL3_5-14B",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-08-25",
+    "repository": "facebook/cwm",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-08-18",
+    "repository": "internlm/Intern-S1-mini",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-08-15",
+    "repository": "ATH-MaaS/Ovis2.5-9B",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-08-15",
+    "repository": "ATH-MaaS/Ovis2.5-2B",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-08-12",
+    "repository": "LiquidAI/LFM2-VL-450M",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-08-11",
+    "repository": "YannQi/R-4B",
+    "dtype": "FP32",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-08-04",
+    "repository": "openai/gpt-oss-20b",
+    "dtype": "MXFP4",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": true,
+      "toolParser": "openai",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-08-04",
+    "repository": "openai/gpt-oss-120b",
+    "dtype": "MXFP4",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": true,
+      "toolParser": "openai",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-07-31",
+    "repository": "Qwen/Qwen3-coder-30B-A3B-Instruct",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": true,
+      "toolParser": "qwen3_coder",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-07-30",
+    "repository": "tencent/Hunyuan-7B-Instruct",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-07-29",
+    "repository": "arcee-ai/AFM-4.5B-Base",
+    "dtype": "FP32",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-07-23",
+    "repository": "kakaocorp/kanana-1.5-v-3b-instruct",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-07-17",
+    "repository": "ibm-granite/granite-embedding-english-r2",
+    "dtype": "BF16",
+    "modelType": "feature-extraction",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-07-12",
+    "repository": "openbmb/MiniCPM-V-4",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-07-11",
+    "repository": "LGAI-EXAONE/EXAONE-4.0-32B",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-07-10",
+    "repository": "LiquidAI/LFM2-350M",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-06-28",
+    "repository": "baidu/ERNIE-4.5-VL-28B-A3B-PT",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-06-28",
+    "repository": "baidu/ERNIE-4.5-21B-A3B-PT",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-06-28",
+    "repository": "baidu/ERNIE-4.5-0.3B-PT",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-06-26",
+    "repository": "mispeech/midashenglm-7b",
+    "dtype": "FP32",
+    "modelType": "audio-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-06-26",
+    "repository": "Kwai-Keye/Keye-VL-8B-Preview",
+    "dtype": "BF16",
+    "modelType": "video-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-06-25",
+    "repository": "tencent/Hunyuan-A13B-Instruct",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-06-12",
+    "repository": "google/gemma-3n-E2B-it",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-06-11",
+    "repository": "allenai/FlexOlmo-7x7B-1T",
+    "dtype": "FP32",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-06-03",
+    "repository": "Qwen/Qwen3-Embedding-8B",
+    "dtype": "BF16",
+    "modelType": "feature-extraction",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-06-03",
+    "repository": "nvidia/Llama-3.1-Nemotron-Nano-VL-8B-V1",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-05-29",
+    "repository": "Qwen/Qwen3-Reranker-8B",
+    "dtype": "BF16",
+    "modelType": "text-ranking",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-05-19",
+    "repository": "ByteDance-Seed/BAGEL-7B-MoT",
+    "dtype": "BF16",
+    "modelType": "any-to-any",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-05-11",
+    "repository": "inclusionAI/Ling-lite-1.5",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-05-05",
+    "repository": "Qwen/Qwen3-30B-A3B-GPTQ-Int4",
+    "dtype": "Int4",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": true,
+      "toolParser": "hermes",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-04-29",
+    "repository": "XiaomiMiMo/MiMo-7B-RL",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-04-28",
+    "repository": "Qwen/Qwen3-30B-A3B-FP8",
+    "dtype": "FP8",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": true,
+      "toolParser": "hermes",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-04-27",
+    "repository": "Qwen/Qwen3-32B",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": true,
+      "toolParser": "hermes",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-04-27",
+    "repository": "Qwen/Qwen3-30B-A3B",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": true,
+      "toolParser": "hermes",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-04-27",
+    "repository": "Qwen/Qwen3-14B",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": true,
+      "toolParser": "hermes",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-04-22",
+    "repository": "naver-hyperclovax/HyperCLOVAX-SEED-Vision-Instruct-3B",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-04-17",
+    "repository": "allenai/OLMo-2-0425-1B",
+    "dtype": "FP32",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-04-14",
+    "repository": "ibm-granite/granite-speech-3.3-8b",
+    "dtype": "BF16",
+    "modelType": "automatic-speech-recognition",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-04-12",
+    "repository": "nvidia/Eagle2.5-8B",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-03-21",
+    "repository": "Qwen/Qwen2.5-VL-32B-Instruct",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-03-17",
+    "repository": "Skywork/Skywork-R1V-38B",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-03-16",
+    "repository": "nvidia/Llama-3_3-Nemotron-Super-49B-v1",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-03-11",
+    "repository": "mistralai/Mistral-Small-3.1-24B-Instruct-2503",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-03-10",
+    "repository": "google/gemma-3-1b-it",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-03-05",
+    "repository": "Qwen/QwQ-32B",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": true,
+      "toolParser": "hermes",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-03-02",
+    "repository": "CohereLabs/aya-vision-8b",
+    "dtype": "FP16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-03-01",
+    "repository": "google/gemma-3-27b-it",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-02-24",
+    "repository": "microsoft/Phi-4-multimodal-instruct",
+    "dtype": "BF16",
+    "modelType": "automatic-speech-recognition",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-02-17",
+    "repository": "ibm-granite/granite-3.2-2b-instruct",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-02-08",
+    "repository": "HuggingFaceTB/SmolVLM2-2.2B-Instruct",
+    "dtype": "FP32",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-02-06",
+    "repository": "fixie-ai/ultravox-v0_5-llama-3_2-1b",
+    "dtype": "BF16",
+    "modelType": "audio-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-01-27",
+    "repository": "Qwen/Qwen2.5-VL-72B-Instruct",
+    "dtype": "BF16",
+    "modelType": "image-text-to-text",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-01-20",
+    "repository": "deepseek-ai/DeepSeek-R1-Distill-Qwen-32B",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-01-20",
+    "repository": "deepseek-ai/DeepSeek-R1-Distill-Qwen-14B",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-01-20",
+    "repository": "deepseek-ai/DeepSeek-R1-Distill-Llama-8B",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-01-20",
+    "repository": "deepseek-ai/DeepSeek-R1-Distill-Llama-70B",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-01-13",
+    "repository": "internlm/internlm3-8b-instruct",
+    "dtype": "BF16",
+    "modelType": "text-generation",
+    "servingDefaults": {
+      "toolCalling": true,
+      "toolParser": "internlm",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  },
+  {
+    "releaseDate": "2025-01-12",
+    "repository": "openbmb/MiniCPM-o-2_6",
+    "dtype": "BF16",
+    "modelType": "any-to-any",
+    "servingDefaults": {
+      "toolCalling": false,
+      "toolParser": "",
+      "reasoningParser": "",
+      "chatTemplate": "",
+      "dtype": "",
+      "extra": ""
+    }
+  }
+]

@@ -127,7 +127,7 @@ export function recommendOptimizations(catalog, draft, profile, { strictTopology
         const pdChange = next.enabledCapabilities?.includes('transfer') !== current.enabledCapabilities.includes('transfer');
         if (draft.runtimeConfiguration && nextServing !== servingPaths && (strictTopology || pdChange || !SAME_SHAPE_SWAPS.has(id))) {
             decisions.push({ id, state: 'blocked', reason: pdChange ? 'Changes the prefill/decode topology. Compare the P/D plan or enable it here; replicas and TP are then sized per role.'
-                : id === 'cache' && current.enabledCapabilities.includes('transfer') ? 'KV cache offload is not yet supported together with Prefill / Decode separation; it is used with combined serving only.'
+                : id === 'cache' && current.enabledCapabilities.includes('transfer') ? 'Enable CPU KV cache and set its per-replica capacity to preserve the current P/D topology.'
                 : 'This changes the sized serving topology. Compare a separate candidate or explicitly edit the topology.' });
             continue;
         }

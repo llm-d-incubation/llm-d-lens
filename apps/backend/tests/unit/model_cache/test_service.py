@@ -245,6 +245,39 @@ async def test_get_refreshes_downloading_entry_to_ready(monkeypatch, service):
 
 
 @pytest.mark.asyncio
+async def test_get_repairs_ready_entry_with_downloading_nodes(monkeypatch, service):
+    volume = _volume()
+    from llm_d_lens.model_cache.contracts import ModelCacheEntry
+
+    entry = ModelCacheEntry(
+        clusterId="cluster-1",
+        storageVolumeId=volume.id,
+        source=ModelSource(kind=ModelSourceKind.HUGGINGFACE, huggingface=HuggingFaceSource(repoId="org/model")),
+        cachePath="models--org--model",
+        status=ModelCacheEntryStatus.READY,
+        nodeProgress=[
+            NodeDownloadStatus(node="node-a", status="downloading"),
+            NodeDownloadStatus(node="node-b", status="downloading"),
+        ],
+    )
+    service._store.create(entry)
+    monkeypatch.setattr(service_module, "get_or_none_volume", lambda volume_id: volume)
+    finished = set()
+
+    async def fake_poll_progress(entry, *, volume, action):
+        for progress in entry.node_progress:
+            if progress.node in finished:
+                progress.status = "ready"
+        return entry
+
+    monkeypatch.setattr(jobs_module, "poll_progress", fake_poll_progress)
+    finished.add("node-a")
+    assert (await service.get(entry.id)).status == ModelCacheEntryStatus.DOWNLOADING
+    finished.add("node-b")
+    assert (await service.get(entry.id)).status == ModelCacheEntryStatus.READY
+
+
+@pytest.mark.asyncio
 async def test_get_raises_not_found(service):
     with pytest.raises(ModelCacheNotFoundError):
         await service.get("does-not-exist")

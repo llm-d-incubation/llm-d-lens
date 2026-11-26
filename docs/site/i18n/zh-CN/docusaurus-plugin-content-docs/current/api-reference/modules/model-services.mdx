@@ -639,6 +639,10 @@ def revoke_model(model_id: str, binding_id: str, principal):
 
 把单个就绪部署发布为新的集群级公开模型名称，无需授予完整的模型组管理权限。公开名称尚不存在时，**Add model** 会使用此接口。调用者需要部署所在集群的 `model-service:member:manage` 权限。服务使用默认的 `random` 选择策略；编辑模型服务元数据或选择策略仍需要 `model-service:group:manage`。
 
+发布会新增共享 Gateway 路由，并保留部署自有的 Standalone Proxy。Gateway 调谐在提交路由前同步 EPP/Proxy 协议并等待就绪。`201` 仅表示发布记录已创建，不代表路由已就绪；迁移或滚动更新失败需查看调谐操作状态。历史 Gateway-only 部署需要重新部署才能获得独立入口。
+
+同样的传输修复失败也会阻止非管理员发布和验证。管理员交接脚本在应用路由前等待 EPP 就绪；如果 EPP 协议变更会影响独立代理，脚本会停止且不修改 EPP。请使用一致的协议重新部署，或使用足够权限通过 Lens 同步修复两者，然后重试交接。
+
 **`POST /api/v1/model-service/admin/groups/publish`**
 
 请求体（`GroupPublishRequest`）：
@@ -1542,7 +1546,7 @@ HTTP 处理函数保存配置并等待受影响集群的调谐提交。`status: 
 
 ### 移除一个成员
 
-移除一个已发布的成员。该处理函数会安排对其所在集群的调谐。
+移除一个已发布的成员。该处理函数会安排对其所在集群的调谐。部署自有的 Standalone Proxy、EPP 和模型工作负载保持不变，无需反向切换协议。直接调用 Python `delete_member()` 后还需调谐集群，以移除已发布路由。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">

@@ -102,7 +102,7 @@ async def aic_call(request: Request, operation: str, payload: dict) -> dict:
         if str(error) == NO_FEASIBLE:
             raise CandidateError(NO_FEASIBLE) from error
         logger.exception("AISimulate candidate search failed")
-        raise CandidateError("AIC candidate search failed") from error
+        raise CandidateError(error.public_message or "AIC candidate search failed") from error
     except TimeoutError as error:
         raise CandidateError("AIC candidate search timed out", 504) from error
 

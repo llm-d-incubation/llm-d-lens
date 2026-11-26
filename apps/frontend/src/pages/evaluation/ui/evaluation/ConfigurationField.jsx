@@ -1,5 +1,6 @@
 import { Children, cloneElement, isValidElement, useContext, useId, useState } from 'react';
 
+import { Input, Select } from '../../../../shared/ui/FormControls';
 import { ConfigurationValidationContext } from './configurationFieldState';
 
 export default function ConfigurationField({ field, children, className = '', suggestion }) {
@@ -10,7 +11,7 @@ export default function ConfigurationField({ field, children, className = '', su
     return <label tabIndex={-1} data-configuration-field={field} className={`block min-w-0 ${className}`} onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget)) setTouched(true);
     }}>
-        {Children.map(children, child => isValidElement(child) && ['input', 'select', 'textarea'].includes(child.type) ? cloneElement(child, {
+        {Children.map(children, child => isValidElement(child) && (child.type === Input || child.type === Select || ['input', 'select', 'textarea'].includes(child.type)) ? cloneElement(child, {
             'aria-invalid': messages.length ? true : undefined,
             'aria-describedby': messages.length ? [child.props['aria-describedby'], id].filter(Boolean).join(' ') : child.props['aria-describedby'],
             className: `${child.props.className || ''}${messages.length ? ' !border-rose-400 focus:!border-rose-400' : ''}`,

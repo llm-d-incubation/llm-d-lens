@@ -27,7 +27,105 @@ export function configurationCustomRows(content = {}) {
         .map(item => ({ ...item, value: String(item.value) }));
 }
 
-export function expandConfigurationTopologies({ guide, replicaVariants, tensorParallelVariants, prefillReplicaVariants, prefillTensorParallelVariants, pdTopologyVariants = '' }) {
+// Keep the saved batch bound aligned with EvaluationCreateRequest.benchmark_plans.
+export const MAX_EVALUATION_CONFIGURATIONS = 256;
+export const MAX_TOPOLOGY_COMBINATIONS = 100_000;
+
+export function parseTopologyValues(value) {
+    const values = new Set();
+    for (const part of String(value ?? '').replaceAll('，', ',').split(',')) {
+        const match = /^(\d+)(?:\s*-\s*(\d+)(?:\s*\/\s*(\d+))?)?$/.exec(part.trim());
+        if (!match) throw new Error('Enter positive integers, lists (1,2,4), or ranges (1-8 or 1-8/2).');
+        const first = Number(match[1]), last = match[2] ? Number(match[2]) : first, step = match[3] ? Number(match[3]) : 1;
+        if (![first, last, step].every(number => Number.isSafeInteger(number) && number > 0) || first > last) throw new Error('Use increasing positive integer ranges and a positive step.');
+        const count = Math.floor((last - first) / step) + 1;
+        if (count > 128) throw new Error('Each parameter supports up to 128 distinct values.');
+        for (let index = 0; index < count; index++) {
+            values.add(first + index * step);
+            if (values.size > 128) throw new Error('Each parameter supports up to 128 distinct values.');
+        }
+    }
+    return [...values].sort((a, b) => a - b);
+}
+
+export function topologySweepFromConfiguration({ prefillReplicaCount = 1, prefillTpCount = 1, replicaCount = 1, tpCount = 1 } = {}) {
+    return { prefillReplicaVariants: String(prefillReplicaCount), prefillTensorParallelVariants: String(prefillTpCount), replicaVariants: String(replicaCount), tensorParallelVariants: String(tpCount), relation: 'all', maxAccelerators: '', fixedAccelerators: '' };
+}
+
+export function analyzeConfigurationSweep(sweep, maxConfigurations = MAX_EVALUATION_CONFIGURATIONS) {
+    const values = {}, errors = [], variants = [];
+    const result = { values, errors, variants, rawCount: 0 };
+    for (const field of ['prefillReplicaVariants', 'prefillTensorParallelVariants', 'replicaVariants', 'tensorParallelVariants']) {
+        try { values[field] = parseTopologyValues(sweep[field]); }
+        catch (error) { errors.push({ field: `sweep.${field}`, message: error.message }); }
+    }
+    const relation = sweep.relation || 'all';
+    if (!['all', 'equal', 'decode', 'prefill'].includes(relation)) errors.push({ field: 'sweep.relation', message: 'Select a supported P/D replica relationship.' });
+    for (const field of ['maxAccelerators', 'fixedAccelerators']) {
+        const value = sweep[field];
+        values[field] = value == null || String(value).trim() === '' ? null : Number(value);
+        if (values[field] !== null && (!Number.isSafeInteger(values[field]) || values[field] < 1)) errors.push({ field: `sweep.${field}`, message: 'Enter a positive integer, or leave blank for no limit.' });
+    }
+    if (errors.length) return result;
+    result.rawCount = values.prefillReplicaVariants.length * values.prefillTensorParallelVariants.length * values.replicaVariants.length * values.tensorParallelVariants.length;
+    if (result.rawCount > MAX_TOPOLOGY_COMBINATIONS) {
+        errors.push({ field: 'topologies', message: `Narrow the parameter ranges to at most ${MAX_TOPOLOGY_COMBINATIONS.toLocaleString('en-US')} raw combinations.` });
+        return result;
+    }
+    for (const prefillReplicaCount of values.prefillReplicaVariants) for (const replicaCount of values.replicaVariants) {
+        if ((relation === 'equal' && prefillReplicaCount !== replicaCount) || (relation === 'decode' && prefillReplicaCount > replicaCount) || (relation === 'prefill' && prefillReplicaCount < replicaCount)) continue;
+        for (const prefillTpCount of values.prefillTensorParallelVariants) for (const tpCount of values.tensorParallelVariants) {
+            const gpuCount = prefillReplicaCount * prefillTpCount + replicaCount * tpCount;
+            if (!Number.isSafeInteger(gpuCount)) {
+                errors.push({ field: 'topologies', message: 'Accelerator totals are too large. Reduce the parameter values.' });
+                return { ...result, variants: [] };
+            }
+            if ((values.maxAccelerators !== null && gpuCount > values.maxAccelerators) || (values.fixedAccelerators !== null && gpuCount !== values.fixedAccelerators)) continue;
+            variants.push({ prefillReplicaCount, prefillTpCount, replicaCount, tpCount, gpuCount });
+        }
+    }
+    if (!variants.length) errors.push({ field: 'topologies', message: 'No configurations match these filters. Widen the filters or change the parameter ranges.' });
+    else if (variants.length > maxConfigurations) errors.push({ field: 'topologies', message: maxConfigurations === 1 ? 'Direct deployment requires one configuration. Narrow the ranges or filters to one result.' : `Keep at most ${maxConfigurations} configurations per Evaluation. Narrow the ranges or filters before saving.` });
+    return result;
+}
+
+export function parsePdReplicaPairs(pdTopologyVariants) {
+    return [...new Set(pdTopologyVariants.split(',').map(item => item.trim()))].map(item => {
+        if (!/^\d+\s*:\s*\d+$/.test(item)) throw new Error('Explicit P/D topologies require P:D pairs, such as 1:1,1:3.');
+        const pair = item.split(':').map(Number);
+        if (pair.some(value => !Number.isSafeInteger(value) || value < 1)) throw new Error('P/D replica counts must be positive integers.');
+        return pair;
+    });
+}
+
+export function configurationTopologyErrors({ guide, topologies }) {
+    if (!Array.isArray(topologies) || !topologies.length || topologies.length > 16) {
+        return [{ field: 'topologies', message: 'Enter between 1 and 16 configurations.' }];
+    }
+    const fields = ['replicaCount', 'tpCount', ...(guide === 'pd-disaggregation' ? ['prefillReplicaCount', 'prefillTpCount'] : [])];
+    return topologies.flatMap((row, index) => fields.flatMap(field => {
+        const value = row?.[field];
+        return !['number', 'string'].includes(typeof value) || !String(value).trim() || !Number.isSafeInteger(Number(value)) || Number(value) < 1
+            ? [{ field: `topologies.${index}.${field}`, message: 'Enter a positive whole number.' }] : [];
+    }));
+}
+
+export function expandConfigurationTopologies({ guide, replicaVariants, tensorParallelVariants, prefillReplicaVariants, prefillTensorParallelVariants, pdTopologyVariants = '', topologies, sweep, maxConfigurations = MAX_EVALUATION_CONFIGURATIONS }) {
+    if (sweep !== undefined) {
+        const result = analyzeConfigurationSweep(sweep, maxConfigurations);
+        if (result.errors.length) throw new Error(result.errors[0].message);
+        return result.variants;
+    }
+    if (topologies !== undefined) {
+        const errors = configurationTopologyErrors({ guide, topologies });
+        if (errors.length) throw new Error(errors[0].message);
+        return topologies.map(row => {
+            const prefillReplicaCount = guide === 'pd-disaggregation' ? Number(row.prefillReplicaCount) : 0;
+            const prefillTpCount = guide === 'pd-disaggregation' ? Number(row.prefillTpCount) : 0;
+            const replicaCount = Number(row.replicaCount), tpCount = Number(row.tpCount);
+            return { prefillReplicaCount, prefillTpCount, replicaCount, tpCount, gpuCount: prefillReplicaCount * prefillTpCount + replicaCount * tpCount };
+        });
+    }
     const parse = (value, label) => {
         const parts = String(value).split(',').map(item => item.trim());
         const values = parts.map(Number);
@@ -39,12 +137,7 @@ export function expandConfigurationTopologies({ guide, replicaVariants, tensorPa
     const prefillTps = isPd ? parse(prefillTensorParallelVariants, 'Prefill TP variants') : [0];
     let pairs;
     if (isPd && pdTopologyVariants.trim()) {
-        pairs = [...new Set(pdTopologyVariants.split(',').map(item => item.trim()))].map(item => {
-            if (!/^\d+\s*:\s*\d+$/.test(item)) throw new Error('Explicit P/D topologies require P:D pairs, such as 1:1,1:3.');
-            const pair = item.split(':').map(Number);
-            if (pair.some(value => !Number.isSafeInteger(value) || value < 1)) throw new Error('P/D replica counts must be positive integers.');
-            return pair;
-        });
+        pairs = parsePdReplicaPairs(pdTopologyVariants);
     } else {
         const replicas = parse(replicaVariants, 'Replica variants');
         const prefill = isPd ? parse(prefillReplicaVariants, 'Prefill replica variants') : [0];
@@ -107,10 +200,10 @@ export function sliceEvidenceProfiles(entries = []) {
     return [...profiles.values()];
 }
 
-export function expandSliceVariants(variants, sliceCounts) {
+export function expandSliceVariants(variants, sliceCounts, maxConfigurations = 16) {
     const counts = [...new Set(sliceCounts || [])].filter(count => Number.isSafeInteger(count) && count >= 1).sort((a, b) => a - b);
+    if (variants.length * Math.max(1, counts.length) > maxConfigurations) throw new Error(`A configuration sweep is limited to ${maxConfigurations} combinations including Slice counts.`);
     if (!counts.length) return variants.map(variant => ({ ...variant, slices: null }));
-    if (variants.length * counts.length > 16) throw new Error('A configuration sweep is limited to 16 combinations including Slice counts.');
     return variants.flatMap(variant => counts.map(slices => ({ ...variant, slices })));
 }
 

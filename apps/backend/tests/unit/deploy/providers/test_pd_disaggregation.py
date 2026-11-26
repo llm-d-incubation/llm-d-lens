@@ -358,11 +358,10 @@ async def test_deploy_uses_saved_bundle_when_original_guide_tree_is_missing(tmp_
     assert operations[0] == "copy_secret"
     assert any(command[:2] == ["kubectl", "apply"] for command in bundle_commands)
     assert not any("removed-guide" in " ".join(command) for command in bundle_commands + runner.commands)
-    # Gateway Mode: the saved effective values are merged with the shared-Gateway
-    # values so the deployment's own proxy is disabled.
+    # Saved effective values retain an independent proxy with compatible EPP transport.
     effective = yaml.safe_load(execution["router_effective_values"])
     assert effective["router"]["saved"] is True
-    assert effective["router"]["proxy"]["enabled"] is False
+    assert effective["router"]["proxy"]["enabled"] is True
     assert effective["router"]["epp"]["flags"]["secure-serving"] is False
     assert execution["router_rendered_manifest"].endswith("name: saved-router\n")
 
@@ -448,7 +447,6 @@ async def test_readiness_uses_contract_deployment_names():
 
 
 def test_guide_sources_follow_the_active_accelerator(monkeypatch, tmp_path):
-
     for relative in ("gpu/vllm/base", "xpu/vllm", "xpu/vllm-rdma"):
         overlay = tmp_path / "guides/pd-disaggregation/modelserver" / relative
         overlay.mkdir(parents=True)

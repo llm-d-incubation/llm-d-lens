@@ -1,16 +1,9 @@
-# Gateway Mode data plane for a deployed model.
-#
-# The deployment keeps its EPP + InferencePool but runs NO proxy/gateway: the
-# cluster-shared Gateway (installed once at cluster creation, provider-selectable)
-# fronts it through the model service's HTTPRoute. See
-# docs/design/model-service-design.md section 5.1.
+# Compatibility values for explicitly selected or recorded Gateway-only routers.
+# New deployments retain the standalone proxy. Publishing adds a shared route.
+# Final provider-specific overrides select the EPP transport.
 router:
   proxy:
     enabled: false
   epp:
     flags:
-      # The cluster Gateway (istio / agentgateway / envoy-ai-gateway) reaches the
-      # EPP over plaintext h2c; the EPP default (secure-serving=true) requires TLS
-      # and makes the ext_proc stream reset (500). llm-d docs require this false
-      # for plaintext gRPC gateways.
       secure-serving: false

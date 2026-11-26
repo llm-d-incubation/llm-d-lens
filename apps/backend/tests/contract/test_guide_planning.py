@@ -796,3 +796,29 @@ def test_recommendation_without_cluster_is_explicitly_unavailable(monkeypatch, t
     result = asyncio.run(guide._slice_recommendation(_recommendation_workload(), "", "", "pd-disaggregation"))
     assert result["source"] == "unavailable"
     assert result["reasons"] == ["No cluster selected; capacity estimation is unavailable"]
+
+
+@pytest.mark.asyncio
+async def test_rdma_defaults_follow_profile_device_class_discovery(monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from llm_d_lens.infrastructure import kubernetes
+
+    monkeypatch.setattr(
+        sources,
+        "all_profiles",
+        lambda: [
+            SimpleNamespace(upstream_variant="test-accelerator", dranet_device_class="example-rdma"),
+            SimpleNamespace(upstream_variant="neutral", dranet_device_class=None),
+        ],
+    )
+    runner = SimpleNamespace(
+        run=AsyncMock(return_value=SimpleNamespace(ok=True, stdout='{"items":[{"metadata":{"name":"example-rdma"}}]}'))
+    )
+    monkeypatch.setattr(kubernetes, "scoped_runner", lambda cluster: runner)
+    assert await sources.rdma_accelerators("cluster") == ["test-accelerator"]
+    runner.run.return_value = SimpleNamespace(ok=True, stdout='{"items":[]}')
+    assert await sources.rdma_accelerators("cluster") == []
+    runner.run.return_value = SimpleNamespace(ok=False)
+    assert await sources.rdma_accelerators("cluster") == []

@@ -2223,7 +2223,7 @@ def test_execute_lens_model_cache_jobs_passes_plan_hash_and_saves_updated_entry(
         seen_calls.append((volume.local_disk.namespace, plan_hash))
         return target_entry.model_copy(
             update={
-                "status": ModelCacheEntryStatus.DOWNLOADING,
+                "status": ModelCacheEntryStatus.READY,
                 "node_progress": [
                     NodeDownloadStatus(
                         node="worker-1",

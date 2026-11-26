@@ -1,4 +1,4 @@
-"""Deployment data-plane selection (design: docs/design/deployment-data-plane-design.md).
+"""Deployment data-plane selection and compatible Router transport.
 
 A deployment's data plane decides how a benchmark or a model service reaches it:
 
@@ -10,9 +10,9 @@ A deployment's data plane decides how a benchmark or a model service reaches it:
 
 Guides declare a static ``data_plane_kind`` (``llm-d-router`` for guides built on
 the llm-d router chart, ``direct`` for a plain vLLM Service, ``external`` for
-provider-owned resources). The framework combines that kind with whether the
-deployment is evaluation-owned to pick the concrete data plane; providers never
-branch on guide names.
+provider-owned resources). New router deployments keep their standalone proxy.
+Publishing adds a shared-Gateway route without changing their independent entry
+point. Recorded shared_gateway deployments retain their legacy behavior.
 """
 
 from __future__ import annotations
@@ -34,26 +34,19 @@ GATEWAY_MODE_VALUES_PATH = (
     Path(__file__).resolve().parent / "providers" / "router_values" / "router-gateway-mode.values.yaml"
 )
 
-#: Helm values that force the EPP's ext_proc to plaintext h2c. Applied to every
-#: ``llm-d-router`` deployment: the chart renders both the EPP flag and its own
-#: proxy's ext_proc cluster from it, so the deployment's proxy and the shared
-#: Gateway stay consistent (an EPP flipped to plaintext for the Gateway would
-#: otherwise leave the proxy on TLS and 503 every request).
+#: Base transport values for plaintext providers. Final provider-specific
+#: overrides select TLS when required and configure both EPP and its proxy.
 PLAINTEXT_EPP_VALUES_PATH = (
     Path(__file__).resolve().parent / "providers" / "router_values" / "router-plaintext-epp.values.yaml"
 )
 
 
 def _resolved_data_plane(execution_context: Mapping[str, Any] | None) -> DataPlane:
-    """The concrete data plane for a Helm context, or the evaluation-owned default.
-
-    Uses the framework-resolved ``data_plane`` when present; otherwise falls back
-    to the evaluation-owned check for callers that only pass a provenance.
-    """
+    """Use the recorded data plane, defaulting to an independent router."""
     data_plane = _data_plane_from_context(execution_context)
     if data_plane is not None:
         return data_plane
-    return "standalone_router" if evaluation_owned((execution_context or {}).get("provenance")) else "shared_gateway"
+    return "standalone_router"
 
 
 def evaluation_owned(provenance: Mapping[str, Any] | None) -> bool:
@@ -126,36 +119,12 @@ async def resolve_data_plane(
     provenance: Mapping[str, Any] | None,
     cluster_id: str | None,
 ) -> tuple[DataPlane, str | None]:
-    """Pick the concrete data plane for a deployment and any fallback warning.
-
-    A ``llm-d-router`` deployment uses the shared Gateway only when the cluster
-    actually has a ready one; otherwise it falls back to its own router proxy so
-    it stays reachable (returning an operator-visible warning). Evaluation-owned
-    deployments always keep their own proxy.
-    """
+    """Keep every new router deployment independent of Gateway publication."""
     if kind == "direct":
         return "direct", None
     if kind != "llm-d-router":
         return "external", None
-    if evaluation_owned(provenance):
-        return "standalone_router", None
-    if not cluster_id:
-        return "standalone_router", "no cluster is bound to this deployment; using its own router proxy"
-    from llm_d_lens.model_service.gateway_ops import GatewayOpsService  # noqa: PLC0415
-
-    try:
-        gateway_url = await GatewayOpsService().cluster_gateway_base_url(cluster_id)
-    except Exception as error:  # noqa: BLE001 - deploy must not fail on a Gateway lookup
-        return (
-            "standalone_router",
-            f"shared Gateway status could not be resolved ({error}); using the deployment's own router proxy",
-        )
-    if gateway_url:
-        return "shared_gateway", None
-    return (
-        "standalone_router",
-        "the cluster has no ready shared Gateway; using the deployment's own router proxy",
-    )
+    return "standalone_router", None
 
 
 def _data_plane_from_context(execution_context: Mapping[str, Any] | None) -> DataPlane | None:
@@ -166,10 +135,8 @@ def _data_plane_from_context(execution_context: Mapping[str, Any] | None) -> Dat
 def router_data_plane_args(execution_context: Mapping[str, Any] | None) -> list[str]:
     """Extra Helm ``--values`` args for the llm-d router chart.
 
-    Always forces the EPP's ext_proc to plaintext (see
-    ``PLAINTEXT_EPP_VALUES_PATH``). Additionally disables the deployment's own
-    proxy only for ``shared_gateway`` (``router-gateway-mode.values.yaml``);
-    evaluation-owned deployments and the no-ready-Gateway fallback keep it.
+    Configure EPP and its proxy using the cluster provider's transport. Only
+    an explicitly recorded ``shared_gateway`` deployment disables its proxy.
     """
     data_plane = _resolved_data_plane(execution_context)
     if data_plane in {"direct", "external"}:
@@ -177,7 +144,23 @@ def router_data_plane_args(execution_context: Mapping[str, Any] | None) -> list[
     args = ["--values", str(PLAINTEXT_EPP_VALUES_PATH)]
     if data_plane == "shared_gateway":
         args += ["--values", str(GATEWAY_MODE_VALUES_PATH)]
+    for key, value in router_transport_settings(execution_context).items():
+        args += ["--set", f"{key}={str(value).lower()}"]
     return args
+
+
+def router_transport_settings(execution_context: Mapping[str, Any] | None) -> dict[str, bool]:
+    """Render both sides of ext_proc from the same provider transport policy."""
+    from llm_d_lens.model_service.gateway_providers import epp_secure_serving
+
+    context = execution_context or {}
+    return {
+        "router.epp.flags.secure-serving": epp_secure_serving(
+            cluster_id=(context.get("provenance") or {}).get("cluster_server_id"),
+            provider=context.get("gateway_provider"),
+        ),
+        "router.proxy.enabled": _resolved_data_plane(context) != "shared_gateway",
+    }
 
 
 def router_data_plane_effective_values(content: str, execution_context: Mapping[str, Any] | None) -> str:
@@ -185,8 +168,8 @@ def router_data_plane_effective_values(content: str, execution_context: Mapping[
 
     The saved-bundle install path renders one effective values file, so the
     values are merged into it rather than passed as separate ``--values``. The
-    plaintext EPP flag is always applied; the shared-Gateway proxy disable only
-    for ``shared_gateway`` (see :func:`router_data_plane_args`).
+    provider's EPP transport and proxy lifecycle are identical in both paths
+    (see :func:`router_data_plane_args`).
     """
     data_plane = _resolved_data_plane(execution_context)
     if data_plane in {"direct", "external"}:
@@ -197,6 +180,9 @@ def router_data_plane_effective_values(content: str, execution_context: Mapping[
     if data_plane == "shared_gateway":
         gateway_values = yaml.safe_load(GATEWAY_MODE_VALUES_PATH.read_text(encoding="utf-8")) or {}
         merged = _deep_merge(merged, gateway_values)
+    settings = router_transport_settings(execution_context)
+    merged["router"]["epp"]["flags"]["secure-serving"] = settings["router.epp.flags.secure-serving"]
+    merged["router"].setdefault("proxy", {})["enabled"] = settings["router.proxy.enabled"]
     return yaml.safe_dump(merged, sort_keys=False)
 
 

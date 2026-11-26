@@ -68,13 +68,36 @@ def test_uses_shared_gateway_prefers_the_recorded_concrete_data_plane():
     assert deployment_uses_shared_gateway(owned_shared) is False
 
 
-def test_router_data_plane_args_always_force_plaintext_and_gate_disables_proxy():
-    plaintext = ["--values", str(PLAINTEXT_EPP_VALUES_PATH)]
-    shared = [*plaintext, "--values", str(GATEWAY_MODE_VALUES_PATH)]
-    assert router_data_plane_args({}) == shared
-    assert router_data_plane_args({"provenance": {"evaluate_workflow": True}}) == plaintext
-    assert router_data_plane_args({"provenance": {"evaluation_id": "eval-1"}}) == plaintext
-    assert router_data_plane_args(None) == shared
+@pytest.mark.parametrize(
+    "provider,secure", [("istio", False), ("agentgateway", False), ("envoy-ai-gateway", True), ("gke", True)]
+)
+def test_router_transport_matches_provider_and_retains_standalone(provider, secure):
+    import yaml
+
+    context = {"gateway_provider": provider}
+    expected = [
+        "--values",
+        str(PLAINTEXT_EPP_VALUES_PATH),
+        "--set",
+        f"router.epp.flags.secure-serving={str(secure).lower()}",
+        "--set",
+        "router.proxy.enabled=true",
+    ]
+    assert router_data_plane_args(context) == expected
+    merged = yaml.safe_load(
+        router_data_plane_effective_values(
+            "router:\n  proxy:\n    enabled: false\n  epp:\n    flags:\n      v: 2\n", context
+        )
+    )
+    assert merged["router"]["epp"]["flags"] == {"v": 2, "secure-serving": secure}
+    assert merged["router"]["proxy"]["enabled"] is True
+
+
+def test_transport_uses_selected_cluster_provider_before_gateway_is_installed(monkeypatch):
+    monkeypatch.setattr("llm_d_lens.cluster.registry.get_cluster", lambda _: SimpleNamespace(gateway_provider="gke"))
+    args = router_data_plane_args({"provenance": {"cluster_server_id": "cluster-new"}})
+    assert "router.epp.flags.secure-serving=true" in args
+    assert "router.proxy.enabled=true" in args
 
 
 @pytest.mark.asyncio
@@ -96,13 +119,13 @@ async def test_resolve_data_plane_evaluation_owned_skips_gateway_lookup(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_resolve_data_plane_uses_a_ready_shared_gateway(monkeypatch):
+async def test_resolve_data_plane_retains_standalone_even_with_a_ready_gateway(monkeypatch):
     async def ready(_self, _cluster_id):
         return "http://gateway:30012/v1"
 
     monkeypatch.setattr("llm_d_lens.model_service.gateway_ops.GatewayOpsService.cluster_gateway_base_url", ready)
     assert await resolve_data_plane("llm-d-router", provenance={}, cluster_id="cluster-1") == (
-        "shared_gateway",
+        "standalone_router",
         None,
     )
 
@@ -115,21 +138,26 @@ async def test_resolve_data_plane_falls_back_when_gateway_not_ready(monkeypatch)
     monkeypatch.setattr("llm_d_lens.model_service.gateway_ops.GatewayOpsService.cluster_gateway_base_url", not_ready)
     data_plane, warning = await resolve_data_plane("llm-d-router", provenance={}, cluster_id="cluster-1")
     assert data_plane == "standalone_router"
-    assert warning and "own router proxy" in warning
+    assert warning is None
 
 
 @pytest.mark.asyncio
 async def test_resolve_data_plane_without_a_cluster_falls_back():
     data_plane, warning = await resolve_data_plane("llm-d-router", provenance={}, cluster_id=None)
     assert data_plane == "standalone_router"
-    assert warning is not None
+    assert warning is None
 
 
 def test_router_data_plane_args_respect_the_resolved_data_plane():
     plaintext = ["--values", str(PLAINTEXT_EPP_VALUES_PATH)]
-    shared = [*plaintext, "--values", str(GATEWAY_MODE_VALUES_PATH)]
+    transport = ["--set", "router.epp.flags.secure-serving=false", "--set"]
+    shared = [*plaintext, "--values", str(GATEWAY_MODE_VALUES_PATH), *transport, "router.proxy.enabled=false"]
+    standalone = [*plaintext, *transport, "router.proxy.enabled=true"]
     assert router_data_plane_args({"data_plane": "shared_gateway"}) == shared
-    assert router_data_plane_args({"data_plane": "standalone_router"}) == plaintext
+    assert router_data_plane_args({"data_plane": "standalone_router"}) == standalone
+    assert router_data_plane_args({}) == standalone
+    assert router_data_plane_args(None) == standalone
+    assert router_data_plane_args({"provenance": {"evaluate_workflow": True}}) == standalone
     assert router_data_plane_args({"data_plane": "direct"}) == []
 
 
@@ -139,7 +167,7 @@ def test_effective_values_force_plaintext_epp_for_standalone_too():
     content = yaml.safe_dump({"router": {"saved": True, "epp": {"flags": {"v": 2}}}})
     merged = yaml.safe_load(router_data_plane_effective_values(content, {"data_plane": "standalone_router"}))
     assert merged["router"]["epp"]["flags"]["secure-serving"] is False
-    assert "proxy" not in merged["router"]
+    assert merged["router"]["proxy"]["enabled"] is True
 
     shared = yaml.safe_load(router_data_plane_effective_values(content, {"data_plane": "shared_gateway"}))
     assert shared["router"]["epp"]["flags"]["secure-serving"] is False

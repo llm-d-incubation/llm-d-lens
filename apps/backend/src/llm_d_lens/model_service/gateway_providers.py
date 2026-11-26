@@ -22,6 +22,7 @@ from typing import Literal
 import yaml
 
 from llm_d_lens.infrastructure.hostos import current_host
+from llm_d_lens.infrastructure.network import hostinfo
 from llm_d_lens.model_service.contracts import MAX_BACKEND_WEIGHT
 from llm_d_lens.versions import gateway_provider_version
 
@@ -69,8 +70,15 @@ AUTHZ_TLS_DR_NAME = f"{AUTHZ_SERVICE_NAME}-tls"
 
 
 def authz_tls_insecure_enabled() -> bool:
-    """Whether to originate unverified TLS to the Istio authz backend."""
-    return os.environ.get(AUTHZ_TLS_INSECURE_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+    """Whether to originate unverified TLS to the Istio authz backend.
+
+    An explicit env value wins; otherwise follow whether Lens itself serves HTTPS,
+    since plain-HTTP ext_authz to an HTTPS backend fails every request with 503.
+    """
+    value = os.environ.get(AUTHZ_TLS_INSECURE_ENV, "").strip().lower()
+    if value:
+        return value in {"1", "true", "yes", "on"}
+    return hostinfo.current_serving_tls()
 
 
 def authz_path(cluster_id: str | None) -> str:
@@ -93,6 +101,7 @@ class ProviderSpec:
     controller_name: str
     install_commands: tuple[tuple[str, ...], ...]
     envoy_client_traffic_policy: bool = False
+    epp_secure_serving: bool = False
 
 
 #: Install commands/classes mirror the official llm-d gateway recipes
@@ -102,6 +111,7 @@ ENVOY_AI_GATEWAY_VALUES = Path(__file__).resolve().parent / "gateway_values" / "
 PROVIDER_SPECS: dict[str, ProviderSpec] = {
     "envoy-ai-gateway": ProviderSpec(
         key="envoy-ai-gateway",
+        epp_secure_serving=True,
         display_name="Envoy AI Gateway",
         gateway_class="envoy-ai-gateway",
         controller_name="gateway.envoyproxy.io/gatewayclass-controller",
@@ -192,6 +202,7 @@ PROVIDER_SPECS: dict[str, ProviderSpec] = {
     ),
     "gke": ProviderSpec(
         key="gke",
+        epp_secure_serving=True,
         display_name="GKE Gateway",
         gateway_class="gke-l7-regional-external-managed",
         controller_name="networking.gke.io/gateway",
@@ -212,6 +223,20 @@ def provider_spec(provider: str) -> ProviderSpec:
 
 def available_providers() -> list[str]:
     return sorted(PROVIDER_SPECS)
+
+
+def epp_secure_serving(*, cluster_id: str | None = None, provider: str | None = None) -> bool:
+    """One transport policy for the shared Gateway and a deployment's proxy.
+
+    Selecting a provider does not require its Gateway to be installed. An
+    unpublished standalone deployment must remain independently reachable.
+    """
+    if provider is None and cluster_id:
+        from llm_d_lens.cluster.registry import get_cluster
+
+        cluster = get_cluster(cluster_id)
+        provider = cluster.gateway_provider if cluster else None
+    return provider_spec(provider or DEFAULT_PROVIDER).epp_secure_serving
 
 
 def default_pool_name(service: str | None) -> str | None:

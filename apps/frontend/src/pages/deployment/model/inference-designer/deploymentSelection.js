@@ -2,6 +2,7 @@ import { sourceRoutingCapabilities } from './capabilityRendering.js';
 import { expandCapabilityIntent } from './capabilityIntent.js';
 import { nodeResourceKinds } from './nodeParameters.js';
 import { resolveGuidePlan, isServingSourceUnit } from './guidePlan.js';
+import { createBlueprint } from './blueprint.js';
 import { optimizationCatalog, resolveOptimizationFeatures } from '@repo/shared/inference/optimizations';
 
 /** Keep a source-backed serving path when users clear optional selections. */
@@ -65,10 +66,16 @@ export function nodeParameterPaths(entity, draft) {
 export function capabilityTogglePatch(capability, draft) {
     if (!capability || capability.id === 'parallel' || capability.required || ['recipe', 'parameter'].includes(capability.selection)
         || ['external-operation', 'requires-adapter', 'unavailable'].includes(capability.generation)) return null;
-    if (capability.id === 'cache' && !capability.enabled && draft.nativeCpuCacheGiB) {
+    const cacheRecipe = (draft.selectedGuides || []).includes('tiered-prefix-cache')
+        || (draft.sourcePlan?.wholeGuides || []).includes('tiered-prefix-cache')
+        || draft.capabilityOverrides?.['disk-cache'] === true;
+    if (capability.id === 'cache' && !capability.enabled && (draft.nativeCpuCacheGiB != null || !cacheRecipe)) {
         const overrides = { ...draft.capabilityOverrides };
+        // Compose only the cache donor into the existing workers and router.
         delete overrides.cache;
-        return { sourceMode: true, capabilityOverrides: overrides };
+        overrides.prefix ??= true;
+        return { sourceMode: true, capabilityOverrides: overrides,
+            nativeCpuCacheGiB: draft.nativeCpuCacheGiB ?? Number(draft.cacheCpuGiB || createBlueprint().cacheCpuGiB) };
     }
     return { sourceMode: true, capabilityOverrides: { ...draft.capabilityOverrides, [capability.id]: !capability.enabled, ...(capability.id === 'disk-cache' && !capability.enabled ? { cache: true } : {}) } };
 }
@@ -77,10 +84,15 @@ export function capabilityTogglePatch(capability, draft) {
 export function selectionConflicts(catalog, draft, patch = {}) {
     if (!catalog) return [];
     const next = { ...draft, ...patch };
-    return deploymentSelection(catalog, next.selectedGuides, {
+    const errors = [];
+    if (next.nativeCpuCacheGiB != null && next.capabilityOverrides?.cache !== false) {
+        if (patch.nativeCpuCacheGiB != null && next.capabilityOverrides?.prefix === false) errors.push('Enable prefix caching before enabling CPU KV cache.');
+        if (next.capabilityOverrides?.prefix !== false && (!Number.isFinite(next.nativeCpuCacheGiB) || next.nativeCpuCacheGiB <= 0 || next.nativeCpuCacheGiB > 1024)) errors.push('CPU KV cache must be greater than zero and at most 1024 GiB per replica.');
+    }
+    return [...errors, ...deploymentSelection(catalog, next.selectedGuides, {
         model: next.model, namespace: next.sourceNamespace, variables: next.sourceVariables,
         capabilities: next.capabilityOverrides, guideChoices: next.guideChoices,
         mode: next.sourceRouter?.mode, accelerator: next.accelerator,
         units: next.sourceUnits, routerValues: next.sourceRouter?.values, finalConfiguration: next.finalConfiguration,
-    }).errors.filter(message => /^(Competing serving topologies:|Conflicting router releases:|Mutually exclusive source variants:)/.test(message));
+    }).errors.filter(message => /^(Competing serving topologies:|Conflicting router releases:|Mutually exclusive source variants:)/.test(message))];
 }

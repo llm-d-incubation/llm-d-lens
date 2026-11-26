@@ -117,6 +117,11 @@ async def _refresh(entry: ModelCacheEntry, *, store: ModelCacheStore) -> ModelCa
     since the frontend disables its own Delete button once an entry is
     already ``deleting``.
     """
+    if entry.status == ModelCacheEntryStatus.READY and any(
+        progress.status in _IN_PROGRESS_STATUSES for progress in entry.node_progress
+    ):
+        # Repairs entries saved as ready while their download Jobs were still running.
+        entry.status = ModelCacheEntryStatus.DOWNLOADING
     if entry.status not in (ModelCacheEntryStatus.DOWNLOADING, ModelCacheEntryStatus.DELETING):
         return entry
     volume = get_or_none_volume(entry.storage_volume_id)

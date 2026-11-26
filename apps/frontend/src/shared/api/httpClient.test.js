@@ -43,6 +43,26 @@ test('transport preserves abort failures', async (t) => {
     await assert.rejects(requestJson('/test'), error => error === failure);
 });
 
+test('cluster credential errors do not expire the Lens session', async (t) => {
+    const events = [];
+    const originalWindow = globalThis.window;
+    globalThis.window = { dispatchEvent: event => events.push(event.type) };
+    t.after(() => {
+        if (originalWindow === undefined) delete globalThis.window;
+        else globalThis.window = originalWindow;
+    });
+    for (const [payload, expectedCount] of [
+        [{ code: 'cluster_unauthenticated' }, 0],
+        [{ detail: { code: 'kubeconfig_unauthorized' } }, 0],
+        [{ code: 'session_expired' }, 1],
+        [{ code: 'unauthenticated' }, 2],
+    ]) {
+        t.mock.method(globalThis, 'fetch', async () => Response.json(payload, { status: 401 }));
+        await assert.rejects(requestJson('/test'), { status: 401 });
+        assert.deepEqual(events, Array(expectedCount).fill('prism:auth-expired'));
+    }
+});
+
 test('strict JSON clients reject malformed success but retain domain HTTP errors', async (t) => {
     t.mock.method(globalThis, 'fetch', async () => new Response('not JSON'));
     await assert.rejects(requestJson('/test', {}, {strictJson:true}), SyntaxError);

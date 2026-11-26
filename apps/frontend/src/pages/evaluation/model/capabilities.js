@@ -66,7 +66,11 @@ export function guideVariantOptions(modelServers = [], modelServer = '') {
     return options;
 }
 
-export function selectedGuideVariant(options, current = '') {
+export function selectedGuideVariant(options, current = '', { preferRdma = false } = {}) {
+    if (preferRdma) {
+        const rdma = options.find(option => /(?:^|[/-])rdma(?:$|[/-])/.test(option.value));
+        if (rdma) return rdma.value;
+    }
     if (options.some(option => option.value === current)) return current;
     return options.find(option => option.value === '.')?.value
         || options.find(option => option.value === 'base')?.value || options[0]?.value || '';

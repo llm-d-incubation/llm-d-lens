@@ -74,7 +74,9 @@ class GuideHelmConfigurationAdapter:
                             "format": configuration.format,
                             "deployment_name": configuration.provenance.get("deployment_name")
                             or configuration.content["model"]["name"],
-                            "namespace_policy": configuration.provenance.get("namespace_policy"),
+                            "namespace_policy": self._client_namespace_policy(
+                                configuration.provenance.get("namespace_policy")
+                            ),
                             "placement": run_provenance.get("placement"),
                             "runtime_class": RuntimeClassPolicy.model_validate(
                                 run_provenance.get("runtime_class")
@@ -97,6 +99,14 @@ class GuideHelmConfigurationAdapter:
                 ),
             )
         ]
+
+    @staticmethod
+    def _client_namespace_policy(raw_policy: object) -> dict[str, object] | None:
+        if not isinstance(raw_policy, dict):
+            return None
+        # `exact` namespace pinning is server-owned after bootstrap verification.
+        sanitized = {key: value for key, value in raw_policy.items() if key != "exact"}
+        return sanitized or None
 
     @staticmethod
     def _validate(configuration: DeployableConfiguration) -> None:

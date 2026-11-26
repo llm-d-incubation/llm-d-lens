@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Box, CheckCircle2, ChevronDown, Database, HardDrive, Layers, Network, Rocket, Search, Server, SlidersHorizontal, Sparkles, Tag, Wrench } from 'lucide-react';
-import { CATEGORIES, MODELS } from '@repo/shared/catalog';
+import { MODELS, defaultServing, filterCatalogModels } from '@repo/shared/catalog';
+import { useModelCatalog } from '../../../shared/lib/useModelCatalog';
+import CatalogModelEditor from './CatalogModelEditor';
+import ModelParametersForm from './ModelParametersForm';
 import { requestJson } from '../../../shared/api/httpClient';
 import { usePolling } from '../../../shared/lib/usePolling';
 import { Badge, Button, EmptyState, Input, ModuleHeader, ModulePage, Panel, Select, Spinner, StorageVolumeSelect, Textarea, ToggleGroup } from '../../../shared/ui';
@@ -43,11 +46,6 @@ const OBJECTIVE_HINTS = {
     throughput: 'Prefers more serving replicas; a concurrency target sizes the replica count.',
 };
 
-// Tool calling is harmless for requests without tools, so catalog models with a known parser always get it.
-function defaultServing(model) {
-    return { toolCalling: Boolean(model?.toolParser), toolParser: model?.toolParser || '', extra: '' };
-}
-
 function deploymentName(model) {
     const suffix = crypto.randomUUID().slice(0, 8);
     return `${String(model.id || 'model').slice(0, 54)}-${suffix}`;
@@ -65,7 +63,7 @@ export function ModelCard({ model, onSelect }) {
                 <Box size={19} className="shrink-0 text-[var(--brand-accent)] transition dark:text-slate-500 dark:group-hover:text-cyan-300" aria-hidden="true" />
             </div>
             <dl className="mt-5 grid grid-cols-2 gap-x-3 gap-y-4 text-xs">
-                <div><dt className="text-slate-500">Released</dt><dd className="mt-1 text-slate-700 dark:text-slate-200">{model.releaseDate}</dd></div>
+                <div><dt className="text-slate-500">Released</dt><dd className="mt-1 text-slate-700 dark:text-slate-200">{model.releaseDate || 'Not listed'}</dd></div>
                 <div><dt className="text-slate-500">Precision</dt><dd className="mt-1 text-slate-700 dark:text-slate-200">{model.dtype}</dd></div>
                 <div><dt className="text-slate-500">Weights</dt><dd className="mt-1 text-slate-700 dark:text-slate-200">{model.weightGiB ? `${model.weightGiB} GiB` : 'Not listed'}</dd></div>
                 <div><dt className="text-slate-500">Context</dt><dd className="mt-1 text-slate-700 dark:text-slate-200">{model.contextLength ? model.contextLength.toLocaleString() : 'Not listed'}</dd></div>
@@ -77,6 +75,8 @@ export function ModelCard({ model, onSelect }) {
 
 export default function ModelMarketPage({ onNavigate, isActive = true }) {
     const { can } = useAuth();
+    const catalog = useModelCatalog(isActive);
+    const [editingModel, setEditingModel] = useState(undefined);
     const [selected, setSelected] = useState(() => {
         const saved = sessionStorage.getItem('prism_model_market_return_draft');
         if (!saved) return null;
@@ -84,6 +84,7 @@ export default function ModelMarketPage({ onNavigate, isActive = true }) {
         catch { return null; }
     });
     const [category, setCategory] = useState('All'), [search, setSearch] = useState('');
+    const [publisher, setPublisher] = useState(''), [sort, setSort] = useState('newest');
     const [name, setName] = useState(''), [description, setDescription] = useState('');
     const [cluster, setCluster] = useState(''), [clusters, setClusters] = useState([]);
     const [storage, setStorage] = useState(''), [volumes, setVolumes] = useState([]);
@@ -168,7 +169,7 @@ export default function ModelMarketPage({ onNavigate, isActive = true }) {
         setCheckingCache(true);
         try {
             const entries = await listModelCacheEntries({ clusterId: cluster, storageVolumeId: storage });
-            if (request === cacheRequest.current) setCacheReady(entries.some(entry => entry.status === 'ready' && entry.source?.kind === 'huggingface' && String(entry.source.huggingface.repoId || '').toLowerCase() === selected.repository.toLowerCase()));
+            if (request === cacheRequest.current) setCacheReady(entries.some(entry => entry.status === 'ready' && entry.source?.kind === 'huggingface' && String(entry.source.huggingface.repoId || '').toLowerCase() === selected.repository.toLowerCase() && (entry.source.huggingface.revision || 'main') === selected.revision));
         } catch (failure) { if (request === cacheRequest.current) { setCacheReady(false); setError(failure.message); } }
         finally { if (request === cacheRequest.current) setCheckingCache(false); }
     }, [selected, storage, cluster]);
@@ -188,6 +189,7 @@ export default function ModelMarketPage({ onNavigate, isActive = true }) {
         const defaults = standardRecommendation(selected, hardware);
         const { contextLength, ...limits } = workload;
         setDraft({
+            modelCatalogId: selected.id, modelCatalogVersion: selected.version, modelRevision: selected.revision, servingOverrides: { ...serving },
             model: selected.repository, modelTitle: selected.name, modelWeightGiB: selected.weightGiB || selected.sizeGiB,
             deploymentName: name, description, initialObjective: objective, clusterId: cluster, clusterName: clusters.find(item => item.id === cluster)?.name, storageVolumeId: storage, storageVolumeName: volumes.find(item => item.id === storage)?.name,
             contextLength: contextLength ? Number(contextLength) : defaults.maxModelLen, gpuMemoryUtilization: 0.9,
@@ -200,22 +202,28 @@ export default function ModelMarketPage({ onNavigate, isActive = true }) {
             },
         });
     };
-    const words = search.trim().toLowerCase().split(/\s+/).filter(Boolean);
-    const models = MODELS.filter(model => (category === 'All' || model.category === category) && words.every(word => [model.name, model.family, model.repository, model.modelType, model.category, model.dtype].some(value => String(value || '').toLowerCase().includes(word))));
+    const publishers = [...new Set(catalog.models.filter(model => category === 'All' || model.category === category).map(model => model.family))].sort((a, b) => a.localeCompare(b));
+    const models = filterCatalogModels(catalog.models, { category, publisher, search, sort });
     if (!selected) return <ModulePage contentClassName="flex flex-col gap-4 py-4 lg:py-5">
-        <ModuleHeader icon={Database} title="Model Catalog" />
+        <ModuleHeader icon={Database} title="Model Catalog" actions={can('model-catalog:entry:create') ? <Button onClick={() => setEditingModel(null)}>Add custom model</Button> : undefined} />
+        <FormError message={catalog.error} />
+        {editingModel !== undefined && <CatalogModelEditor model={editingModel} canDelete={can('model-catalog:entry:delete')} onClose={() => setEditingModel(undefined)} onSaved={() => { setEditingModel(undefined); catalog.reload(); }} />}
         <p className="text-sm text-theme-muted">Choose a model to deploy.</p>
         <div className="flex flex-wrap items-center gap-3">
-            <div className="flex min-w-0 w-full flex-wrap gap-2 lg:w-auto lg:flex-1" role="tablist" aria-label="Model categories">{CATEGORIES.map(item => <Button type="button" key={item} role="tab" size="sm" variant="catalogTab" className="h-auto rounded-md px-3 py-1.5 font-normal" aria-selected={category === item} onClick={() => setCategory(item)}>{item}</Button>)}</div>
+            <div className="flex min-w-0 w-full flex-wrap gap-2 lg:w-auto lg:flex-1" role="tablist" aria-label="Model categories">{catalog.categories.map(item => <Button type="button" key={item} role="tab" size="sm" variant="catalogTab" className="h-auto rounded-md px-3 py-1.5 font-normal" aria-selected={category === item} onClick={() => { setCategory(item); setPublisher(''); }}>{item}</Button>)}</div>
             <div className="ml-auto flex max-w-full flex-wrap items-center gap-2">
+                <label className="text-xs text-theme-muted"><Select aria-label="Filter by publisher" value={publisher} onChange={event => setPublisher(event.target.value)}><option value="">All publishers</option>{publishers.map(value => <option key={value} value={value}>{value}</option>)}</Select></label>
+                <label className="text-xs text-theme-muted"><Select aria-label="Sort models" value={sort} onChange={event => setSort(event.target.value)}><option value="newest">Release date: newest first</option><option value="oldest">Release date: oldest first</option><option value="name">Name: A–Z</option></Select></label>
                 <span role="status" className="text-xs text-theme-muted">{models.length} models</span>
                 <div className="w-52 sm:w-64">
                     <Input type="search" icon={Search} aria-label="Search models" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search models, publishers, repositories, types, or precision..." />
                 </div>
-                {(search || category !== 'All') && <Button type="button" size="sm" variant="secondary" onClick={() => { setSearch(''); setCategory('All'); }}>Clear filters</Button>}
+                {(search || publisher || category !== 'All') && <Button type="button" size="sm" variant="secondary" onClick={() => { setSearch(''); setPublisher(''); setCategory('All'); }}>Clear filters</Button>}
             </div>
         </div>
-        <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">{models.map(model => <ModelCard key={model.id} model={model} onSelect={choose} />)}{!models.length && <EmptyState className="col-span-full" icon={<Search size={22} aria-hidden="true" />} title="No matching models" message="Try another search or change the model category." />}</section>
+        <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">{models.map(model => <div key={model.id} className="flex flex-col gap-2"><ModelCard model={model} onSelect={choose} />
+            <div className="flex items-center justify-between gap-2"><Badge tone="neutral">{model.source === 'custom' ? 'Custom' : 'Built-in'}</Badge>
+            {(model.source === 'custom' ? can('model-catalog:entry:update') : can('model-catalog:entry:create')) && <Button size="xs" variant="ghost" onClick={() => setEditingModel(model)}>{model.source === 'custom' ? 'Edit defaults' : 'Copy & customize'}</Button>}</div></div>)}{!models.length && <EmptyState className="col-span-full" icon={<Search size={22} aria-hidden="true" />} title="No matching models" message="Try another search, publisher, or model category." />}</section>
     </ModulePage>;
     const allowed = can('deployment:run:create');
     // Swap with the current plan so users can move back and forth without losing either.
@@ -227,6 +235,11 @@ export default function ModelMarketPage({ onNavigate, isActive = true }) {
     };
     const workloadField = (key, label, placeholder) => <label key={key} className="block text-xs font-medium text-theme-text">{label}<Input className="mt-1.5" type="number" min={key === 'requestRate' ? '0.01' : '1'} step={key === 'requestRate' ? 'any' : '1'} value={workload[key]} placeholder={placeholder} onChange={event => setWorkload(current => ({ ...current, [key]: event.target.value }))} /></label>;
     const customCount = Object.values(workload).filter(Boolean).length;
+    let toolSummary = 'Check model parameters';
+    try {
+        const effective = new Map(servingArguments(serving).map(item => [item.name, item.value]));
+        toolSummary = effective.get('enable-auto-tool-choice') === 'true' ? `Tool calling on · ${effective.get('tool-call-parser')}` : 'Tool calling off';
+    } catch { /* Invalid settings are reported when the user generates a plan. */ }
     const restoreLabel = previousPlans.length ? `Back to ${previousPlans.at(-1).mode === 'manual' ? 'Manual' : 'Agentic'} plan` : '';
     const Workspace = mode === 'manual' ? ManualDeploymentWorkspace : AgenticDeploymentWorkspace;
     return <ModulePage contentClassName="mx-auto flex max-w-7xl flex-col gap-5">
@@ -251,7 +264,7 @@ export default function ModelMarketPage({ onNavigate, isActive = true }) {
                     <SetupField icon={<Network size={13} aria-hidden="true" />} label="Pod placement"><PodPlacementControl inline value={placement} onChange={setPlacement} clusterId={cluster} nodeName={placementNode} onNodeChange={setPlacementNode} listNodeLabels={listDeploymentNodeLabels} /></SetupField>
                 </div>
                 {!clusters.length && <div className="flex flex-wrap items-center justify-between gap-3 border-t border-theme-border px-5 py-3 text-sm"><span className="text-theme-muted">Connect a cluster to deploy.</span><Button type="button" size="sm" variant="secondary" onClick={() => onNavigate('clusters')}>Connect cluster<ArrowRight size={14} /></Button></div>}
-                {cluster && !cacheReady && !loadingStorage && !checkingCache && <div className="flex flex-wrap items-center justify-between gap-3 border-t border-theme-border px-5 py-3 text-sm"><span className="text-theme-muted">Download {selected.repository} into this model cache before building a plan.</span><Button type="button" size="sm" variant="secondary" onClick={() => onNavigate('model-cache', { downloadModel: { clusterId: cluster, repoId: selected.repository, storageVolumeId: storage } })}>Prepare model cache<ArrowRight size={14} /></Button></div>}
+                {cluster && !cacheReady && !loadingStorage && !checkingCache && <div className="flex flex-wrap items-center justify-between gap-3 border-t border-theme-border px-5 py-3 text-sm"><span className="text-theme-muted">Download {selected.repository} into this model cache before building a plan.</span><Button type="button" size="sm" variant="secondary" onClick={() => onNavigate('model-cache', { downloadModel: { clusterId: cluster, repoId: selected.repository, revision: selected.revision, storageVolumeId: storage } })}>Prepare model cache<ArrowRight size={14} /></Button></div>}
             </Panel>
             <Panel id="deployment-mode" padding="none" aria-label="Planning mode">
                 <div className="space-y-6 p-5 sm:p-6">
@@ -338,11 +351,12 @@ export default function ModelMarketPage({ onNavigate, isActive = true }) {
                         </div>
                     </details>}
                     <details id="deployment-serving" className="deployment-workload">
-                        <OptionSummary icon={<Wrench size={15} aria-hidden="true" />} title="vLLM options"
-                            detail={serving.extra.trim() ? 'Additional arguments' : 'Using runtime defaults'} />
-                        <div className="deployment-workload-body">
-                            <label className="block text-xs text-theme-muted">Additional vLLM arguments<Textarea className="mt-1 font-mono text-xs" rows={4} value={serving.extra} placeholder={'kv-cache-dtype=fp8\nreasoning-parser=qwen3'} onChange={event => setServing(current => ({ ...current, extra: event.target.value }))} />
-                                <span className="mt-1 block">One name=value per line. Context, batching, memory and parallelism are set by the plan and can be edited after it is built.</span></label>
+                        <OptionSummary icon={<Wrench size={15} aria-hidden="true" />} title="Model parameters"
+                            detail={`${toolSummary} · ${JSON.stringify(serving) === JSON.stringify(defaultServing(selected)) ? 'Model defaults' : 'Deployment overrides'}`} />
+                        <div className="deployment-workload-body space-y-4">
+                            <ModelParametersForm value={serving} onChange={setServing} />
+                            <p className="text-xs text-theme-muted">Changes apply only to this deployment. Catalog defaults stay unchanged.</p>
+                            <Button type="button" size="xs" variant="ghost" onClick={() => setServing(defaultServing(selected))}>Restore model defaults</Button>
                         </div>
                     </details>
                     </div>

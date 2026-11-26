@@ -353,8 +353,12 @@ async def render_source_plan(service, run_id, payload, request):
                 if (
                     binding["model"] != original.request.model
                     or binding["storageVolumeId"] != original.request.storage_volume_id
+                    or (
+                        original.request.model_revision is not None
+                        and binding["revision"] != original.request.model_revision
+                    )
                 ):
-                    raise ValueError("Composition must use the plan's model and storage.")
+                    raise ValueError("Composition must use the plan's model, revision and storage.")
                 intent = dict(body.get("deploymentIntent") or {})
                 intent["maxDevices"] = original.request.requirements.hard_constraints.get("maxAccelerators") or ""
                 body["deploymentIntent"] = intent

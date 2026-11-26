@@ -434,6 +434,30 @@ class DeploymentCapabilityUnavailableError(RuntimeError):
     status_code = 503
 
 
+class DeploymentAdminSetupRequiredError(Exception):
+    """Raised when deployment requires Orchestration administrator namespace bootstrap."""
+
+    code = "deployment_admin_setup_required"
+    status_code = 403
+
+    def __init__(self, report: dict[str, Any], message: str | None = None) -> None:
+        self.report = dict(report)
+        namespace = self.report.get("namespace")
+        default_message = (
+            f"Deployment namespace {namespace} requires Orchestration administrator bootstrap."
+            if namespace
+            else "Deployment requires Orchestration administrator bootstrap."
+        )
+        super().__init__(message or default_message)
+
+    def to_response_payload(self) -> dict[str, Any]:
+        return {
+            **self.report,
+            "code": self.code,
+            "detail": str(self),
+        }
+
+
 class DeploymentPermissionCheckRequest(BaseModel):
     """Input payload for deployment permission preflight and bootstrap script rendering."""
 
@@ -1928,14 +1952,49 @@ def render_deployment_bootstrap_script(
     }
 
 
+def _resolve_prepared_plan_request_id(
+    plan_id: str,
+    *,
+    cluster_id: str,
+    namespace: str,
+    owner_user_id: str | None = None,
+) -> str | None:
+    from llm_d_lens.db.dao.deployment_plan import DeploymentPlanDao
+
+    plan = DeploymentPlanDao().get(plan_id)
+    if plan is None or plan.cluster_id != cluster_id or plan.owner_user_id != owner_user_id:
+        return None
+    for entry in (plan.payload or {}).get("artifacts") or ():
+        if not isinstance(entry, Mapping):
+            continue
+        if (entry.get("context") or {}).get("namespace") != namespace:
+            continue
+        prepared_ns = (entry.get("artifact") or {}).get("deployment_contract", {}).get("preparedNamespace")
+        label_req = ((prepared_ns or {}).get("metadata") or {}).get("labels", {}).get("lens.io/prepared-request")
+        if isinstance(label_req, str) and label_req.strip():
+            return label_req.strip()
+    return None
+
+
 async def generate_deployment_bootstrap_script(
     request: DeploymentPermissionCheckRequest,
     *,
+    owner_user_id: str | None = None,
     runner: Any = None,
 ) -> dict[str, Any]:
     """Run SSAR preflight and render the Orchestration administrator bootstrap script for the target namespace."""
     report = await check_deployment_permissions(request, runner=runner)
-    prepared_req = request.prepared_request_id or request.prepared_plan_id
+    prepared_req = request.prepared_request_id
+    if not prepared_req and request.prepared_plan_id:
+        prepared_req = (
+            _resolve_prepared_plan_request_id(
+                request.prepared_plan_id,
+                cluster_id=report["clusterId"],
+                namespace=report["namespace"],
+                owner_user_id=owner_user_id,
+            )
+            or request.prepared_plan_id
+        )
     return render_deployment_bootstrap_script(
         cluster_id=report["clusterId"],
         namespace=report["namespace"],
@@ -1991,6 +2050,55 @@ def record_verified_namespace(
             )
 
 
+def _verified_namespace_keys(
+    cluster_id: str,
+    *,
+    owner_user_id: str | None = None,
+    agentic_deployment_run_id: str | None = None,
+    deployment_name: str | None = None,
+    prepared_plan_id: str | None = None,
+) -> list[tuple[str, str, str, str]]:
+    if not cluster_id:
+        return []
+    owner_scope = owner_user_id or ""
+    keys: list[tuple[str, str, str, str]] = []
+    if prepared_plan_id:
+        keys.append((owner_scope, cluster_id, "prepared_plan", prepared_plan_id))
+    if agentic_deployment_run_id:
+        keys.append((owner_scope, cluster_id, "agentic_run", agentic_deployment_run_id))
+    if deployment_name:
+        keys.append((owner_scope, cluster_id, "deployment_name", deployment_name))
+    return keys
+
+
+def peek_verified_namespace(
+    cluster_id: str,
+    *,
+    owner_user_id: str | None = None,
+    agentic_deployment_run_id: str | None = None,
+    deployment_name: str | None = None,
+    prepared_plan_id: str | None = None,
+) -> str | None:
+    """Return the verified target namespace without popping it."""
+    keys = _verified_namespace_keys(
+        cluster_id,
+        owner_user_id=owner_user_id,
+        agentic_deployment_run_id=agentic_deployment_run_id,
+        deployment_name=deployment_name,
+        prepared_plan_id=prepared_plan_id,
+    )
+    if not keys:
+        return None
+    now = time.monotonic()
+    with _VERIFIED_BINDINGS_LOCK:
+        _prune_verified_bindings_locked(now)
+        for key in keys:
+            entry = _VERIFIED_NAMESPACES.get(key)
+            if entry is not None:
+                return entry[0]
+    return None
+
+
 def consume_verified_namespace(
     cluster_id: str,
     *,
@@ -2000,16 +2108,13 @@ def consume_verified_namespace(
     prepared_plan_id: str | None = None,
 ) -> str | None:
     """Pop and return the verified target namespace for a single-case run start."""
-    if not cluster_id:
-        return None
-    owner_scope = owner_user_id or ""
-    keys: list[tuple[str, str, str, str]] = []
-    if agentic_deployment_run_id:
-        keys.append((owner_scope, cluster_id, "agentic_run", agentic_deployment_run_id))
-    if prepared_plan_id:
-        keys.append((owner_scope, cluster_id, "prepared_plan", prepared_plan_id))
-    if deployment_name:
-        keys.append((owner_scope, cluster_id, "deployment_name", deployment_name))
+    keys = _verified_namespace_keys(
+        cluster_id,
+        owner_user_id=owner_user_id,
+        agentic_deployment_run_id=agentic_deployment_run_id,
+        deployment_name=deployment_name,
+        prepared_plan_id=prepared_plan_id,
+    )
     if not keys:
         return None
     now = time.monotonic()

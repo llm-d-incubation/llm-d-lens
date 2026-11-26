@@ -257,3 +257,25 @@ def test_support_rejects_joint_load_targets_before_calling_aic(monkeypatch):
     assert response.status_code == 422
     assert "only one load target" in response.json()["error"]
     support.assert_not_awaited()
+
+
+def test_candidate_search_preserves_actionable_aic_failure(monkeypatch):
+    monkeypatch.setattr(candidates, "require_route_permission", AsyncMock())
+    monkeypatch.setattr(
+        candidates.aic_service,
+        "check_support",
+        AsyncMock(
+            side_effect=candidates.aic_service.AICError(
+                "AISimulate is unavailable; install the project dependencies", public=True
+            )
+        ),
+    )
+    response = TestClient(app).post(
+        "/api/candidate-support",
+        json={
+            "workload": {"model": "test/model"},
+            "searchConfig": {"aicSystemName": "b60"},
+        },
+    )
+    assert response.status_code == 400
+    assert "install the project dependencies" in response.json()["error"]

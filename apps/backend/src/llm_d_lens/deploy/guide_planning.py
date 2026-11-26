@@ -1082,14 +1082,20 @@ async def source_compose(request: Request, body: dict):
 
 @router.get("/catalog")
 async def catalog(request: Request):
-    from .guide_sources import catalog_from_paths, load_guide_paths
+    from .guide_sources import catalog_from_paths, load_guide_paths, rdma_accelerators
 
     try:
         source = await load_guide_paths(request, dict(request.query_params))
+        try:
+            rdma = await rdma_accelerators(str(request.query_params.get("clusterId") or ""))
+        except (OSError, ValueError, TimeoutError):
+            logger.warning("RDMA discovery unavailable for Guide defaults", exc_info=True)
+            rdma = []
         return {
             "repository": os.environ.get("LLM_D_GUIDES_REPOSITORY", "llm-d/llm-d"),
             "ref": source["ref"],
             "guides": catalog_from_paths(source["paths"]),
+            "rdmaAccelerators": rdma,
         }
     except DomainError:
         raise

@@ -1,7 +1,17 @@
 ---
 title: Installation
-description: Install Lens online without cloning the repository, or develop from source.
+description: Install Lens online, run from source, or install only the standalone llmd CLI.
 ---
+
+## Choose what to install
+
+| Install option | What you get | Requirements | Jump to |
+| --- | --- | --- | --- |
+| **Online installer** | Packaged Lens Web GUI, unified Python backend (`llm_d_lens`), embedded/external PostgreSQL, TLS, and `POST /api/mcp` for external agents | Ubuntu 22.04+ (x86_64) | [Install online](#install-online) |
+| **From source** | Development (`Vite :5173` + Python `:3000`) or production single-port (`npm run build && npm start`) Lens stack | Git checkout, Node.js, Python 3.11+, PostgreSQL | [Install and run from source](#install-and-run-from-source) |
+| **Standalone `llmd` CLI** | Cluster-admin-free, namespace-scoped `llmd` engine (`apps/lens`, `llm-d-lens-engine`) — **no Lens server, database, or Node required** | Python 3.11+, `PyYAML`, plus `kubectl`/`oc`, `helm`, `git`, `kustomize` | [Install standalone `llmd` CLI](#install-standalone-llmd-cli) |
+
+To drive Lens from coding or ops agents (`opencode`, Claude Code, Cursor, OpenAI Codex CLI), install the Lens server via the **Online installer** or **From source**, then connect your agent to `POST /api/mcp` using [MCP integration](/mcp).
 
 ## Install online
 
@@ -127,6 +137,40 @@ To constrain deployments to a node, pass `--target-node NODE` and optionally
 `--kubeconfig FILE`, or set `TARGET_NODE` and `KUBECONFIG`. No target-specific
 configuration file is needed. See the [CLI Reference](/cli-reference) for
 preflight requirements and every `hack/lens-local.sh` subcommand.
+
+## Install standalone `llmd` CLI
+
+If you want only the standalone, cluster-admin-free CLI (`apps/lens`, package
+`llm-d-lens-engine`), install it into any Python 3.11+ virtual environment from
+the repository root. Its only Python dependency is `PyYAML` — it does not need
+the Lens server, PostgreSQL, FastAPI, or Node.js:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e ./apps/lens
+.venv/bin/llmd --version
+```
+
+> **Entrypoint note:** Always invoke `llmd` (`lens.cli:main`). The `lens`
+> entrypoint (`lens.__main__:main`) is currently a `--version`/`--help` stub only.
+
+Ensure the Kubernetes tooling that `llmd` shells out to is available on your `PATH`:
+
+- `kubectl` (or `oc` when passing `--kube-cli oc` / `LLMD_KUBE_CLI=oc`)
+- `helm`
+- `git`
+- `kustomize` (or `kubectl kustomize` when standalone `kustomize` is not installed)
+
+Quick smoke check:
+
+```bash
+.venv/bin/llmd sources add llm-d https://github.com/llm-d/llm-d.git#main
+.venv/bin/llmd stacks
+.venv/bin/llmd plan optimized-baseline -n <namespace> --offline
+```
+
+See the [CLI reference](/cli-reference) for all 12 top-level `llmd` subcommands,
+state ConfigMap lifecycle, and server/operations scripts.
 
 ## Build and test
 

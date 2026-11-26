@@ -271,7 +271,7 @@ class EvaluationCreateRequest(BaseModel):
     cluster_session_id: str = Field(min_length=36, max_length=36)
     runtime: RuntimeSpec = Field(default_factory=RuntimeSpec)
     benchmark_source: BenchmarkSource | None = None
-    benchmark_plans: list[BenchmarkPlan] = Field(min_length=1, max_length=50)
+    benchmark_plans: list[BenchmarkPlan] = Field(min_length=1, max_length=256)
     compare_configurations: bool = Field(
         default=True,
         description=(

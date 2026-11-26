@@ -926,7 +926,9 @@ class ConfigurationManifestAdapter:
             command_runner=self._delegate._bundle_command_runner,
         )
 
-    async def _create_namespace(self, artifact, namespace):
+    async def _create_namespace(
+        self, artifact, namespace, *, cluster_id: str | None = None, prepared_plan_id: str | None = None
+    ):
         prepared_namespace = artifact.deployment_contract.get("preparedNamespace")
         if prepared_namespace:
             from llm_d_lens.deploy.slice_capacity import (
@@ -946,7 +948,12 @@ class ConfigurationManifestAdapter:
                     )
                 is_bootstrapped = (
                     is_forbidden_output(stdout, stderr) or "alreadyexists" in (stdout + stderr).lower()
-                ) and await self._verify_prepared_bootstrap_marker(namespace, prepared_namespace)
+                ) and await self._verify_prepared_bootstrap_marker(
+                    namespace,
+                    prepared_namespace,
+                    cluster_id=cluster_id,
+                    prepared_plan_id=prepared_plan_id,
+                )
                 if not is_bootstrapped:
                     raise RuntimeError(redact_kubectl_error((stderr or stdout or "namespace creation failed").strip()))
         else:
@@ -965,7 +972,12 @@ class ConfigurationManifestAdapter:
             return await self._delegate.deploy(artifact, execution_context)
         namespace = self._namespace(execution_context)
         if not namespace_created:
-            await self._create_namespace(artifact, namespace)
+            await self._create_namespace(
+                artifact,
+                namespace,
+                cluster_id=self._cluster_id_from_context(execution_context),
+                prepared_plan_id=self._prepared_plan_id_from_context(execution_context),
+            )
         manifest = Path(artifact.manifest_ref or "").read_text(encoding="utf-8")
         model_token = execution_context.get("model_token")
         if "name: llm-d-hf-token" in manifest and model_token:
@@ -1061,6 +1073,7 @@ class ConfigurationManifestAdapter:
         }
         return {
             "namespace": namespace,
+            "provenance": dict(execution_context.get("provenance") or {}),
             "artifact_hash": artifact.artifact_hash,
             "apply_output": stdout,
             **reproducibility,
@@ -1257,14 +1270,47 @@ class ConfigurationManifestAdapter:
             and (not marker_cluster.strip() or not clean_cluster or marker_cluster.strip() == clean_cluster)
         )
 
+    @staticmethod
+    def _cluster_id_from_context(execution_or_context: Any) -> str | None:
+        if isinstance(execution_or_context, dict):
+            prov = execution_or_context.get("provenance")
+            raw_cluster = execution_or_context.get("cluster_id")
+        else:
+            prov = getattr(execution_or_context, "provenance", None)
+            raw_cluster = getattr(execution_or_context, "cluster_id", None)
+        prov_cluster = prov.get("cluster_server_id") if isinstance(prov, dict) else None
+        cleaned = str(prov_cluster or raw_cluster or "").strip()
+        return cleaned or None
+
+    @staticmethod
+    def _prepared_plan_id_from_context(execution_or_context: Any) -> str | None:
+        prov = (
+            execution_or_context.get("provenance")
+            if isinstance(execution_or_context, dict)
+            else getattr(execution_or_context, "provenance", None)
+        )
+        if not isinstance(prov, dict):
+            return None
+        raw = prov.get("_prepared_plan_id")
+        cleaned = str(raw).strip() if raw is not None else ""
+        return cleaned or None
+
     async def _verify_prepared_bootstrap_marker(
-        self, namespace: str, expected: dict[str, Any], *, cluster_id: str | None = None
+        self,
+        namespace: str,
+        expected: dict[str, Any],
+        *,
+        cluster_id: str | None = None,
+        prepared_plan_id: str | None = None,
     ) -> bool:
         data = await self._read_bootstrap_marker_via_runner(namespace)
         if not self._marker_matches_target(data, namespace=namespace, cluster_id=cluster_id):
             return False
         expected_req = (expected.get("metadata") or {}).get("labels", {}).get("lens.io/prepared-request")
-        return expected_req is None or data.get("preparedRequest") == expected_req
+        marker_req = data.get("preparedRequest")
+        clean_marker_req = marker_req.strip() if isinstance(marker_req, str) else ""
+        allowed_reqs = {value for value in (expected_req, prepared_plan_id) if isinstance(value, str) and value}
+        return expected_req is None or not clean_marker_req or clean_marker_req in allowed_reqs
 
     async def _check_prepared_namespace(self, execution, artifact):
         from llm_d_lens.deploy.slice_capacity import (
@@ -1278,6 +1324,8 @@ class ConfigurationManifestAdapter:
         if expected is None:
             return
         namespace = self._namespace(execution)
+        cluster_id = self._cluster_id_from_context(execution)
+        prepared_plan_id = self._prepared_plan_id_from_context(execution)
         status, stdout, stderr = await self._runner(
             ["kubectl", "get", "namespace", namespace, "--ignore-not-found=true", "-o", "json"]
         )
@@ -1287,17 +1335,23 @@ class ConfigurationManifestAdapter:
                     redact_kubectl_error((stderr or stdout or "Kubernetes authentication failed (401)").strip())
                 )
             if is_forbidden_output(stdout, stderr):
-                if await self._verify_prepared_bootstrap_marker(namespace, expected):
+                if await self._verify_prepared_bootstrap_marker(
+                    namespace, expected, cluster_id=cluster_id, prepared_plan_id=prepared_plan_id
+                ):
                     return
                 raise ValueError("Namespace is not owned by this prepared execution; cleanup was not attempted")
             raise ValueError("Cannot verify prepared namespace ownership; cleanup was not attempted")
         if not stdout.strip():
             return
         actual = json.loads(stdout)
-        if (
-            actual.get("metadata", {}).get("labels", {}).get("lens.io/prepared-request")
-            != expected["metadata"]["labels"]["lens.io/prepared-request"]
-        ):
+        actual_req = (actual.get("metadata") or {}).get("labels", {}).get("lens.io/prepared-request")
+        expected_req = expected["metadata"]["labels"]["lens.io/prepared-request"]
+        allowed_reqs = {value for value in (expected_req, prepared_plan_id) if isinstance(value, str) and value}
+        if actual_req not in allowed_reqs:
+            if not actual_req and await self._verify_prepared_bootstrap_marker(
+                namespace, expected, cluster_id=cluster_id, prepared_plan_id=prepared_plan_id
+            ):
+                return
             raise ValueError("Namespace is not owned by this prepared execution; cleanup was not attempted")
 
     @staticmethod
@@ -1580,7 +1634,12 @@ class SourceCompositionAdapter(ConfigurationManifestAdapter):
 
         if rbac:
             try:
-                await self._create_namespace(artifact, namespace)
+                await self._create_namespace(
+                    artifact,
+                    namespace,
+                    cluster_id=exec_cluster_id or None,
+                    prepared_plan_id=self._prepared_plan_id_from_context(execution_context),
+                )
             except RuntimeError as error:
                 if await _confirm_epp_bootstrap():
                     bootstrapped_via_admin = True
