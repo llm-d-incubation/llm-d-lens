@@ -19,6 +19,7 @@ WORKDIR /app
 
 ARG TARGETARCH
 ARG KUBECTL_VERSION=v1.36.0
+ARG HELM_VERSION=v3.22.1
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl git jq openssh-client \
     && rm -rf /var/lib/apt/lists/* \
@@ -26,11 +27,19 @@ RUN apt-get update \
     && curl -fsSLo /tmp/kubectl.sha256 "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl.sha256" \
     && printf '%s  /tmp/kubectl\n' "$(cat /tmp/kubectl.sha256)" | sha256sum --check \
     && install -m 0755 /tmp/kubectl /usr/local/bin/kubectl \
-    && rm /tmp/kubectl /tmp/kubectl.sha256
+    && rm /tmp/kubectl /tmp/kubectl.sha256 \
+    && curl -fsSLo /tmp/helm.tar.gz "https://get.helm.sh/helm-${HELM_VERSION}-linux-${TARGETARCH}.tar.gz" \
+    && curl -fsSLo /tmp/helm.sha256 "https://get.helm.sh/helm-${HELM_VERSION}-linux-${TARGETARCH}.tar.gz.sha256" \
+    && printf '%s  /tmp/helm.tar.gz\n' "$(cat /tmp/helm.sha256)" | sha256sum --check \
+    && tar -xzf /tmp/helm.tar.gz -C /tmp "linux-${TARGETARCH}/helm" \
+    && install -m 0755 "/tmp/linux-${TARGETARCH}/helm" /usr/local/bin/helm \
+    && rm -rf /tmp/helm.tar.gz /tmp/helm.sha256 "/tmp/linux-${TARGETARCH}"
 
+COPY apps/lens/pyproject.toml apps/lens/README.md ./apps/lens/
+COPY apps/lens/lens ./apps/lens/lens
 COPY apps/backend/pyproject.toml ./apps/backend/pyproject.toml
 COPY apps/backend/src ./apps/backend/src
-RUN python -m pip install --no-cache-dir -e "apps/backend[embedded-db,ldap]"
+RUN python -m pip install --no-cache-dir -e apps/lens -e "apps/backend[embedded-db,ldap]"
 COPY packages/shared ./packages/shared
 COPY --from=build /app/apps/frontend/dist ./apps/frontend/dist
 COPY hack/run-backend.sh hack/storage-env.sh ./hack/

@@ -63,7 +63,7 @@ sign out and back in.
 
 Check `~/.local/state/lens/logs/dev/backend.log` for the actual exception.
 Common causes: a missing Python dependency after a `[project.dependencies]`
-change (`python3 -m pip install -e '.[dev]'`), or a port already in use —
+change (from the repository root, run `python3 -m pip install -e apps/lens -e 'apps/backend[dev]'`), or a port already in use —
 `hack/lens-local.sh` picks free ports automatically and logs which ones it used.
 
 ## The MCP tool catalog is missing a route you just added

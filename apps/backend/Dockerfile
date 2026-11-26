@@ -1,11 +1,14 @@
+# Build from the repository root: docker build -f apps/backend/Dockerfile .
 FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY pyproject.toml ./
-COPY src ./src
+COPY apps/lens/pyproject.toml apps/lens/README.md ./apps/lens/
+COPY apps/lens/lens ./apps/lens/lens
+COPY apps/backend/pyproject.toml ./apps/backend/pyproject.toml
+COPY apps/backend/src ./apps/backend/src
 RUN python -m pip install --no-cache-dir --upgrade pip \
-    && python -m pip install --no-cache-dir ".[embedded-db,ldap]"
+    && python -m pip install --no-cache-dir ./apps/lens "./apps/backend[embedded-db,ldap]"
 
 ENV LENS_DATA_DIR=/var/lib/lens
 ENV LENS_CACHE_DIR=/var/cache/lens
