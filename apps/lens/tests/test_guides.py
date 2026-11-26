@@ -177,6 +177,66 @@ def test_plan_mounts_a_model_pvc_subpath_for_the_modelserver(llmrepo, tmp_path, 
 
 
 @needs_tools
+def test_a_custom_model_container_keeps_its_pvc_through_the_lifecycle(llmrepo, tmp_path, capsys, monkeypatch):
+    from lens import inventory
+    from lens.kube import Kube
+
+    from .fakes import FakeCluster
+
+    manifest = llmrepo / "guides/recipes/modelserver/base/decode.yaml"
+    manifest.write_text(manifest.read_text().replace("name: modelserver", "name: inference"))
+    cluster = FakeCluster(namespaces=("team-a", "team-b"))
+    for namespace in ("team-a", "team-b"):
+        cluster.put(namespace, {"apiVersion": "v1", "kind": "Secret", "metadata": {"name": "llm-d-hf-token"}})
+        cluster.put(
+            namespace,
+            {"apiVersion": "v1", "kind": "PersistentVolumeClaim", "metadata": {"name": "weights"}},
+        )
+    monkeypatch.setattr("lens.commands.RUNNER", cluster)
+    state = ["--state-dir", str(tmp_path), "-o", "json"]
+    source = ["--source", str(llmrepo)]
+    options = [
+        "--set",
+        "router.monitoring.prometheus.auth.enabled=false",
+        "--model-pvc-claim-name",
+        "weights",
+        "--model-subpath",
+        "models/Qwen3-0.6B",
+        "--model-container",
+        "inference",
+    ]
+    assert main([*state, "standup", GUIDE, *source, "-n", "team-a", *options]) == 0
+    capsys.readouterr()
+    assert main([*state, "scale", "demo-baseline", "demo-baseline-decode=1", *source, "-n", "team-a"]) == 0
+    capsys.readouterr()
+    record = inventory.require(Kube(runner=cluster), "team-a", "demo-baseline")
+    assert record["stack"]["modelContainers"] == ["inference"]
+    migrate = ["demo-baseline", "--from", "team-a", "--to", "team-b", *source]
+    assert main([*state, "migrate", "plan", *migrate]) == 0
+    planned = json.loads(capsys.readouterr().out)
+    assert planned["target"]["choices"]["modelContainers"] == ["inference"]
+    assert main([*state, "migrate", "start", *migrate]) == 0
+    capsys.readouterr()
+    for namespace in ("team-a", "team-b"):
+        pod = cluster.get(namespace, "deployments.apps", "demo-baseline-decode")["spec"]["template"]["spec"]
+        container = next(item for item in pod["containers"] if item["name"] == "inference")
+        assert container["args"] == [
+            "/model-cache/models/Qwen3-0.6B",
+            "--port=8000",
+            "--served-model-name",
+            "Qwen/Qwen3-0.6B",
+        ]
+        assert {"name": "model-cache", "persistentVolumeClaim": {"claimName": "weights"}} in pod["volumes"]
+    assert main([*state, "migrate", "step", *migrate]) == 0
+    capsys.readouterr()
+    assert main([*state, "migrate", "finish", *migrate, "-y"]) == 0
+    capsys.readouterr()
+    assert main([*state, "teardown", "demo-baseline", "-n", "team-b", "-y"]) == 0
+    for namespace in ("team-a", "team-b"):
+        assert cluster.get(namespace, "persistentvolumeclaims", "weights") is not None
+
+
+@needs_tools
 def test_stacks_and_render_commands_for_a_guide(llmrepo, tmp_path, capsys):
     state = ["--state-dir", str(tmp_path)]
     assert main([*state, "stacks", "demo-baseline", "--source", str(llmrepo)]) == 0

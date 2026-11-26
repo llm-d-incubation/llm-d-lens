@@ -61,6 +61,7 @@ def instance_options(record: dict, namespace: str, instance: str, **extra) -> Op
         sets=list(stack.get("sets") or []),
         model_pvc_claim_name=stack.get("modelPvcClaimName", ""),
         model_subpath=stack.get("modelSubpath", ""),
+        model_containers=list(stack.get("modelContainers") or []),
         **extra,
     )
 

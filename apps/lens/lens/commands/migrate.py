@@ -113,6 +113,7 @@ def _plan(ctx: Context, side: migration.Side, stack: dict, source, kept: dict[st
             sets=list(stack.get("sets") or []),
             model_pvc_claim_name=stack.get("modelPvcClaimName", ""),
             model_subpath=stack.get("modelSubpath", ""),
+            model_containers=list(stack.get("modelContainers") or []),
             overrides=kept,
         ),
         runner=ctx.runner,

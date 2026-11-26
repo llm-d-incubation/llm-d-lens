@@ -108,6 +108,24 @@ from there, and configures the model server for offline Hugging Face access. The
 claim must already exist; it remains a prerequisite and is not owned or deleted
 by `llmd teardown`.
 
+By default, the PVC is applied to containers named `modelserver`,
+`modelserver-leader`, or `modelserver-worker`, including templates inside
+LeaderWorkerSets and DisaggregatedSets. For other names, pass
+`--model-container inference`; repeat the option to select several names.
+An explicit selection replaces the defaults, and every selected name must
+exist somewhere in the rendered stack. These choices persist through scale
+and migration. Pass the same options again for standup and rollout updates.
+
+Supported commands are direct `vllm serve`, `sglang serve`, and Python module
+invocations of `vllm.entrypoints.openai.api_server` or `sglang.launch_server`.
+Images with a server entrypoint may also supply only model arguments in `args`.
+The original API model name is preserved with `--served-model-name`, unless
+the container already specifies its own API names. Shell scripts, wrappers,
+and commands without an identifiable model argument are rejected rather than
+rewritten. Worker processes without a model argument need a custom overlay.
+Existing mounts at `/model-cache` must match the requested model-cache mount.
+Offline settings do not remove any Secret prerequisites in the source files.
+
 ## An empty namespace
 
 ```sh

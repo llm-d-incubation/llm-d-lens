@@ -3,6 +3,27 @@ title: CLI Reference
 description: Command-line tools for running, installing and managing Lens.
 ---
 
+## `llmd` model PVC options
+
+For `plan`, `standup`, and `rollouts plan/start`, use
+`--model-pvc-claim-name CLAIM --model-subpath PATH` to load a model directory
+from an existing claim mounted at `/model-cache` with offline Hugging Face
+settings. The external claim is not owned or deleted by Lens.
+
+The default container names are `modelserver`, `modelserver-leader`, and
+`modelserver-worker`, including LeaderWorkerSet and DisaggregatedSet templates.
+Use repeatable `--model-container NAME` options to replace this selection with
+custom names; every selected name must exist in the rendered stack. Scale and
+migration restore these choices. Repeat them for standup and rollout updates.
+
+Direct `vllm serve`, `sglang serve`, and Python module commands for
+`vllm.entrypoints.openai.api_server` and `sglang.launch_server` are supported.
+Images with a server entrypoint may provide only model arguments in `args`.
+The original API model name is preserved unless explicitly overridden by
+`--served-model-name`. Shell scripts, wrappers, and commands without an
+identifiable model argument require a custom overlay. Conflicting mounts at
+`/model-cache` are rejected. Source Secret prerequisites still apply.
+
 ## `hack/lens-local.sh` (local source installation and services)
 
 | Command | Purpose |

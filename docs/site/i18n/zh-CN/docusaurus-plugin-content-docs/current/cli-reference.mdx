@@ -3,6 +3,26 @@ title: CLI 参考
 description: 用于运行、安装和管理 Lens 的命令行工具。
 ---
 
+## `llmd` 模型 PVC 选项
+
+对 `plan`、`standup` 和 `rollouts plan/start`，使用
+`--model-pvc-claim-name CLAIM --model-subpath PATH` 从已有 PVC 中加载模型目录。
+PVC 挂载到 `/model-cache`，模型容器使用离线 Hugging Face 设置。
+Lens 不拥有或删除这个外部 PVC。
+
+默认容器名为 `modelserver`、`modelserver-leader` 和 `modelserver-worker`，
+也支持 LeaderWorkerSet 和 DisaggregatedSet 内的 Pod 模板。
+可重复指定 `--model-container NAME`，以自定义名称替代默认选择；
+每个指定名称都必须存在于渲染后的资源中。扩缩容和迁移会恢复这些选择；
+再次执行 standup 或 rollout 更新时需要重复传入选项。
+
+支持直接运行 `vllm serve`、`sglang serve`，以及通过 Python 模块运行
+`vllm.entrypoints.openai.api_server` 或 `sglang.launch_server`。
+已配置服务入口的镜像也可以仅在 `args` 中提供模型参数。
+除非已通过 `--served-model-name` 显式覆盖，否则保留原 API 模型名。
+Shell 脚本、包装程序和无法识别模型参数的命令需要自定义 overlay。
+`/model-cache` 上的挂载冲突会被拒绝，源文件中的 Secret 前置条件仍然适用。
+
 ## `hack/lens-local.sh`（本地源码安装与服务管理）
 
 | 命令 | 用途 |
