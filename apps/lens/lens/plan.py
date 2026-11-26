@@ -211,14 +211,14 @@ def _container_ports(container: dict[str, Any], role: str) -> dict[str | int, in
             ports[number] = number
             if port.get("name"):
                 ports[port["name"]] = number
-    if not container.get("ports") and role == "model":
+    if role == "model":
         try:
             tokens = shlex.split(
                 " ".join(str(value) for value in [*container.get("command", []), *container.get("args", [])])
             )
         except ValueError:
             return ports
-        number = 8000
+        number = None
         for index, argument in enumerate(tokens):
             if argument == "--port":
                 if index + 1 == len(tokens):
@@ -231,7 +231,10 @@ def _container_ports(container: dict[str, Any], role: str) -> dict[str | int, in
             if not value.isdigit():
                 return ports
             number = int(value)
-        ports[number] = number
+        if number is not None:
+            ports[number] = number
+        elif not container.get("ports"):
+            ports[8000] = 8000
     return ports
 
 

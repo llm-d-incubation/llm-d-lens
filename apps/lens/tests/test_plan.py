@@ -149,6 +149,19 @@ def test_auto_discovery_infers_model_port_from_invocation(args):
     assert endpoints[0]["backends"][0]["targetPort"] == 8088
 
 
+def test_auto_discovery_infers_model_port_when_other_container_ports_are_declared():
+    resources = endpoint_resources()
+    container = resources[1]["spec"]["template"]["spec"]["containers"][0]
+    container["ports"] = [{"name": "metrics", "containerPort": 9090}]
+    container["args"] = ["vllm", "serve", "model", "--port", "8088"]
+    resources[0]["spec"]["ports"][0]["targetPort"] = 8088
+
+    endpoints, findings = discover_endpoints(resources, "team-a")
+
+    assert not findings
+    assert preferred_inference_endpoint(endpoints)["backends"][0]["targetPort"] == 8088
+
+
 @pytest.mark.parametrize("change", ["udp", "metrics", "grpc", "unmatched", "unknown", "prefill", "headless_only"])
 def test_auto_discovery_does_not_guess_an_unverified_port(change):
     resources = endpoint_resources()
