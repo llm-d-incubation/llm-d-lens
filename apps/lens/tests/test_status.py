@@ -63,6 +63,65 @@ def test_status_discovers_inference_without_guessing_metrics(llmrepo, cluster, c
     assert "endpoint-unresolved" in capsys.readouterr().out
 
 
+def test_status_does_not_select_an_endpoint_when_the_workload_has_no_pods(llmrepo, cluster):
+    kube = stood_up(llmrepo, cluster)
+    deployment = cluster.get("team-a", "deployments.apps", "model-a")
+    deployment["spec"]["replicas"] = 0
+    deployment["status"] = {"replicas": 0, "readyReplicas": 0, "updatedReplicas": 0}
+    del cluster.objects[("team-a", "pods", "model-a-0")]
+
+    status = instance_status(kube, "team-a", "r1")
+
+    assert status["inferenceEndpoint"] is None
+    assert status["endpointFindings"]
+
+
+@pytest.mark.parametrize("ready_role", ["prefill", "decode"])
+def test_status_requires_the_service_selected_role_to_have_ready_pods(llmrepo, cluster, ready_role):
+    from lens import inventory
+
+    kube = stood_up(llmrepo, cluster)
+    cluster.controllers = False
+    template = cluster.get("team-a", "deployments.apps", "model-a")["spec"]["template"]
+    workload = cluster.put(
+        "team-a",
+        {
+            "apiVersion": "disaggregatedset.x-k8s.io/v1",
+            "kind": "DisaggregatedSet",
+            "metadata": {"name": "model-a"},
+            "spec": {
+                "roles": [
+                    {"name": role, "spec": {"replicas": 1, "leaderWorkerTemplate": {"workerTemplate": template}}}
+                    for role in ("prefill", "decode")
+                ]
+            },
+        },
+    )
+    service = cluster.get("team-a", "services", "model-a")
+    service["spec"]["selector"] = {
+        health.DS_NAME_LABEL: "model-a",
+        health.DS_ROLE_LABEL: "decode",
+    }
+    pod = cluster.get("team-a", "pods", "model-a-0")
+    pod["metadata"]["labels"].update({health.DS_NAME_LABEL: "model-a", health.DS_ROLE_LABEL: ready_role})
+    record = inventory.require(kube, "team-a", "r1")
+    record["stack"].pop("endpointDiscovery")
+    record["objects"] = [item for item in record["objects"] if item["kind"] != "Deployment"]
+    record["objects"].append(
+        inventory.object_entry(workload, "disaggregatedsets.disaggregatedset.x-k8s.io", workload["metadata"]["uid"])
+    )
+    inventory.write(kube, record)
+
+    status = instance_status(kube, "team-a", "r1")
+
+    if ready_role == "decode":
+        assert status["inferenceEndpoint"] is not None
+        assert not status["endpointFindings"]
+    else:
+        assert status["inferenceEndpoint"] is None
+        assert status["endpointFindings"]
+
+
 @pytest.mark.parametrize(
     "change", ["replaced", "missing", "unreadable", "backend_replaced", "backend_unavailable", "retargeted"]
 )

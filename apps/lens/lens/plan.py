@@ -19,6 +19,8 @@ from .policy import PolicyContext, PolicyResult, ScopeResolver, apply_policy, fa
 from .process import Runner
 from .render import Tools, render
 
+LWS_WORKER_INDEX_LABEL = "leaderworkerset.sigs.k8s.io/worker-index"
+
 
 @dataclass
 class Options:
@@ -238,7 +240,49 @@ def _container_ports(container: dict[str, Any], role: str) -> dict[str | int, in
     return ports
 
 
-def discover_endpoints(documents: list[dict[str, Any]], namespace: str) -> tuple[list[dict[str, Any]], list[Finding]]:
+def _lws_worker_index_matches(document: dict[str, Any], location: str, value: str) -> bool:
+    spec = document.get("spec") or {}
+    if document.get("kind") == "DisaggregatedSet":
+        role_name = location.split("roles[", 1)[1].split("]", 1)[0]
+        role = next((role for role in spec.get("roles") or [] if role.get("name") == role_name), {})
+        spec = role.get("spec") or {}
+    template = spec.get("leaderWorkerTemplate") or {}
+    size = int(template.get("size", 1) or 1)
+    if not isinstance(value, str) or not value.isascii() or not value.isdecimal():
+        return False
+    index = int(value)
+    if str(index) != value or not 0 <= index < size:
+        return False
+    if location.endswith("leaderTemplate"):
+        return index == 0
+    leader = (template.get("leaderTemplate") or {}).get("spec") or {}
+    return index > 0 or not isinstance(leader.get("containers"), list)
+
+
+def _template_labels(document: dict[str, Any], location: str, template: dict[str, Any]) -> tuple[dict, dict]:
+    labels = copy.deepcopy((template.get("metadata") or {}).get("labels") or {})
+    selector_labels = dict(labels)
+    kind = document.get("kind")
+    name = document["metadata"]["name"]
+    if kind == "LeaderWorkerSet":
+        labels[health.LWS_NAME_LABEL] = selector_labels[health.LWS_NAME_LABEL] = name
+    elif kind == "DisaggregatedSet":
+        labels[health.DS_NAME_LABEL] = selector_labels[health.DS_NAME_LABEL] = name
+        role = location.split("roles[", 1)[1].split("]", 1)[0]
+        labels[health.DS_ROLE_LABEL] = selector_labels[health.DS_ROLE_LABEL] = role
+    return labels, selector_labels
+
+
+def _pod_matches_backend(pod: dict[str, Any], selector: dict[str, str], labels: dict[str, Any]) -> bool:
+    if not health.pod_ready(pod) or (pod.get("status") or {}).get("phase") != "Running":
+        return False
+    pod_labels = (pod.get("metadata") or {}).get("labels") or {}
+    return all(pod_labels.get(key) == value for key, value in [*selector.items(), *labels.items()])
+
+
+def discover_endpoints(
+    documents: list[dict[str, Any]], namespace: str, *, available_pods: list[dict[str, Any]] | None = None
+) -> tuple[list[dict[str, Any]], list[Finding]]:
     endpoints, ranks = [], {}
     templates = []
     for document in documents:
@@ -246,14 +290,8 @@ def discover_endpoints(documents: list[dict[str, Any]], namespace: str) -> tuple
             continue
         for location, template, _ in pod_templates(document):
             template = copy.deepcopy(template)
-            labels = template.setdefault("metadata", {}).setdefault("labels", {})
-            kind = document.get("kind")
-            if kind == "LeaderWorkerSet":
-                labels[health.LWS_NAME_LABEL] = document["metadata"]["name"]
-            elif kind == "DisaggregatedSet":
-                labels[health.DS_NAME_LABEL] = document["metadata"]["name"]
-                labels[health.DS_ROLE_LABEL] = location.split("[", 1)[1].split("]", 1)[0]
-            templates.append((document, location, template))
+            labels, selector_labels = _template_labels(document, location, template)
+            templates.append((document, location, template, labels, selector_labels))
     for service in documents:
         if service.get("kind") != "Service" or service.get("apiVersion") != "v1":
             continue
@@ -287,9 +325,17 @@ def discover_endpoints(documents: list[dict[str, Any]], namespace: str) -> tuple
             if "metrics" in port_name or number == 9090:
                 endpoint["purpose"] = "metrics"
             matches = []
-            for document, location, template in templates:
-                labels = (template.get("metadata") or {}).get("labels") or {}
-                if not selector or not all(labels.get(key) == value for key, value in selector.items()):
+            for document, location, template, labels, selector_labels in templates:
+                if document.get("kind") in {"LeaderWorkerSet", "DisaggregatedSet"} and LWS_WORKER_INDEX_LABEL in selector:
+                    worker_index = selector[LWS_WORKER_INDEX_LABEL]
+                    if not _lws_worker_index_matches(document, location, worker_index):
+                        continue
+                    selector_labels = {**selector_labels, LWS_WORKER_INDEX_LABEL: worker_index}
+                if not selector or not all(selector_labels.get(key) == value for key, value in selector.items()):
+                    continue
+                if available_pods is not None and not any(
+                    _pod_matches_backend(pod, selector, labels) for pod in available_pods
+                ):
                     continue
                 identity = " ".join(
                     [location, str(document.get("metadata", {}).get("name", "")), *map(str, labels.values())]
@@ -373,10 +419,12 @@ def revalidate_endpoint(
         ]
     endpoint = matching[0]
     expected = {
-        (backend["object"], backend["container"], backend["targetPort"]) for backend in recorded.get("backends", [])
+        (backend["object"], backend["template"], backend["container"], backend["targetPort"])
+        for backend in recorded.get("backends", [])
     }
     actual = {
-        (backend["object"], backend["container"], backend["targetPort"]) for backend in endpoint.get("backends", [])
+        (backend["object"], backend["template"], backend["container"], backend["targetPort"])
+        for backend in endpoint.get("backends", [])
     }
     if expected and not expected.issubset(actual):
         return None, [

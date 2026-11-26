@@ -85,12 +85,7 @@ def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]
             for port in (live.get("spec") or {}).get("ports") or []:
                 url = f"http://{item['name']}.{namespace}.svc.cluster.local:{port.get('port')}"
                 endpoints.append(url)
-    ready_pods = {
-        pod["metadata"]["name"]: pod
-        for pod in seen
-        if health.pod_ready(pod) and (pod.get("status") or {}).get("phase") == "Running"
-    }
-    endpoint_details, endpoint_findings = discover_endpoints([*live_documents, *ready_pods.values()], namespace)
+    endpoint_details, endpoint_findings = discover_endpoints(live_documents, namespace, available_pods=seen)
     selected = preferred_inference_endpoint(endpoint_details) if not endpoint_findings else None
     stack_record = record.get("stack") or {}
     recorded = (

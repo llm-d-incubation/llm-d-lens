@@ -137,6 +137,35 @@ def test_auto_discovery_supports_controller_templates_and_decode_roles(kind):
         assert findings[0].code == "endpoint-not-found"
 
 
+@pytest.mark.parametrize("explicit_leader", [False, True])
+@pytest.mark.parametrize("worker_index", ["0", "1", "2", "-1", "invalid"])
+def test_auto_discovery_matches_a_leader_only_lws_service(explicit_leader, worker_index):
+    resources = endpoint_resources()
+    resources[1]["kind"] = "LeaderWorkerSet"
+    resources[1]["spec"] = {
+        "replicas": 2,
+        "leaderWorkerTemplate": {"size": 2, "workerTemplate": resources[1]["spec"]["template"]},
+    }
+    if explicit_leader:
+        resources[1]["spec"]["leaderWorkerTemplate"]["leaderTemplate"] = copy.deepcopy(
+            resources[1]["spec"]["leaderWorkerTemplate"]["workerTemplate"]
+        )
+    resources[0]["spec"]["selector"] = {
+        "leaderworkerset.sigs.k8s.io/name": "model",
+        "leaderworkerset.sigs.k8s.io/worker-index": worker_index,
+    }
+
+    endpoints, findings = discover_endpoints(resources, "team-a")
+
+    if worker_index not in {"0", "1"}:
+        assert preferred_inference_endpoint(endpoints) is None
+        assert findings[0].code == "endpoint-not-found"
+        return
+    assert not findings
+    expected = "leaderTemplate" if explicit_leader and worker_index == "0" else "workerTemplate"
+    assert preferred_inference_endpoint(endpoints)["backends"][0]["template"] == expected
+
+
 @pytest.mark.parametrize("args", [["--port", "8088"], ["--port=8088"], ["sh", "-c", "vllm serve model --port 8088"]])
 def test_auto_discovery_infers_model_port_from_invocation(args):
     resources = endpoint_resources()
@@ -197,6 +226,79 @@ def test_auto_discovery_revalidates_named_and_numeric_service_ports():
     verified, findings = revalidate_endpoint(recorded, candidates, {"Deployment/model"})
     assert verified is None
     assert findings[0].code == "endpoint-unresolved"
+
+
+def test_auto_discovery_revalidation_preserves_disaggregated_role_identity():
+    resources = endpoint_resources()
+    template = resources[1]["spec"]["template"]
+    resources[1]["kind"] = "DisaggregatedSet"
+    resources[1]["spec"] = {
+        "roles": [
+            {"name": role, "spec": {"leaderWorkerTemplate": {"workerTemplate": copy.deepcopy(template)}}}
+            for role in ("decode-small", "decode-large")
+        ]
+    }
+    resources[0]["spec"]["selector"] = {
+        "disaggregatedset.x-k8s.io/name": "model",
+        "disaggregatedset.x-k8s.io/role": "decode-small",
+    }
+    recorded, _ = discover_endpoints(resources, "team-a")
+    resources[0]["spec"]["selector"]["disaggregatedset.x-k8s.io/role"] = "decode-large"
+    candidates, _ = discover_endpoints(resources, "team-a")
+
+    verified, findings = revalidate_endpoint(recorded[0], candidates, {"DisaggregatedSet/model"})
+
+    assert verified is None
+    assert findings[0].code == "endpoint-unresolved"
+
+
+@pytest.mark.parametrize("pod_status", [None, {"phase": "Pending", "conditions": [{"type": "Ready", "status": "True"}]}])
+def test_auto_discovery_requires_a_ready_running_selected_backend(pod_status):
+    resources = endpoint_resources()
+    pods = []
+    if pod_status is not None:
+        pods.append(
+            {
+                "metadata": {"labels": {"app": "model"}},
+                "status": pod_status,
+            }
+        )
+
+    endpoints, findings = discover_endpoints(resources, "team-a", available_pods=pods)
+
+    assert preferred_inference_endpoint(endpoints) is None
+    assert findings[0].code == "endpoint-not-found"
+
+
+def test_auto_discovery_requires_the_selected_disaggregated_role_to_be_ready():
+    resources = endpoint_resources()
+    template = resources[1]["spec"]["template"]
+    resources[1]["kind"] = "DisaggregatedSet"
+    resources[1]["spec"] = {
+        "roles": [
+            {"name": role, "spec": {"leaderWorkerTemplate": {"workerTemplate": copy.deepcopy(template)}}}
+            for role in ("prefill", "decode")
+        ]
+    }
+    resources[0]["spec"]["selector"] = {
+        "disaggregatedset.x-k8s.io/name": "model",
+        "disaggregatedset.x-k8s.io/role": "decode",
+    }
+    prefill_pod = {
+        "metadata": {
+            "labels": {
+                "app": "model",
+                "disaggregatedset.x-k8s.io/name": "model",
+                "disaggregatedset.x-k8s.io/role": "prefill",
+            }
+        },
+        "status": {"phase": "Running", "conditions": [{"type": "Ready", "status": "True"}]},
+    }
+
+    endpoints, findings = discover_endpoints(resources, "team-a", available_pods=[prefill_pod])
+
+    assert preferred_inference_endpoint(endpoints) is None
+    assert findings[0].code == "endpoint-not-found"
 
 
 @pytest.mark.parametrize(
