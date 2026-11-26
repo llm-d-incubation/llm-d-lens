@@ -171,7 +171,9 @@ def test_plan_mounts_a_model_pvc_subpath_for_the_modelserver(llmrepo, tmp_path, 
     assert {"name": "HF_HUB_OFFLINE", "value": "1"} in container["env"]
     assert summary["choices"]["modelPvcClaimName"] == "model-weights"
     assert summary["choices"]["modelSubpath"] == "models/Qwen3-0.6B"
-    assert any(item["kind"] == "PersistentVolumeClaim" and item["name"] == "model-weights" for item in summary["prerequisites"])
+    assert any(
+        item["kind"] == "PersistentVolumeClaim" and item["name"] == "model-weights" for item in summary["prerequisites"]
+    )
 
 
 @needs_tools
