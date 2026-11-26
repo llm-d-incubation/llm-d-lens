@@ -1,7 +1,17 @@
 ---
 title: 安装
-description: 无需克隆仓库，在线安装 Lens，或从源码开发。
+description: 在线安装 Lens、从源码运行，或仅安装独立的 llmd CLI。
 ---
+
+## 选择安装方式
+
+| 安装方式 | 包含内容 | 前置依赖 | 跳转到 |
+| --- | --- | --- | --- |
+| **在线安装** | 打包后的 Lens Web 控制台、统一 Python 后端（`llm_d_lens`）、内置/外部 PostgreSQL、TLS 以及面向外部智能体的 `POST /api/mcp` | Ubuntu 22.04+（x86_64） | [在线安装](#在线安装) |
+| **从源码运行** | 开发模式（`Vite :5173` + Python `:3000`）或单端口生产构建（`npm run build && npm start`）的完整 Lens 栈 | Git 仓库、Node.js、Python 3.11+、PostgreSQL | [从源码安装与运行](#从源码安装与运行) |
+| **独立 `llmd` CLI** | 无需集群管理员权限、按命名空间运行的 `llmd` 引擎（`apps/lens`，包名 `llm-d-lens-engine`）——**无需 Lens 服务器、数据库或 Node** | Python 3.11+、`PyYAML`，以及 `kubectl`/`oc`、`helm`、`git`、`kustomize` | [安装独立 `llmd` CLI](#安装独立-llmd-cli) |
+
+如需从编码或运维智能体（`opencode`、Claude Code、Cursor、OpenAI Codex CLI）驱动 Lens，请通过**在线安装**或**从源码运行**部署 Lens 服务器，然后按 [MCP 集成](/mcp) 连接到 `POST /api/mcp`。
 
 ## 在线安装
 
@@ -116,6 +126,37 @@ API 和 MCP。Node 用于前端构建，不参与生产请求处理。
 不会被自动解决。若需限定部署节点，传入 `--target-node NODE` 和可选的
 `--kubeconfig FILE`，或者设置 `TARGET_NODE` 与 `KUBECONFIG`；
 不需要目标节点专用配置文件。预检查要求和各个子命令参见 [CLI 参考](/cli-reference)。
+
+## 安装独立 `llmd` CLI
+
+如果你只需要独立的、无需集群管理员权限的 CLI（`apps/lens`，包名 `llm-d-lens-engine`），
+可以在仓库根目录将其安装到任意 Python 3.11+ 虚拟环境中。它仅依赖 `PyYAML`，
+不需要 Lens 服务器、PostgreSQL、FastAPI 或 Node.js：
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e ./apps/lens
+.venv/bin/llmd --version
+```
+
+> **命令入口提示：** 请始终使用 `llmd`（`lens.cli:main`）。`lens` 入口（`lens.__main__:main`）当前仅是 `--version`/`--help` 存根。
+
+请确保 `llmd` 调用的 Kubernetes 工具位于你的 `PATH` 中：
+
+- `kubectl`（若传入 `--kube-cli oc` 或设置 `LLMD_KUBE_CLI=oc`，则使用 `oc`）
+- `helm`
+- `git`
+- `kustomize`（未安装独立 `kustomize` 时回退到 `kubectl kustomize`）
+
+快速验证：
+
+```bash
+.venv/bin/llmd sources add llm-d https://github.com/llm-d/llm-d.git#main
+.venv/bin/llmd stacks
+.venv/bin/llmd plan optimized-baseline -n <namespace> --offline
+```
+
+全部 12 个顶级 `llmd` 子命令、状态 ConfigMap 生命周期及服务端运维脚本请参阅 [CLI 参考](/cli-reference)。
 
 ## 构建与测试
 

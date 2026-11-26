@@ -1,6 +1,6 @@
 ---
-title: Simulation
-description: Backend endpoints and direct Python entry points for simulation task discovery and replay.
+title: Trace Replayer
+description: Backend endpoints (/api/simulation) and direct Python entry points for trace replay and simulation tasks.
 ---
 
 import Tabs from '@theme/Tabs';
@@ -10,7 +10,7 @@ import TabItem from '@theme/TabItem';
 
 Local and Pod execution share request progress reporting through `llm_d_lens.simulation.progress.report_request_progress`. Pod reporting still waits for readiness; local reporting retains its original start time. Backend adapters share artifact error formatting through `backends.analytics.artifact_error_message`, while retaining their own error/timeout field precedence, status mapping, and metric units. Task APIs and backend environment preparation are unchanged.
 
-Simulation routes live in `llm_d_lens/simulation/router.py` under the `/api/simulation` prefix.
+Trace Replayer backend routes live in `llm_d_lens/simulation/router.py` under the `/api/simulation` route prefix.
 
 ### Test-time evidence and historical ingestion
 

@@ -1,14 +1,23 @@
 ---
 title: Integrations
-description: Point OpenAI-compatible clients and tools at a published model service.
+description: Connect OpenAI-compatible inference clients, coding/ops agents via Lens MCP, and outbound LLM providers.
 ---
 
-A published [model service](/user-guide/model-services) is a standard
-OpenAI-compatible endpoint, so any client or framework that speaks that API
-can call it by setting its base URL and API key — no Lens-specific client
-required.
+Lens connects with external tools and applications in three directions:
 
-## curl
+| Direction | Who calls whom | Credential | Guide |
+| --- | --- | --- | --- |
+| **1. Published Model Services** | Your apps / SDKs call a cluster's shared Gateway (`HTTPRoute` / `InferencePool`) | Model API token (`lens-mk-...`) | [Model Services](#calling-published-model-services) |
+| **2. Coding & Ops Agents** | `opencode`, Claude Code, Cursor, Codex CLI, or MCP clients drive Lens via `POST /api/mcp` | Personal Access Token (`lens-pat-...`) | [Lens MCP](/mcp) |
+| **3. Outbound LLM Providers** | Lens Assistant & agentic planner call OpenAI, Anthropic, Azure OpenAI, or self-hosted endpoints | Stored [External Provider](/user-guide/external-providers) credential | [Lens Assistant's provider](#lens-assistants-own-provider) |
+
+---
+
+## Calling published model services
+
+A published [model service](/user-guide/model-services) exposes standard OpenAI-compatible (`/v1/chat/completions`, `/v1/models`) and Anthropic-compatible (`/v1/messages` with `x-api-key: lens-mk-...`) endpoints through the cluster's shared Gateway, so any compatible client or framework can call it by setting its base URL and Model API token (`lens-mk-...`, created under **My Resources → API Keys**) — no Lens-specific client required.
+
+### curl
 
 ```bash
 curl http://<edge-host>:<edge-port>/v1/chat/completions \
@@ -17,7 +26,7 @@ curl http://<edge-host>:<edge-port>/v1/chat/completions \
   -d '{"model":"Qwen/Qwen3-8B","messages":[{"role":"user","content":"Hello"}]}'
 ```
 
-## OpenAI Python SDK
+### OpenAI Python SDK
 
 ```python
 from openai import OpenAI
@@ -32,18 +41,20 @@ response = client.chat.completions.create(
 )
 ```
 
-## LangChain / LlamaIndex / other OpenAI-compatible frameworks
+### LangChain / LlamaIndex / other OpenAI-compatible frameworks
 
-Any framework that accepts a custom `base_url` and `api_key` for an
-"OpenAI-compatible" provider works the same way — point it at
-`http://<edge-host>:<edge-port>/v1` with a Lens API token
-(`lens-mk-...`, issued from the [Model services](/user-guide/model-services)
-page).
+Any framework that accepts a custom `base_url` and `api_key` for an "OpenAI-compatible" provider works the same way — point it at `http://<edge-host>:<edge-port>/v1` with a Lens Model API token (`lens-mk-...`).
+
+---
+
+## Driving Lens from coding and operations agents (Lens MCP)
+
+External coding and operations agents (`opencode`, Claude Code, Cursor, OpenAI Codex CLI, MCP Inspector, or custom Streamable HTTP clients) can drive Lens end-to-end — inspecting GPU/PCIe topology, planning and creating deployments, running verification checks, executing benchmarks, comparing results, and publishing model services — through **`POST /api/mcp`** using a Personal Access Token (`lens-pat-...` from **Account → Personal access tokens**).
+
+See [MCP integration](/mcp) for copy-pasteable client configurations, profile controls (`LENS_MCP_PROFILES`), and the full 46-tool reference.
+
+---
 
 ## Lens Assistant's own provider
 
-[Lens Assistant](/user-guide/lens-assistant) and agentic deployment planning
-go the other direction: Lens is the *client*, calling out to an
-[external provider](/user-guide/external-providers) you configure (OpenAI,
-Azure OpenAI, Anthropic, or a self-hosted OpenAI-compatible server — which
-can itself be another Lens model service).
+[Lens Assistant](/user-guide/lens-assistant) and agentic deployment planning go the other direction: Lens acts as the *client*, calling out to an [external provider](/user-guide/external-providers) you configure (OpenAI, Azure OpenAI, Anthropic, or a self-hosted OpenAI-compatible server — which can itself be another Lens model service).

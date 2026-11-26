@@ -1,15 +1,25 @@
 ---
 title: 架构
-description: 关于 Lens 的结构以及请求如何流转的高层视图。
+description: 关于 Lens 的整体结构、三种使用方式以及请求如何流转的高层视图。
 slug: /architecture
 ---
 
 import useBaseUrl from '@docusaurus/useBaseUrl';
 
-Lens 是一个三层系统：一个浏览器单页应用、一个负责提供 UI 并代理 API 流量的应用层，
-以及一个拥有领域逻辑、访问控制、持久化、Kubernetes 访问权限和模型服务控制平面的控制平面。
-同一个控制平面负责配置和协调模型服务数据面，而模型推理流量则通过共享网关流转，
-而不是经过浏览器的 API 路径。
+Lens 由统一的服务器控制平面、独立的引擎 CLI 以及集群本地推理数据面共同构成：
+
+- **Web 控制台与 Agent MCP（`apps/frontend` + `apps/backend`）**：单进程 Python FastAPI
+  后端（`llm_d_lens`，默认端口 `3000`）统一提供构建后的 React 界面（`apps/frontend`，开发模式通过
+  Vite `:5173` 代理）、REST API、RBAC 与审计校验、外部 Agent Task MCP 端点（`POST /api/mcp`）
+  以及内部 Lens Assistant 工具目录（`/api/assistant/mcp`），并负责领域逻辑、PostgreSQL 持久化、
+  制品存储、集群操作与模型服务协调。
+- **独立 `llmd` CLI（`apps/lens`，`llm-d-lens-engine`）**：纯 Python 3.11+ 与 `PyYAML`
+  客户端，无需任何 Lens 服务器、数据库或 Node 进程，即可在单个 Kubernetes/OpenShift 命名空间内
+  直接驱动 `kubectl`/`oc`、`helm`、`git` 与 `kustomize`（`llmd` 为完整 CLI，`lens` 当前仅是
+  `--version`/`--help` 存根）。
+- **集群数据面**：模型推理流量不经过 Lens 服务器，而是直接发送到各集群本地的共享 llm-d
+  网关（`Istio` 或 `Envoy AI Gateway`），经 `lens-authz` 鉴权后通过 `HTTPRoute / Inference Payload Processor (IPP)`
+  与 `EPP` 路由到 `InferencePool` 中的 Prefill/Decode `vLLM` Pod。
 
 <img src={useBaseUrl('/img/index-1-7d83bcc33b.png')} alt="Lens 系统架构" width="100%" />
 
@@ -17,54 +27,46 @@ Lens 是一个三层系统：一个浏览器单页应用、一个负责提供 UI
 
 | 层 | 职责 |
 | --- | --- |
-| 客户端 | 使用 Lens 控制台的浏览器、兼容 OpenAI 的模型客户端，以及诸如 IDE 智能体之类的 MCP 客户端。 |
-| 应用层 | 提供 Web 控制台、解析已登录用户、执行路由级别的鉴权、将 API 流量代理给控制平面，并托管无状态的 MCP 端点。 |
-| 控制平面 | 拥有领域服务、访问控制和集群范围划分、持久化、文件与制品存储、集群操作、部署规划，以及模型服务控制平面。 |
-| 数据面 | 一个集群共享的 llm-d 网关（在创建集群时可选择提供方），加上每个模型一个 HTTPRoute/IPP；每个部署拥有自己的 InferencePool + EPP 以及 vLLM 副本。 |
-| 存储 | 用于应用状态的关系型数据库，以及用于制品和部署包的文件存储。 |
+| 客户端与使用方式 | **Web 控制台**（浏览器中的 `apps/frontend`）、**Agent Tools**（`opencode`、Claude Code、Cursor、Codex 调用 `POST /api/mcp`）、**独立 `llmd` CLI**（`apps/lens` 直连 Kubernetes）以及**模型客户端**（OpenAI/Anthropic SDK 或 `curl` 调用已发布网关）。 |
+| 统一 Python 后端（`apps/backend`，`llm_d_lens`） | 提供 Web UI、REST API、会话/PAT 鉴权（`lens-pat-*`）、RBAC 与按集群划分权限、审计日志、`/api/mcp`（6 个 profile 共 46 个任务工具）、`/api/assistant/mcp`（内部助手与规划器目录）、领域服务、部署规划、集群操作与模型服务控制平面。 |
+| 数据面 | 集群本地共享的 llm-d 网关（创建集群时可选择 `Istio` 或 `Envoy AI Gateway`）、`lens-authz`（`ext_authz`）以及按模型配置的 `HTTPRoute / Inference Payload Processor (IPP)`；每个部署拥有独立的 `InferencePool` + Endpoint Picker（`EPP`，`ext_proc`）与 `vLLM` Prefill/Decode 副本。 |
+| 存储 | PostgreSQL（内置或外部）保存应用状态、RBAC、目录条目与 API 密钥；文件/制品存储保存部署包、规划方案、轨迹与基准测试日志。独立 `llmd` 在各命名空间中使用 `ConfigMap`（`lens-instance-<name>`）保存实例状态。 |
 
 ## 请求流程
 
-1. 浏览器调用一个同源的 Lens 端点。
-2. 应用层解析调用方的会话，剥离可伪造的请求头，执行它自己负责的
-   任何路由级别权限检查，并带着调用方的身份把 API 调用转发给控制平面。
-3. 控制平面重新解析调用方身份，检查该路由所需的权限，
-   并拒绝未认证、未授权或 CSRF 校验失败的请求。
-4. 匹配到的领域服务处理该请求，读写数据库，必要时访问文件存储，
-   并使用集群访问权限对 Kubernetes 执行操作。
-5. 按集群划分范围的资源会被收窄到调用方可以访问的集群，
-   否则写操作会被直接拒绝。
-6. 模型推理是一条独立的路径：客户端使用网关令牌调用共享网关，
-   网关对请求进行鉴权、选择目标，并将其转发到正确的集群和部署。
+1. **Web 控制台（`apps/frontend`）**：浏览器向统一 Python 后端（`llm_d_lens`）发起同源 `/api/...` 请求。
+2. **Agent Tools（`POST /api/mcp`）**：外部智能体（`opencode`、Claude Code、Cursor、Codex）携带 `Authorization: Bearer lens-pat-*` 发送无状态 Streamable HTTP JSON-RPC 请求；内置 Lens Assistant 与智能体规划器则调用内部 `/api/assistant/mcp`。
+3. **鉴权、RBAC 与领域执行**：统一 Python 后端解析调用方的会话或 PAT，校验路由权限（MCP 需 `mcp:tool:invoke` 或 `playground:chat:use`）与 CSRF 检查，读写 PostgreSQL 与制品存储，并在调用方可访问的集群范围内执行集群操作。
+4. **独立 `llmd` CLI（`apps/lens`）**：在本地使用调用方的 kubeconfig，直接在单个命名空间内运行 `helm template`、`kustomize` 与 `kubectl`/`oc`（阶段流转 `Applying → Applied → Deleting → Removed`）。
+5. **模型推理（数据面）**：模型客户端携带 `Authorization: Bearer lens-mk-*` 直接请求集群本地共享网关；`lens-authz` 校验密钥，`HTTPRoute / IPP` 匹配模型路由，`EPP` 在对应部署的 `InferencePool` 中选出目标端点。
 
 ## 访问模型
 
-访问控制围绕一个拥有全局、集群或资源范围角色绑定的主体来建模。
-全局管理员可以访问每一个集群；按集群划分范围的维护者只能访问
-被授予给他们的集群。请求默认被拒绝，每个路由都映射到一个所需的权限，
-并且相同的范围划分规则在各个领域中被一致地应用，因此列表查询、
-发布、使用情况报告和网关操作都保持在调用方可访问的集群范围之内。
+访问控制围绕拥有全局、集群或资源范围角色绑定的主体建模。全局管理员可以访问每一个集群；
+按集群划分范围的维护者只能访问被授予给他们的集群。请求默认被拒绝，每个路由都映射到一个所需的权限，
+并且相同的范围划分规则在 Web UI 页面、REST 端点与 `/api/mcp` 工具调用中保持一致。
+对于不具备 `cluster-admin` 权限的集群接入，Lens 会执行预检并将集群级前置步骤拆分为编排管理员交接脚本。
 
 ## 部署规划
 
 智能体部署规划是一个部署时的、检索增强的推荐步骤，而不是一个运行时调度器。
-它会校验请求、收集实时的集群信息，并从容量估算、历史部署、
-已完成的模拟和基准测试结果中检索支持性证据。然后它只对通过校验的
-候选方案进行排序，并保存一条推荐结果；在有人批准之前，不会部署任何东西。
+它会校验请求、收集实时的集群信息，并从容量估算、历史部署、已完成的 **Trace Replayer** 运行结果
+和 **Evaluation** 基准测试结果中检索支持性证据。然后它只对通过校验的候选方案进行排序，
+并保存一条推荐结果；在有人批准之前，不会部署任何东西。
 
 设计细节参阅[智能体部署](/architecture/agentic-deployment)，了解规划器与审批流程；
 参阅[规划证据与 RAG](/architecture/agentic-planning-evidence)，了解证据来源与检索方式。
 
 ## 模型服务网关
 
-模型服务网关将集群部署以兼容 OpenAI 的服务形式发布到集群的共享
-llm-d 网关之后。控制平面管理服务、提供方、令牌和使用情况，
-并在创建集群时安装共享网关；网关对每个请求进行鉴权，并将其路由到
-模型服务的 InferencePool，由其 Endpoint Picker 选择端点。
-各个部署保留自己的 InferencePool + EPP，但不运行任何代理。
+模型服务网关将集群部署发布为位于集群本地共享 llm-d 网关之后的兼容 OpenAI 与 Anthropic 的服务。
+统一 Python 后端管理 **Model Services**、提供方、`lens-mk-*` 密钥与用量统计，并在创建集群时安装共享网关；
+`lens-authz` 对每次请求鉴权，随后由 `HTTPRoute / IPP` 与 `EPP` 路由到对应模型服务的 `InferencePool`。
+各个部署保留自己的 `InferencePool` + `EPP`，不运行额外代理。
 
 ## 相关内容
 
-- [集群](/user-guide/clusters)、[部署](/user-guide/deployments)和[模型服务](/user-guide/model-services)
+- [集群](/user-guide/clusters)、[部署](/user-guide/deployments)、[Model Catalog](/user-guide/model-market) 与 [Model Services](/user-guide/model-services)
 - [管理](/user-guide/administration)——了解角色和权限范围
-- [MCP 集成](/mcp)
+- [CLI 参考](/cli-reference)——了解独立 `llmd` CLI 的架构与命令
+- [MCP 集成](/mcp)——了解 `/api/mcp` 与 `/api/assistant/mcp` 的区别及智能体配置

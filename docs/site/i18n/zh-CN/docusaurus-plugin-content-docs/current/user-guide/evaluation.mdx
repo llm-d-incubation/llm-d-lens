@@ -26,7 +26,7 @@ DRA 或未知资源身份需显式指定副本数，不推断等设备预算。
 `opt-search`、`opt-deploy`、`opt-benchmark`、`opt-performance`）及
 `optimization-deploy` 工作区已移除。旧链接现在会打开当前用户有权限访问的
 第一个侧边栏页面。部署配置请使用 **Inference → Model Catalog（推理 → 模型目录）**，基准测试请使用
-**Evaluation → New Task（评估 → 新建任务）**。评估和仿真任务详情仍可从各自的
+**Evaluation → New Task（评估 → 新建任务）**。评估和 Trace Replayer 任务详情仍可从各自的
 任务列表进入；已有配置、部署和结果不受影响。
 
 ## 压测已有模型服务
@@ -126,6 +126,12 @@ SLO 稳定请求率、单加速器请求率和吞吐量。输入目标负载后�
 YAML 预览和 **Optimization comparisons（优化对比）**树。选择需要压测的
 服务场景，每个选中的场景都会在各个拓扑上运行。这些评测控件独立于
 模型目录中的 Manual / Agentic 部署工作流。
+
+## 估算负载耗时
+
+新建的 optimized-baseline 和 precise-prefix 路由任务默认采用 **Lightweight check**（每个目标及每个 worker 测量 24 个请求，包含 512 个共享输入 token、128 个独立输入 token 和 64 个输出 token）。如需更长时间的性能评测，请选择 **Full routing workload**。重试已保存的旧任务时，将保留其原有的负载和超时设置。
+
+**Timeout mode（超时模式）** 默认为 **Automatic (workload-based)**。其单次调用预算包含环境准备与安全余量，范围为 15 分钟至 4 小时；当没有受支持的估算值时，回退为 2 小时。**Manual limit** 会保留你设定的硬性上限，并在该上限短于估算耗时时给出警告。估算范围仅覆盖每个压测目标本身，不包含安装、部署或最终分析阶段；它基于吞吐量假设，而非实测硬件性能。Repository profiles、自定义 YAML、不支持的测试框架以及多轮对话负载不会显示估算时间。执行期间，结果标签页上方会显示一个紧凑徽章，提示剩余时间或 **Taking longer than estimated**，并在任务完成后消失。预热阶段和矩阵点各自拥有独立的超时限制。速率阶段时长表示发起流量的时间窗口，排队中的请求可在窗口结束后继续完成。并行实例数会成倍增加总请求数。
 
 ## 查看和比较结果
 

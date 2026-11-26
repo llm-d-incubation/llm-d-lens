@@ -64,6 +64,22 @@ import GitHubStats from '@site/src/components/GitHubStats';
 
 <img src={useBaseUrl('/img/home-2-b535f6b9af.webp')} alt="Lens clusters dashboard" width="100%" style={{ marginBottom: '3rem' }} />
 
+## Three ways to use Lens
+
+<CardGroup cols={3}>
+  <Card title="Web GUI" icon="server" href="/quickstart">
+    Browser console served by the unified Python backend (<code>llm_d_lens</code>) for multi-cluster governance, visual planning, Model Catalog, Evaluation, Trace Replayer, Model Services, Observability, and Lens Assistant.
+  </Card>
+  <Card title="Standalone llmd CLI" icon="rocket" href="/cli-reference">
+    Pure-Python 3.11+ &amp; PyYAML client (<code>apps/lens</code>) for cluster-admin-free, namespace-scoped GitOps directly against Kubernetes/OpenShift — zero Lens server, database, or Node required (<code>llmd</code> is the full CLI; <code>lens</code> is a version/help stub).
+  </Card>
+  <Card title="Agent Tools via MCP" icon="bolt-lightning" href="/mcp">
+    Stateless Streamable HTTP endpoint (<code>POST /api/mcp</code>, <code>Bearer lens-pat-*</code>) exposing 46 task tools across 6 profiles for <code>opencode</code>, Claude Code, Cursor, and Codex, separate from internal <code>/api/assistant/mcp</code>.
+  </Card>
+</CardGroup>
+
+<div style={{ marginTop: '3rem' }} />
+
 ## Highlights
 
 <CardGroup cols={2}>
@@ -74,24 +90,24 @@ import GitHubStats from '@site/src/components/GitHubStats';
   </Card>
   <Card title="Multi-cluster deployment" icon="server">
     Plan, approve and execute inference deployments across Kubernetes clusters
-    from a single UI, with agentic, workload-guided placement.
+    from a single UI, CLI, or MCP agent workflow, with agentic, workload-guided placement.
   </Card>
   <Card title="Guided evaluation" icon="chart-line">
     Design benchmark experiments, run them against live deployments, and
     analyze and export the results without hand-written scripts.
   </Card>
-  <Card title="Traffic simulation" icon="flask">
+  <Card title="Trace Replayer" icon="flask">
     Replay registered request traces against an inference endpoint to validate
     behavior and capacity before real traffic arrives.
   </Card>
   <Card title="Model Service gateway" icon="route">
-    Publish cluster deployments as OpenAI-compatible model services behind the
-    cluster's shared Gateway (HTTPRoute → InferencePool → EPP), with per-model
-    selection policies.
+    Publish cluster deployments as OpenAI- and Anthropic-compatible model services
+    behind the cluster-local shared Gateway (HTTPRoute / IPP → EPP → InferencePool),
+    with <code>lens-authz</code> and per-model selection policies.
   </Card>
   <Card title="Governance built in" icon="shield-check">
     Role-based access control, per-cluster scoping and audit logging apply
-    across every page, from clusters to model services.
+    across every UI page, REST route, and <code>/api/mcp</code> tool call.
   </Card>
   <Card title="Observability" icon="gauge-high">
     Bootstrap and maintain the cluster monitoring stack (Prometheus/Grafana) to
@@ -105,14 +121,15 @@ import GitHubStats from '@site/src/components/GitHubStats';
 
 <img src={useBaseUrl('/img/home-3-7d83bcc33b.png')} alt="Lens system architecture" width="100%" />
 
-A single Lens server manages any number of Kubernetes clusters, on-premises or
-in the cloud, from one pane of glass: the console talks to an application layer
-over same-origin API routes, and that layer forwards requests to a control plane
-that owns the domain services, persists state to the database, and drives
-clusters, storage and the model-service data plane directly. Access control and
-audit logging are enforced in the control plane, so every page — deployments,
-evaluation, simulation and model services alike — respects the same per-cluster
-permissions.
+A single unified Python FastAPI backend (<code>apps/backend</code>, <code>llm_d_lens</code>)
+manages any number of Kubernetes clusters, on-premises or in the cloud, from one
+control plane: it serves the built Web UI (<code>apps/frontend</code>), REST API,
+RBAC and audit enforcement, the external Agent Task MCP endpoint (<code>/api/mcp</code>),
+and the internal assistant catalog (<code>/api/assistant/mcp</code>), while persisting
+state in PostgreSQL and provisioning clusters, storage, and cluster-local Shared
+Gateways directly. For server-free, namespace-scoped workflows, the standalone{' '}
+<code>llmd</code> CLI (<code>apps/lens</code>) talks directly to Kubernetes, while
+model clients call published gateways with <code>Bearer lens-mk-*</code>.
 
 <div style={{ marginTop: '3rem' }} />
 
@@ -120,24 +137,30 @@ permissions.
 
 <CardGroup cols={2}>
   <Card title="Quickstart" icon="rocket" href="/quickstart">
-    Run the full stack locally.
+    Install Lens, deploy a model, and send your first request.
+  </Card>
+  <Card title="llmd CLI" icon="server" href="/cli-reference">
+    Deploy and roll out namespace-scoped stacks without a Lens server.
+  </Card>
+  <Card title="MCP integration" icon="bolt-lightning" href="/mcp">
+    Connect opencode, Claude Code, Cursor, or Codex to /api/mcp.
   </Card>
   <Card title="User Guide" icon="book-open" href="/user-guide/model-market">
     Page-by-page guides to every Lens capability.
   </Card>
   <Card title="Architecture" icon="sitemap" href="/architecture">
-    How the UI, BFF and Python backend fit together.
+    How the Web UI, unified Python backend, llmd CLI, and data plane fit together.
   </Card>
   <Card title="Model services" icon="route" href="/user-guide/model-services">
-    Publish a gateway-served, OpenAI-compatible model endpoint.
-  </Card>
-  <Card title="Troubleshooting" icon="life-ring" href="/troubleshooting">
-    Fixes for the failure modes you're most likely to hit.
+    Publish a gateway-served, OpenAI- and Anthropic-compatible model endpoint.
   </Card>
   <Card title="Evaluation" icon="chart-line" href="/user-guide/evaluation">
     Guide-based performance evaluation.
   </Card>
+  <Card title="Troubleshooting" icon="life-ring" href="/troubleshooting">
+    Fixes for the failure modes you're most likely to hit.
+  </Card>
   <Card title="FAQ" icon="circle-question" href="/faq">
-    Answers to common questions about roles and scope.
+    Answers to common questions about usage paths, roles, and scope.
   </Card>
 </CardGroup>

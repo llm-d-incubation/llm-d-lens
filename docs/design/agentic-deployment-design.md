@@ -71,23 +71,46 @@ arbitrary Kubernetes configurations.
 
 ### Overall planner architecture
 
-```mermaid
-flowchart TD
-    I["Deployment intent\nmodel + workload + SLO"] --> G{"Is external AI available?"}
-    G -->|"Yes"| AG["AI Generator\nautonomous MCP tool calling"]
-    G -->|"No"| F["Internal parsing of live facts"]
-    AG -->|"provider/MCP failure"| F
-    F --> DG["Deterministic Generator"]
-    AG --> V["Deterministic Validator"]
-    V -->|"at least one valid candidate"| E["Benchmark evidence\nraw samples + deterministic aggregate"]
-    V -->|"empty set or all invalid"| DG
-    DG --> E
-    E --> O["OpenAI-compatible scorer\nraw samples only"]
-    E --> DS["Deterministic scorer\naggregate inputs"]
-    O -->|"failure or not configured"| DS
-    O -->|"valid response"| P["Recommendation"]
-    DS --> P
-    P --> U["awaiting_approval plan"]
+```text
+┌─────────────────────────────────────────────┐
+│ Deployment intent (model + workload + SLO)  │
+└──────────────────────┬──────────────────────┘
+                       │
+                       ▼
+         ┌───────────────────────────┐
+         │ Is external AI available? │
+         └───────┬───────────┬───────┘
+                 │ Yes       │ No
+                 ▼           ▼
+  ┌──────────────────────┐ ┌──────────────────────────────────┐
+  │ AI Generator         │ │ Internal parsing of live facts   │
+  │ (autonomous MCP)     │ └─────────────────┬────────────────┘
+  └──────┬───────┬───────┘                   │
+         │       │ provider/MCP failure      │
+         │       └───────────────────────────┤
+         ▼                                   ▼
+  ┌─────────────────────────┐   ┌─────────────────────────┐
+  │ Deterministic Validator │   │ Deterministic Generator │
+  └──────┬───────────┬──────┘   └────────────┬────────────┘
+         │           │ empty / all invalid   │
+         │           └───────────────────────┤
+         │ at least one valid candidate      │
+         ▼                                   ▼
+  ┌──────────────────────────────────────────────────────────┐
+  │ Benchmark evidence (raw samples + deterministic agg.)    │
+  └──────────────────────┬───────────────────┬───────────────┘
+                         │                   │
+                         ▼                   ▼
+  ┌──────────────────────────────┐  ┌────────────────────────┐
+  │ OpenAI-compatible scorer     │  │ Deterministic scorer   │
+  │ (raw samples only)           │  │ (aggregate inputs)     │
+  └──────┬───────────────┬───────┘  └────────┬───────────────┘
+         │ valid         │ failure / unset   │
+         │               └───────────────────┤
+         ▼                                   ▼
+  ┌──────────────────────────────────────────────────────────┐
+  │ Recommendation ──► awaiting_approval plan                │
+  └──────────────────────────────────────────────────────────┘
 ```
 
 `AICandidateGenerator` runs first when external AI is configured. The model receives a restricted
@@ -128,24 +151,66 @@ configuration contract, or approval, and cannot directly trigger deployment.
 
 ### End-to-end workflow
 
-```mermaid
-flowchart TD
-    I["Input: model, Cluster, Model Cache\noptional: SLO, workload, preference"] --> V["Validate active session and Model Cache"]
-    V --> G["AI Generator autonomous MCP evidence collection"]
-    G -->|"failure"| F["Internally refresh facts and deterministic fallback"]
-    G --> D["Deterministic validator"]
-    D --> O["external scorer; deterministic fallback when needed"]
-    O --> R["Show awaiting_approval recommendation"]
-    R --> RC["Recalculate: new preference replaces old preference\nrefresh facts and recompute"]
-    RC --> F
-    R --> S["User selects validated candidate"]
-    S --> AP["Explicit approval"]
-    AP --> C["Refresh capacity and deployability again"]
-    C -->|"pass"| DEPLOY["Build DeployableConfiguration and start Deploy Run"]
-    C -->|"fail"| REJECT["Reject approval; do not deploy"]
+```text
+┌────────────────────────────────────────────────────────────────┐
+│ Input: model, Cluster, Model Cache                             │
+│ optional: SLO, workload, preference                            │
+└───────────────────────────────┬────────────────────────────────┘
+                                │
+                                ▼
+┌────────────────────────────────────────────────────────────────┐
+│ Validate active session and Model Cache                        │
+└───────────────────────────────┬────────────────────────────────┘
+                                │
+                                ▼
+┌────────────────────────────────────────────────────────────────┐
+│ AI Generator autonomous MCP evidence collection                │
+└───────────────────────────────┬────────────────────────────────┘
+         │                      │ failure
+         │                      ▼
+         │     ┌─────────────────────────────────────────────────┐
+         │     │ Internally refresh facts & deterministic        │◄───┐
+         │     │ fallback                                        │    │
+         │     └─────────────────────────────────────────────────┘    │
+         ▼                                                            │
+┌────────────────────────────────────────────────────────────────┐    │
+│ Deterministic validator                                        │    │
+└───────────────────────────────┬────────────────────────────────┘    │
+                                │                                     │
+                                ▼                                     │
+┌────────────────────────────────────────────────────────────────┐    │
+│ External scorer (deterministic fallback when needed)           │    │
+└───────────────────────────────┬────────────────────────────────┘    │
+                                │                                     │
+                                ▼                                     │
+┌────────────────────────────────────────────────────────────────┐    │
+│ Show awaiting_approval recommendation                          │    │
+└───────┬───────────────────────────────────────┬────────────────┘    │
+        │                                       │                     │
+        ▼                                       ▼                     │
+┌─────────────────────────────┐  ┌───────────────────────────────┐    │
+│ User selects validated      │  │ Recalculate: new preference   │    │
+│ candidate                   │  │ replaces old; refresh facts   ├────┘
+└───────┬─────────────────────┘  └───────────────────────────────┘
+        │
+        ▼
+┌─────────────────────────────┐
+│ Explicit approval           │
+└───────┬─────────────────────┘
+        │
+        ▼
+┌─────────────────────────────────────────────┐
+│ Refresh capacity and deployability again    │
+└───────┬─────────────────────────────┬───────┘
+        │ pass                        │ fail
+        ▼                             ▼
+┌──────────────────────────────┐  ┌──────────────────────────────┐
+│ Build DeployableConfiguration│  │ Reject approval;             │
+│ and start Deploy Run         │  │ do not deploy                │
+└──────────────────────────────┘  └──────────────────────────────┘
 ```
 
-1. The user first chooses a model, target Cluster, and Model Cache storage in Model Market; the
+1. The user first chooses a model, target Cluster, and Model Cache storage in Model Catalog; the
    deployment name and vLLM parameters are submitted with the request.
    SLO, workload profile, and preference are optional inputs.
 2. When creating a plan, the backend validates the active cluster session, and verifies that the
@@ -376,17 +441,30 @@ by existing requests remain valid.
 
 AIC integration is controlled and exact:
 
-```mermaid
-flowchart LR
-    W["Resolved workload profile"] --> AR["AICRequest\nmean input/output tokens\nTTFT/TPOT targets"]
-    AR --> AS["AIC support + search"]
-    AS --> N["Normalize AICCandidatePrediction"]
-    N --> M{"Exact topology match?"}
-    M -->|"agg: same TP + replicas"| B["optimized-baseline candidate"]
-    M -->|"disagg: same prefill/decode TP + replicas"| P["pd-disaggregation candidate"]
-    M -->|"no"| E["Evidence only; no ranking effect"]
-    B --> S["SLO pass -> TTFT -> TPOT -> throughput"]
-    P --> S
+```text
+┌──────────────────┐   ┌───────────────────────────────┐   ┌─────────────────────────┐
+│ Resolved         │──►│ AICRequest                    │──►│ AIC support + search    │
+│ workload profile │   │ mean in/out tokens, TTFT/TPOT │   └────────────┬────────────┘
+└──────────────────┘   └───────────────────────────────┘                │
+                                                                        ▼
+┌──────────────────┐   ┌───────────────────────────────┐   ┌─────────────────────────┐
+│ Normalize        │◄──┤ Exact topology match?         │◄──┤ AICCandidatePrediction  │
+│ prediction       │   └───────┬───────────┬───────┬───┘   └─────────────────────────┘
+└──────────────────┘           │           │       │
+   agg: same TP + replicas ────┘           │       └──── no: Evidence only;
+   disagg: same prefill/decode TP+replicas ┘             no ranking effect
+           │                               │
+           ▼                               ▼
+┌────────────────────────────┐  ┌────────────────────────────┐
+│ optimized-baseline         │  │ pd-disaggregation          │
+│ candidate                  │  │ candidate                  │
+└──────────┬─────────────────┘  └──────────┬─────────────────┘
+           │                               │
+           └───────────────┬───────────────┘
+                           ▼
+      ┌────────────────────────────────────────┐
+      │ SLO pass -> TTFT -> TPOT -> throughput │
+      └────────────────────────────────────────┘
 ```
 
 - AIC `agg` matches `optimized-baseline` candidates with the same TP and replicas.
@@ -473,26 +551,24 @@ consistency, but does not rewrite valid scores or ordering returned by the exter
 
 **Current implementation**
 
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant A as Agentic Service
-    participant C as Cluster Overview
-    participant D as Deploy
-
-    U->>A: POST plan request
-    A->>C: read live capacity
-    C-->>A: capacity snapshot
-    A-->>U: awaiting_approval recommendation
-    U->>A: POST approve
-    A->>C: refresh live capacity
-    alt candidate remains deployable
-      A->>D: start run from DeployableConfiguration
-        D-->>A: deployment run ID
-        A-->>U: deploying
-    else capacity changed or constraints fail
-        A-->>U: reject approval; no deployment
-    end
+```text
+User                 Agentic Service           Cluster Overview             Deploy
+ │                          │                         │                       │
+ ├─── POST plan request ───►│                         │                       │
+ │                          ├── read live capacity ──►│                       │
+ │                          │◄─ capacity snapshot ────┤                       │
+ │◄─ awaiting_approval ─────┤                         │                       │
+ │                          │                         │                       │
+ ├─── POST approve ────────►│                         │                       │
+ │                          ├─ refresh live capacity ►│                       │
+ │                          │                         │                       │
+ │  [if candidate remains deployable]                 │                       │
+ │                          ├─ start run (DeployableConfiguration) ──────────►│
+ │                          │◄────────────────────────── deployment run ID ───┤
+ │◄─ deploying ─────────────┤                         │                       │
+ │                          │                         │                       │
+ │  [else capacity changed or constraints fail]       │                       │
+ │◄─ reject approval; no deployment                   │                       │
 ```
 
 - Creating a plan has no side effects; it only writes in-memory Agentic run state, whose initial

@@ -1,6 +1,6 @@
 ---
-title: Model Market
-description: Manage custom model entries and reusable deployment defaults.
+title: Model Catalog
+description: Manage custom model entries, serving defaults, and catalog-backed deployment hand-off.
 ---
 
 import Tabs from '@theme/Tabs';
@@ -324,7 +324,7 @@ Start a Standard Kubernetes Service deployment run using Lens's allowlisted vLLM
 **Manual** (deterministic requirements planning) or **Agentic**. This endpoint remains available to
 API and MCP callers that want the plain allowlisted vLLM contract without a
 Guide template, and is documented here because it is still the deployment
-contract reached from the Model Market domain.
+contract reached from the Model Catalog domain.
 :::
 
 <Tabs>
@@ -527,6 +527,6 @@ asyncio.run(main())
   </TabItem>
 </Tabs>
 
-Model Market does not expose its own catalog API; see [Clusters](/api-reference/modules/clusters) and [Deployments](/api-reference/modules/deployments) for the full backend-facing module pages.
+Model Catalog exposes its own CRUD API under `/api/v1/model-catalog` (documented above); see [Clusters](/api-reference/modules/clusters) and [Deployments](/api-reference/modules/deployments) for cluster discovery, registration, and full deployment execution APIs.
 
 See the full request/response schemas in the FastAPI OpenAPI schema (regenerate with `npm run docs:api`).

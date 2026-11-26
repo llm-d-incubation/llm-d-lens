@@ -77,6 +77,14 @@ Pod 模板。新建 Pod 会在执行原有 harness 命令之前修复受影响�
 现有 Pod 不会被修改。未启用自动重载的后端进程需要加载更新代码后再开始新的评估；
 不要在该进程仍负责运行中的评估时重启它。
 
+## 并发后端实例
+
+评估执行受 `LENS_DATA_DIR/metadata/evaluations/locks` 下的操作系统文件锁保护。共享评估记录的后端实例必须在支持 `flock` 的文件系统上共享该目录；该保护机制不支持仅共享数据库而各自使用独立数据目录的部署方式。所有参与的后端都必须运行更新后的代码。独立的开发环境应使用各自独立的数据库与数据目录。
+
+启动另一个后端实例不会将正在运行的所有者的基准测试标记为中断，也不会重复启动同一工作流。文件锁会在异步清理期间保持持有状态，并在所属进程退出时自动释放。当基准测试仍在使用部署时，自动部署清理会被推迟。延迟到达的重复执行器无法重放已完成的工作流。
+
+针对由另一个后端实例所拥有的任务的取消、重试和删除请求，会在修改记录或集群资源之前返回 HTTP `409`。请将请求发送到正在执行该评估的后端实例。本地取消操作会一直保留所有权，直到清理完成。Python 控制可调用对象也会执行相同的所有权校验。
+
 ## 后端 API
 
 评估相关的路由位于 `llm_d_lens/evaluation/router.py` 中，前缀为 `/api/v1/evaluate`。请求模型定义在 `llm_d_lens.evaluation.models` 中；命名的 HTTP 响应模型定义在 `llm_d_lens.evaluation.api_models` 中。
@@ -168,6 +176,55 @@ async def main() -> None:
 
 asyncio.run(main())
 ```
+  </TabItem>
+</Tabs>
+
+### 估算基准测试耗时
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+
+**`POST /api/v1/evaluate/timing-estimate`**
+
+接收 `BenchmarkSpec`，返回 HTTP `200` 与 `BenchmarkTimingResponse`。需要 `evaluate:run:read` 权限以及常规会话/CSRF 校验。这是一个纯配置预览接口，不会访问或启动集群资源。
+
+```json
+{
+  "wait_timeout_seconds": null,
+  "parallelism": 1,
+  "shared_prefix": {
+    "num_groups": 4,
+    "num_prompts_per_group": 5,
+    "system_prompt_len": 512,
+    "question_len": 128,
+    "output_len": 64,
+    "stages": [{"rate": 0.4, "duration": 20}, {"rate": 0.8, "duration": 20}]
+  }
+}
+```
+
+对于上述输入，`measured_requests` 为 24，`lower_seconds` 为 160，`upper_seconds` 为 340，`timeout_seconds` 为 900。响应还包含 `basis`（`configuration` 或 `unknown`）、`confidence`（`low`）、`phases`（每次调用的下限/上限秒数）、`timeout_mode`、`recommended_timeout_seconds`、可空的 `timeout_warning`，以及用于估算的显式 `assumptions`。
+
+将 `wait_timeout_seconds` 设为 `null` 或省略时会启用自动预算：最大单次调用上限估算值的 1.5 倍加上 120 秒，限制在 900–14400 秒范围内。1–14400 之间的显式值仍作为手动硬限制。未知工作负载耗时返回空估算值/计数和空的阶段映射，自动回退为 7200 秒。支持估算使用 inference-perf 生成的单轮 shared-prefix 以及显式 matrix/concurrency 工作负载；自定义 YAML 与仓库 profile 仍为 `unknown`。无效输入返回 `422`。
+
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+from llm_d_lens.deploy.capabilities import shared_prefix_routing_workload
+from llm_d_lens.evaluation.models import BenchmarkSpec
+from llm_d_lens.evaluation.timing import benchmark_timing
+
+spec = BenchmarkSpec(shared_prefix=shared_prefix_routing_workload())
+timing = benchmark_timing(spec)
+print(timing["lower_seconds"], timing["upper_seconds"], timing["timeout_seconds"])
+
+full_spec = BenchmarkSpec(shared_prefix=shared_prefix_routing_workload(full=True))
+print(benchmark_timing(full_spec))
+```
+
+HTTP 可调用对象为 `await llm_d_lens.evaluation.router.estimate_benchmark_timing(spec)`，它与 `create_run` 使用相同的纯函数。
+
   </TabItem>
 </Tabs>
 
@@ -1383,3 +1440,21 @@ asyncio.run(main())
 </Tabs>
 
 完整的请求/响应 schema 请参见 FastAPI 的 OpenAPI schema（使用 `npm run docs:api` 重新生成）。
+
+### 基准测试监控时钟对齐
+
+`metrics.observability.clock_alignment` 会记录 `status`（`measured` 或 `unavailable`）、`offset_seconds`（Prometheus 时间减去 Lens 时间，或为 `null`），以及用于 Prometheus 范围查询的 `query_window`（`start`、`end`）。原始 `window` 与持久化序列时间戳仍保持在 Lens 时间线上，包括速率阶段切片。如果时钟测量失败，采集过程会保留原始窗口并将对齐状态报告为不可用。
+
+现有的 Python 可调用对象 `llm_d_lens.monitoring.profiling.service.collect_benchmark_observability(execution_id, start, end, cluster_id=None)` 会在不改变函数签名的情况下执行此对齐。例如：
+
+```python
+from llm_d_lens.monitoring.profiling.service import collect_benchmark_observability
+
+observability = await collect_benchmark_observability(
+    execution_id="deployment-id",
+    start="2026-10-09T09:50:00Z",
+    end="2026-10-09T09:55:00Z",
+    cluster_id="cluster-id",
+)
+print(observability.get("clock_alignment"))
+```

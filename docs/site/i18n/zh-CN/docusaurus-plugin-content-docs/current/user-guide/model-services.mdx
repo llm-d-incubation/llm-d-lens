@@ -6,7 +6,7 @@ description: 发布部署、创建 API 密钥并调用模型。
 集群未配置 Gateway 提供方时，默认使用 Istio；已明确配置的提供方保持不变。
 
 将就绪的部署发布为模型服务，应用即可使用 API 密钥调用。
-调用已有服务从 **My services（我的服务）**开始；发布服务使用 **Model services（模型服务）**。
+调用已有服务从 **My Resources → Services**（页面标题显示为 **My services**）开始；发布服务使用 **Model services（模型服务）**。
 
 ## Standalone 部署与 Gateway 发布
 
@@ -32,7 +32,7 @@ Envoy AI Gateway/GKE 使用 TLS。发布时会同步修复旧版 Envoy sidecar �
 
 ## 调用已发布的模型
 
-1. 打开 **My services**。
+1. 打开 **My Resources → Services**（页面标题为 **My services**）。
 2. 在 **Gateway connections（网关连接）**中，点击目标集群旁的 **Copy（复制）**。
 3. 找到模型，点击 **cURL**。
 4. 在 **cURL examples** 中复制请求，保留示例中的地址和请求头。
@@ -66,7 +66,7 @@ Envoy AI Gateway/GKE 使用 TLS。发布时会同步修复旧版 Envoy sidecar �
 4. 在 **Model name mapping** 中核对只读的 **Provider model name**，它由所选部署自动填充。
 5. 在 **Exposed to users as** 下方，从当前集群的建议列表选择已有的 **Public model name**，或输入新名称，例如 `team-chat`。应用在 Chat Completions API 的 `model` 字段中使用此公开名称，而不是提供方的模型名称。
 6. 点击 **Add**。新名称会同时创建模型服务和模型服务器；同一集群中的已有名称会向该模型添加部署并复用 HTTPRoute。提交前可点击 **Cancel** 或抽屉外的遮罩放弃操作。
-7. 在 **Service flow（服务流程）**中检查状态，然后到 **My services** 复制 **cURL** 请求进行调用。
+7. 在 **Service flow（服务流程）**中检查状态，然后到 **My Resources → Services** 复制 **cURL** 请求进行调用。
 
 当公开模型名与 provider 模型名不一致时，Lens 会为该服务的 InferencePool 创建
 `InferenceModelRewrite`。共享 Gateway 在请求到达模型服务器前用它改写请求体中的
@@ -273,12 +273,14 @@ Lens 通过 SubjectAccessReview（SSAR）权限检查（`canManageGatewayInfra`�
 2. **交付脚本**：打开交接抽屉或面板，点击 **Download `.sh`**（下载 `.sh`）、**Copy**（复制）脚本，或 **View operation details**（查看操作详情，包括待执行操作和期望状态哈希）。
 3. **验证完成**：编排平台管理员运行脚本后，点击 **Re-check**（重新检查，或调用验证接口）。Lens 会检查集群可写命名空间中的非涉密完成标记 `ConfigMap`，并结合实时 Gateway HTTP 路由检查确认路由已生效。
 
-## 看不到操作按钮
+## 权限
 
-请管理员检查你的模型服务权限和集群访问范围。不要使用他人的 API 密钥。
+如果缺少操作按钮，请管理员检查你的模型服务权限和集群访问范围。不要使用他人的 API 密钥。
 
 - **查看路由交接详情**：拥有 `model-service:gateway:read`、`model-service:group:read` 或 `model-service:member:manage` 权限的用户可使用。
 - **生成与验证 `routes` 交接脚本**：拥有发布、更新、启停或移除模型服务及成员权限的用户可使用（`model-service:gateway:reconcile`、`model-service:gateway:manage`、`model-service:member:manage`、`model-service:group:manage`、`model-service:group:toggle` 或 `model-service:group:remove`）。
 - **Gateway 修复与 IPP 交接脚本**（`gateway_repair`、`ipp_config`、`all`）：仅限拥有 Gateway 管理或协调权限的用户（`model-service:gateway:manage` 或 `model-service:gateway:reconcile`）。
+
+## 相关页面
 
 部署监控见[可观测性](/user-guide/observability)，服务无法访问时见[故障排查](/troubleshooting)。

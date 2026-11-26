@@ -10,6 +10,11 @@ import TabItem from '@theme/TabItem';
 
 Lens Assistant 使用统一 Python 服务中的 `llm_d_lens.assistant_tools.router`。其 FastAPI 路由通过官方 MCP Python SDK 在 `/api/assistant/mcp` 提供无状态 Streamable HTTP 端点。
 
+:::info `/api/assistant/mcp` 与 `/api/mcp` 的区别
+- **`/api/assistant/mcp`**（本页文档对象）是**内部助手工具目录**，根据 FastAPI OpenAPI schema 与 `definitions.json` 中的特殊处理器生成，供内置 Lens Assistant 和 Agentic 规划器使用（通过 `PRISM_MCP_URL` / `PRISM_MCP_CA_FILE` 配置）。
+- **`/api/mcp`** 是**外部 Agent Task MCP** 服务端，按 `LENS_MCP_PROFILES`（`core`、`serving`、`storage`、`simulation`、`lens-settings`、`cluster-admin`）向外暴露 46 个面向任务的工具，供外部编码与运维代理（`opencode`、Claude Code、Cursor、Codex）使用。接入外部代理请参见 [MCP 集成](/mcp)。
+:::
+
 候选工具声明并转发 `workload.concurrency` 或 `workload.request_rate`
 （正数且互斥的负载目标）。兼容 API 的输入／输出 token 长度缺省为
 4000／1000，与 Agentic 规划一致。预期的校验提示和无可行候选时的重试行为
@@ -186,7 +191,7 @@ Python 路由不保留传输会话，因此拒绝终止会话的请求。使用 
 | `list_deployment_executions` | `GET /api/v1/deployments/executions` | [部署](/api-reference/modules/deployments)，经由 `llm_d_lens/deploy/router.py` |
 | `create_evaluate_run` | `POST /api/v1/evaluate/runs` | [评估](/api-reference/modules/evaluation)，经由 `llm_d_lens/evaluation/router.py` |
 | `get_cluster_stack_status` | `GET /api/v1/monitoring/cluster-stack/status` | [可观测性](/api-reference/modules/observability)，经由 `llm_d_lens/monitoring/cluster_stack/router.py` |
-| `list_simulation_tasks` | `GET /api/simulation/tasks` | [模拟](/api-reference/modules/simulation)，经由 `llm_d_lens/simulation/router.py` |
+| `list_simulation_tasks` | `GET /api/simulation/tasks` | [轨迹回放（Trace Replayer）](/api-reference/modules/simulation)，经由 `llm_d_lens/simulation/router.py` |
 
 如果你需要的是 Python 而不是 MCP 传输，请直接调用其背后的 Python 领域逻辑，而不是通过 `/api/assistant/mcp`。例如，MCP 工具 `create_standard_vllm_deployment_run` 最终调用的是与 `POST /api/v1/deployments/standard-vllm-runs` 相同的部署辅助函数：
 

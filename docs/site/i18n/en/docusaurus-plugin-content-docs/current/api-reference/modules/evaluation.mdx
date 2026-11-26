@@ -74,8 +74,8 @@ lock protects confirmation from concurrent control actions.
 Benchmark execution records may include `harness_pod_label` (the current CLI
 invocation's unique app label) and `harness_pods` (Pod names mapped to UID, phase
 and container states). The existing execution path in
-`llm_d_bench.evaluate.router` passes this label as `harness.podLabel` to upstream
-and calls `llm_d_bench.evaluate.harness_watch.watch_harness` with the same run
+`llm_d_lens.evaluation.router` passes this label as `harness.podLabel` to upstream
+and calls `llm_d_lens.evaluation.harness_watch.watch_harness` with the same run
 record. These fields are diagnostics, not user-supplied selectors. Explicit
 harness `OOMKilled` errors receive host-memory guidance; plain exit 137 remains
 unclassified.
@@ -262,9 +262,9 @@ repository profiles remain unknown. Invalid input returns `422`.
   <TabItem value="python-api" label="Python API">
 
 ```python
-from llm_d_bench.deploy.capabilities import shared_prefix_routing_workload
-from llm_d_bench.evaluate.models import BenchmarkSpec
-from llm_d_bench.evaluate.timing import benchmark_timing
+from llm_d_lens.deploy.capabilities import shared_prefix_routing_workload
+from llm_d_lens.evaluation.models import BenchmarkSpec
+from llm_d_lens.evaluation.timing import benchmark_timing
 
 spec = BenchmarkSpec(shared_prefix=shared_prefix_routing_workload())
 timing = benchmark_timing(spec)
@@ -274,7 +274,7 @@ full_spec = BenchmarkSpec(shared_prefix=shared_prefix_routing_workload(full=True
 print(benchmark_timing(full_spec))
 ```
 
-The HTTP callable is `await llm_d_bench.evaluate.router.estimate_benchmark_timing(spec)`;
+The HTTP callable is `await llm_d_lens.evaluation.router.estimate_benchmark_timing(spec)`;
 it uses the same pure function as `create_run`.
 
   </TabItem>
@@ -1564,7 +1564,7 @@ See the full request/response schemas in the FastAPI OpenAPI schema (regenerate 
 Guide workload defaults returned through deployment capabilities use two stages
 for each recommended workload and the default P/D long-input scenario. Python
 consumers obtain the same fresh values with
-`llm_d_bench.deploy.capabilities.provider_capability(provider_id)`; saved
+`llm_d_lens.deploy.capabilities.provider_capability(provider_id)`; saved
 benchmark specifications and explicitly selected throughput presets are unchanged.
 
 ### Benchmark monitoring clock alignment
@@ -1577,11 +1577,11 @@ rate-stage slicing. If clock measurement fails, collection retains the original
 window and reports alignment as unavailable.
 
 The existing Python callable
-`llm_d_bench.monitoring.profiling.service.collect_benchmark_observability(execution_id, start, end, cluster_id=None)`
+`llm_d_lens.monitoring.profiling.service.collect_benchmark_observability(execution_id, start, end, cluster_id=None)`
 performs this alignment without changing its signature. For example:
 
 ```python
-from llm_d_bench.monitoring.profiling.service import collect_benchmark_observability
+from llm_d_lens.monitoring.profiling.service import collect_benchmark_observability
 
 observability = await collect_benchmark_observability(
     execution_id="deployment-id",

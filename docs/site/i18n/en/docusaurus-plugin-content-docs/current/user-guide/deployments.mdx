@@ -9,99 +9,266 @@ Open **Deployments** to check whether a model is ready, inspect a failure, or ma
 
 New llm-d Router deployments default to a complete Standalone endpoint, even when the cluster has a ready shared Gateway. Publishing adds a Gateway route; detaching preserves independent access. See [Standalone deployment and Gateway publication](/user-guide/model-services#standalone-deployment-and-gateway-publication).
 
-## DisaggregatedSet review
+## Open the deployment creation flow
 
-When a selected Guide supports DisaggregatedSet, configuration exposes the real API
-fields: `spec.slices`, `spec.placementPolicy.type`/`.topology`, and **EPP Topology Affinity**
-(`topology-affinity-scorer` or `topology-affinity-filter`).
-Prefill and decode replicas are per Slice. The resource summary expands all Slices
-and leader/worker Pods; TP is not treated as an accelerator resource count.
+Manual proceeds directly to **Deployment plan**; Agentic first offers an objective,
+with all numeric parameters optional.
+No request lengths, prefix reuse or workload shape are invented. These are benefit
+hints, not compatibility gates. Agentic
+can interpret explicitly stated qualitative workload traits from a goal when an
+AI provider is selected; the interpretation is displayed and editable. Without AI,
+use structured inputs. Numeric resource and performance limits are never inferred.
 
-In both Deploy and Evaluation, P/D configuration always shows **Slice Configuration**
-below the topology settings. Controls remain disabled until
-the source is recognized as DS. Loading, preparation errors and a Guide without DS
-are shown explicitly; **Recheck Slice support** repeats the official-source check, and
-the header shows the pinned Guide commit.
-Choosing P/D alone does not convert a Deployment-based Guide into a DisaggregatedSet.
+Manual ranks supported combinations by SLA status, then the P/D decision, then the greatest
+source-verified capability coverage, not the first Guide that renders; on equal coverage a P/D combination wins.
+Manual limits `--max-num-seqs` only when you declare request sizes; otherwise vLLM
+admits requests by free KV cache. It does not maximize resource use
+or claim a measured performance optimum. Unsupported combinations remain explicit.
+**Ready for your confirmation** is a compact conclusion; failed checks block deployment and
+provide **Retry checks**. Deployment confirmation rechecks current capacity.
 
-Slice count and placement start from the Guide defaults; EPP Topology Affinity defaults to Scorer:
+Prefix-affinity routing, P/D separation and CPU KV offload can be combined independently.
+Routing composition retains the P/D profiles and uses affinity plugins from the same
+pinned source revision; incompatible plugins or images are reported explicitly.
+Basic attention KV caching is distinct from cross-request prefix caching and CPU
+offload. Missing explicit vLLM flags can be configured with a mandatory startup
+capability probe in the selected image; this is not a claim of verified runtime support.
 
-- **Max feasible** is estimated from current free resources for the selected
-  placement policy: packing for `None`, domains that each fit one Slice for
-  `ExclusiveSlice`, and such domains not used by another DisaggregatedSet for
-  `ExclusiveTopology`. Before **Generate YAML** the estimate uses the Guide default roles;
-  afterwards it uses the generated roles. It is not a reservation.
-- **Recommended** appears only with matching evidence: succeeded Evaluation
-  cases for the same model, Guide, cluster, accelerator and per-Slice P/D replicas and TP
-  that recorded an SLO-stable rate. Enter a **Target load** to get the fewest Slices whose
-  measured rate meets it within the current ceiling. When runs used different workloads or SLO
-  targets, choose one under **Evidence**; runs are never mixed across them.
-  Otherwise the panel shows
-  `No verified recommendation — Guide default: N`. Throughput alone never selects a count.
-- **Selected** multiply per-Slice requests by the selected Slice count, and the
-  accelerator total checked before generation includes all Slices.
-- **Placement** selects the placement type, picks the topology key from
-  discovered node labels (or another key), and shows each domain's nodes, free
-  accelerators and whether it fits a Slice. When the Guide requests accelerators
-  through DRA claims, which the estimate does not count, domains show free CPU and
-  memory instead and a note marks the ceilings as CPU, memory and Pod based only.
-  Custom labels are marked because Lens cannot
-  verify that they reflect physical topology; node labels are changed by orchestration
-  administrators, not from this page. A discovered placement is offered as
-  **Suggested**.
-- **EPP Topology Affinity** offers **Scorer** and **Filter** only. Scorer adds a
-  same-Slice score; Filter keeps same-Slice candidates when available. Missing peer
-  topology or no matching candidate leaves all candidates eligible, so Filter is not
-  a strict same-Slice guarantee. Unset or legacy inherited settings become Scorer
-  when generating a configuration; an existing Filter selection is preserved.
-- **Evaluation evidence** lists recent measured runs, marks those with the same per-Slice
-  shape, and **Apply** copies a run's Slices, placement and P/D values.
+Deployment creation requires models registered in [Model Cache](/user-guide/model-cache).
+Select a registered cache volume containing the ready model and its revision on the
+same cluster. The Advanced configuration editor has only the **Model Cache** source.
+For local-disk storage, synchronize new nodes before deployment. Ordinary provider
+rendering configures offline serving with a read-only cache mount. Download
+or repair the cache in Model Cache first, then create or retry the deployment.
 
-Deploying a DS configuration runs preflight checks in the existing deployment flow,
-without an additional review dialog. Passed checks proceed directly to deployment;
-failures and unknown constraints appear inline under **Deployment checks**.
-In Manual and Agentic plan review, **Confirm deployment** submits the plan when preflight finds a placement and no errors. Conditions outside the placement model remain advisory. Incomplete inventory or an inconclusive search still prompts **Accept risks and deploy**.
-Its **Slice deployment preview**
-shows selected versus feasible Slices, the roles per Slice, total accelerator requests,
-placement, EPP routing and the modeled Slice-to-domain and Pod-to-node placement (the real
-scheduler may choose other nodes). Check workload YAML, Router
-values and checksums under **Deployment resources** when inspecting the preflight evidence. Failed constraints block
-execution, including a Slice count with no feasible placement. An inconclusive result requires explicit acknowledgment. A feasible placement does not reserve resources or guarantee admission.
-Changing cluster or deployment inputs requires another review. The final plan freezes
-rendered inputs and Chart bytes; it does not install missing DS/LWS controllers or CRDs.
-Official Guide snapshots require vendored Kustomize dependencies.
+Cache checks follow the active serving roles: P/D checks Prefill and Decode
+independently; other providers use Decode. Each role defaults to revision `main`.
+An explicit tokenizer must also be ready in the same cache volume; its revision
+defaults to the role's model revision unless `tokenizer-revision` is supplied.
+Conflicting dependency arguments are rejected. The rendered model and tokenizer
+arguments must match the checked dependencies before deployment proceeds.
 
-Local sources freeze referenced resources, patches, generator inputs and Router
-values with a content checksum, not a claim that dirty files match Git HEAD.
-Remote custom Kustomize sources render from an exact commit snapshot; external
-dependencies and escaping paths must be vendored before planning.
-For a stopped or failed independently deployed DS, the **restart-plan API** prepares
-a new digest without deleting old resources. Confirm the new plan to start a new
-run. Evaluation-owned deployments use the Evaluation workflow's retry action.
+Ordinary optimized-baseline rendering does not apply custom `revision`, `tokenizer`,
+or `tokenizer-revision` arguments, so those inputs are rejected. Configuration-source
+overrides and custom `model`, `model-path`, `code-revision`, `hf-config-path`,
+`config`, and `download-dir` arguments are not supported by cache preflight.
 
-Evaluation automatically records a bounded inference probe before benchmarking a reviewed
-DS deployment. In Evaluation details, open **Deployments** to inspect **Runtime verification**:
-Kubernetes readiness, Slice placement, P/D routing and KV transfer have independent verdicts
-and reasons. **Recorded evidence** exposes the captured Pod/Node and request evidence.
-The deployment verification API also supports an explicit smoke request and read-only metric
-snapshots. A metric snapshot is not a live rate. Slice count changes require a new reviewed configuration.
-For instrumented vLLM 0.26.0 NIXL pull workers, it correlates the response ID with
-receive completion and producer acknowledgements across all TP ranks, verifies
-Pod/engine stability and P/D revision identity, and excludes transfer-failure fallback.
-The report records actual P/D Pods, same-Slice/domain results and transferred block
-counts. Reports persist as checksummed deployment evidence and remain visible after
-reopening details. Unsupported versions/connectors or incomplete evidence remain unknown.
-Ready Pods, HTTP success, same-Slice labels and aggregate KV counters are not proof of
-request-specific transfer. Routing/KV results remain unknown without correlated evidence.
-These checks do not certify physical network bandwidth or safe online rollout.
+1. In the left navigation, open **Deployments**.
+2. In the page header, click **Create**.
+3. Follow [Create a deployment](/user-guide/model-market). The new deployment appears in this list after submission.
 
-P/D deployments using Router 0.11 automatically adapt legacy plugin settings when
-created or retried. The original configuration is retained, and deployment
-diagnostics record the effective Router values. A legacy `disagg-headers-handler`
-entry is replaced by the profile handler's built-in header handling; the saved
-prefill/decode decision is preserved. A conflicting old and new decider setting
-must be corrected before deployment.
+Choose **Pod placement** on the setup card before building a plan: prefer one node
+(default), require one node (optionally a specific node), distribute evenly or
+require separate nodes. The choice applies to Deployment, LeaderWorkerSet and
+DisaggregatedSet model servers. Existing deployment APIs and the separate
+Configuration editor retain their placement controls. TP devices are requested by
+each model-server Pod; planned placement is not shown as actual cluster placement
+before deployment.
 
+For P/D, the Prefill, Decode and KV transfer settings include **P/D slices and
+placement**: slice count, per-slice Prefill/Decode replicas and TP, the slice
+placement policy (`None`, `ExclusiveSlice`, `ExclusiveTopology`) and its node-label
+topology key. Lens recommends values from current free devices per topology domain,
+narrowest domain first (node, then rack-like labels, zone, region). It splits role
+replicas into the fewest equal slices that each fit one domain, so KV transfer stays
+local. Latency and reliability objectives use `ExclusiveTopology` when enough
+unshared domains exist. If no domain fits a whole slice, placement stays `None`.
+Automatic hard placement also constrains role Pods to the domains that can fit a
+whole slice, preventing the first Pod from locking the slice onto a smaller node.
+This does not reserve devices; regenerate the plan if available capacity changes.
+Reviewed values are pinned in the plan and remain editable; non-`None` policies are
+hard scheduling rules and Pods stay Pending if no domain can hold a slice. The
+recommendation respects Pod placement: distribute evenly or separate nodes exclude
+node-scoped slices, and require one node keeps one slice. The slice panel disables
+conflicting topology keys, and an explicit conflict is reported when you apply changes.
+
+### Model Cache enforcement limitations
+
+Exact published YAML configurations (`officialGuide`) bypass ordinary provider
+rendering. Their final manifests do not yet enforce the same offline flags,
+read-only cache mounts, or backing-volume binding. Cache-only deployment is
+therefore not guaranteed for this path. Offline environment variables are also
+not a network isolation boundary.
+
+## Find a deployment in the list
+
+1. Review the summary cards at the top of the page: **Total**, **Ready**, **In progress**, **Failed**, and **Cleaned**.
+2. In the list toolbar, type in **Search deployments** to match a deployment by name, description, model, namespace, guide, or ID.
+3. Open **Status** to filter by deployment state.
+4. Open the cluster selector and choose **All clusters** or one cluster.
+5. If needed, change **Rows per page** and use the pager to move through the list.
+6. If no rows match, click **Clear filters**.
+
+The **Cluster** and **Namespace** columns each include a copy button.
+
+## View deployment details
+
+1. In the deployment row, open the actions menu and select **View details**.
+2. In the drawer, review the sections **Basic Information**, **Model & Serving Engine**, **Cluster & Environment**, **Network & Endpoints**, and **Audit & Timeline**.
+3. Use the copy buttons beside values such as **Namespace**, **Cluster Session ID**, **Container Image**, **Internal Endpoint**, **Forwarded Endpoint**, or **Execution ID** when you need to reuse them elsewhere.
+4. If the deployment failed, read the failure banner before making changes.
+
+Wait for **Ready** before calling the deployment. For **In progress**, check the pod logs for startup progress. For **Failed**, read the failure banner and the affected pod's logs.
+
+Missing runtime details are read from the stored rendered vLLM manifest. For P/D
+deployments, flat runtime fields are labeled **(Decode)**. Unspecified values remain
+unknown rather than being filled with assumed defaults.
+
+Normal Pending or Running-but-not-ready Pods keep a starting deployment **In progress**.
+Explicit Pod failures, including image pull failures and OOM, still show **Failed**.
+For deployments already marked Ready, the status dot also reflects live model-server Pods. A yellow dot means fewer ready model-server Pods than requested, so serving capacity is reduced. A red dot means no ready model-server Pods remain, so the service is unavailable. These conditions are also reported under **Needs attention**.
+
+**Failed** is not final. A rollout that ran past its progress deadline is recorded
+as failed, but the workload often recovers on its own -- a pod that kept crashing
+until its model cache was complete, for example. Lens keeps re-checking failed
+deployments against the cluster and flips them back to **Ready** once their pods
+serve again, so leave the deployment in place rather than recreating it
+immediately. If the namespace is gone, the deployment is corrected to **Cleaned**
+instead.
+
+Pending Pods waiting for accelerator resources, including DRA scheduler reports
+such as `cannot allocate all claims`, keep the deployment **In progress** even
+after the rollout progress deadline. Refreshing a deployment previously marked
+**Failed** returns it to **In progress** when current diagnostics confirm this
+resource wait. The scheduler reason remains available in diagnostics. This does
+not release devices held by other deployments; stop or remove an unused deployment
+to free them. Container crashes and image-pull failures still count as failures;
+Pending alone is not enough to classify a deployment as waiting for resources.
+
+After scheduling, a Running Pod can still be loading the model and not yet Ready.
+If rollout reports an exceeded progress deadline, Lens preserves **In progress**
+without automatic cleanup while current containers remain within their
+`startupProbe` budget (or `readinessProbe` budget when no startup probe exists),
+measured from each container's actual start time. Time spent Pending does not
+consume this budget. Current crashes, image-pull failures, container restarts and
+expired probe budgets are not covered by this grace period. Running alone is not
+proof of readiness; the provider's readiness checks must still pass.
+
+## View pods and stream logs
+
+For newly rendered deployments, all providers forward explicit maximum model
+length, maximum sequence count, GPU memory utilization, block size and maximum
+batched tokens to vLLM. P/D applies Prefill and Decode settings independently.
+Role settings override Guide defaults; model-level maximum length is a fallback
+when the role does not specify one. Targeted custom arguments take precedence.
+Omitted settings retain upstream defaults. These changes do not rewrite existing
+Pods or exact published manifests: create a new deployment to apply changed settings.
+Check the model-server command and logs when diagnosing KV-cache capacity errors.
+
+Lens checks `/dev/shm` in rendered model-server Pods across all deployment
+providers. Ordinary rendering adds a per-Pod, memory-backed `emptyDir` with a
+**4 GiB** limit when the mount is missing and host IPC is not enabled.
+`baseline-vllm` also defaults to 4 GiB. This avoids the container runtime's
+default 64 MiB shared-memory limit without enabling host IPC or changing
+the upstream Guide checkout.
+
+Existing mounts and their limits are preserved, including mounts with no explicit
+limit and alternative volume sources. Missing limits, alternative sources,
+read-only/subpath mounts and existing host IPC produce warnings in service logs
+and deployment diagnostics (`snapshot.shared_memory`). An omitted `sizeLimit`
+on a memory-backed volume does not mean a 64 MiB limit or unlimited usable memory.
+Duplicate `/dev/shm` mounts and invalid volume bindings are rejected.
+
+Exact published manifests (`officialGuide`) are checked but never receive an
+automatic shared-memory mount; missing mounts produce warnings instead.
+The report is also retained in the deployment artifact's
+`rendered_payload.value.deployment_contract.sharedMemory`.
+Volumes consume memory as used, not their full limit up front; account for
+shared memory when sizing Pod memory. Existing deployments retain their original
+manifests; recreate them to receive the new default or missing-mount completion.
+
+1. To see pod status inline, click the row toggle with tooltip **Show pods**.
+2. In the expanded row, review the pod table columns **Pod**, **Status**, **Restarts**, **Node**, and **Pod IP**.
+3. For the full log viewer, open the actions menu and select **View pods & logs**.
+4. Use the node filter or search fields to find the pod.
+5. Click a pod card to open **Pod Logs:** for that pod.
+6. If a pod has multiple containers, choose the needed **Container: ...** entry.
+7. Select **100 lines**, **200 lines**, **500 lines**, or **1000 lines** to change the log tail length.
+8. Turn **Previous** on if you need the previous container log.
+9. Leave **Auto-refresh (5s)** enabled to keep the pod list and logs live.
+10. Use **Filter log lines...** to narrow the log output, or click **Copy** to copy the current log text.
+
+## Graceful shutdown defaults
+
+Lens creates model-server Pods with a **120-second** termination grace period and a **5-second preStop delay**. vLLM containers also receive `--shutdown-timeout=90` when their invocation is a single recognizable `vllm serve` or `python -m vllm.entrypoints...` command (including `sh -c` scripts); compound shell scripts, unrecognized entrypoints and non-literal existing values are left unchanged with a deployment warning. During scale-down, rolling updates or node drains, Kubernetes removes the Pod from routing first; vLLM can then finish in-flight requests for up to 90 seconds before termination. Deployments created before these defaults were introduced must be restarted or recreated to receive them. SGLang does not support the vLLM flag, so only endpoint removal and the grace period apply. For P/D deployments, scale down decode before prefill. When a model container has a `--kv-transfer-config`, Lens sets `kv_load_failure_policy=recompute` in that JSON so Decode can recompute a failed Prefill KV transfer.
+
+## Create a local port-forward for a ready deployment
+
+1. Find a deployment that is already **Ready**.
+2. In that row, open the actions menu and select **Create local port-forward**.
+3. Wait for the success notice **Local endpoint connected**.
+4. Copy the updated local endpoint from the table if you want to call the service from your workstation.
+
+## Scale a deployment
+
+1. In the deployment row, open the actions menu and select **Scale deployment**.
+2. For a P/D deployment, set **Prefill replicas** and **Decode replicas**. For an aggregated deployment, set **Replicas**.
+3. Click **Scale deployment**.
+
+Manual scaling changes live Kubernetes model-server replicas only. Restarting the deployment restores its configured replica count. DisaggregatedSet deployments are created with the declared `spec.slices`; manual scaling changes role replicas and never changes `spec.slices`. For a P/D deployment, scale down Decode before Prefill; Prefill scale-down can interrupt in-flight KV transfers, but Lens configures `kv_load_failure_policy=recompute` whenever a `--kv-transfer-config` is present.
+
+## Run a benchmark against a ready deployment
+
+1. In a ready deployment's row, open the actions menu and select **Run benchmark**.
+   The action requires the `evaluate:run:create` permission.
+2. Choose a workload: **Short chat** (1,024 input / 256 output tokens at concurrency
+   1, 8 and 32), **Long input, short output** (8,192 / 256 at 1, 8 and 16) or
+   **High concurrency** (1,024 / 256 at 32, 64 and 128).
+3. Optionally enter P95 TTFT and TPOT targets, then click **Start benchmark**.
+
+The benchmark runs an in-cluster harness against this deployment through
+`POST /api/v1/evaluate/runs` with its `deployment_execution_id`. You do not choose
+Standalone or Gateway routing: the server targets the deployment's own router or, for
+a deployment served through the shared Gateway, the Gateway. The deployment is not
+changed. Lens opens the benchmark result page after the run is queued.
+
+## Open deployment monitoring and profiling
+
+1. In the deployment row, open the actions menu and select **Monitoring**.
+2. If monitoring has not been installed yet, click **Install**.
+3. If monitoring is present but paused, click **Enable**.
+
+   **Install** and **Enable** stay unavailable until the deployment itself is
+   ready -- monitoring scrapes the deployment's Pods, so there is nothing to
+   collect before then. The menu says so while you wait.
+4. When monitoring is enabled, use **Open Grafana** or **Open Prometheus** to open the dashboards in a new tab.
+5. Click **Profiling** to jump to the profiling view for that deployment.
+6. Use **Disable** to stop monitoring without uninstalling it.
+7. Use **Uninstall** to remove deployment monitoring from that service.
+
+## Edit the deployment name and description
+
+1. In the deployment row, open the actions menu and select **Edit name and description**.
+2. In **Edit deployment**, update **Display name** and **Description**.
+3. Click **Save changes**.
+4. If you decide not to keep the edit, click **Cancel**.
+To change the model, image, resources or cluster, [create a new deployment](/user-guide/model-market); this dialog only edits its name and description.
+
+## Model inference access
+
+Deployment sharing is no longer supported. Admin and maintainers manage
+deployments within their cluster scope. Consumers do not get deployment pages
+or direct deployment access; publish a model service and use its
+[Manage access drawer](/user-guide/model-services#manage-model-access) to grant
+inference to users or groups. Old deployment shares are not automatically
+converted into model grants.
+
+## Delete a deployment
+
+1. In the deployment row, open the actions menu and select **Delete deployment**.
+2. In **Delete deployment**, review **Execution ID**, **Cluster**, and **Namespace**.
+3. Leave **Also delete the Kubernetes namespace** checked if you want Lens to remove the namespace and everything inside it, or clear it to remove only the deployment record.
+4. In **Type `<phrase>` to confirm**, enter the exact confirmation phrase shown in the dialog.
+5. Click **Delete deployment**.
+6. If you do not want to continue, click **Cancel**.
+
+## Cannot find a deployment or action?
+
+Clear the search, status and cluster filters first. If the deployment or action
+is still unavailable, ask an administrator to check your role's deployment
+permissions and cluster scope.
+
+To let applications call a ready deployment, [publish a model service](/tutorials/publish-a-model-service).
 
 ## Configure and review Manual or Agentic plans
 
@@ -327,6 +494,98 @@ A deployment is ready only when Deploy succeeds and every
 component reports ready; planning status alone is not readiness. Workload
 performance still requires measurement.
 
+## DisaggregatedSet review
+
+When a selected Guide supports DisaggregatedSet, configuration exposes the real API
+fields: `spec.slices`, `spec.placementPolicy.type`/`.topology`, and **EPP Topology Affinity**
+(`topology-affinity-scorer` or `topology-affinity-filter`).
+Prefill and decode replicas are per Slice. The resource summary expands all Slices
+and leader/worker Pods; TP is not treated as an accelerator resource count.
+
+In both Deploy and Evaluation, P/D configuration always shows **Slice Configuration**
+below the topology settings. Controls remain disabled until
+the source is recognized as DS. Loading, preparation errors and a Guide without DS
+are shown explicitly; **Recheck Slice support** repeats the official-source check, and
+the header shows the pinned Guide commit.
+Choosing P/D alone does not convert a Deployment-based Guide into a DisaggregatedSet.
+
+Slice count and placement start from the Guide defaults; EPP Topology Affinity defaults to Scorer:
+
+- **Max feasible** is estimated from current free resources for the selected
+  placement policy: packing for `None`, domains that each fit one Slice for
+  `ExclusiveSlice`, and such domains not used by another DisaggregatedSet for
+  `ExclusiveTopology`. Before **Generate YAML** the estimate uses the Guide default roles;
+  afterwards it uses the generated roles. It is not a reservation.
+- **Recommended** appears only with matching evidence: succeeded Evaluation
+  cases for the same model, Guide, cluster, accelerator and per-Slice P/D replicas and TP
+  that recorded an SLO-stable rate. Enter a **Target load** to get the fewest Slices whose
+  measured rate meets it within the current ceiling. When runs used different workloads or SLO
+  targets, choose one under **Evidence**; runs are never mixed across them.
+  Otherwise the panel shows
+  `No verified recommendation — Guide default: N`. Throughput alone never selects a count.
+- **Selected** multiply per-Slice requests by the selected Slice count, and the
+  accelerator total checked before generation includes all Slices.
+- **Placement** selects the placement type, picks the topology key from
+  discovered node labels (or another key), and shows each domain's nodes, free
+  accelerators and whether it fits a Slice. When the Guide requests accelerators
+  through DRA claims, which the estimate does not count, domains show free CPU and
+  memory instead and a note marks the ceilings as CPU, memory and Pod based only.
+  Custom labels are marked because Lens cannot
+  verify that they reflect physical topology; node labels are changed by orchestration
+  administrators, not from this page. A discovered placement is offered as
+  **Suggested**.
+- **EPP Topology Affinity** offers **Scorer** and **Filter** only. Scorer adds a
+  same-Slice score; Filter keeps same-Slice candidates when available. Missing peer
+  topology or no matching candidate leaves all candidates eligible, so Filter is not
+  a strict same-Slice guarantee. Unset or legacy inherited settings become Scorer
+  when generating a configuration; an existing Filter selection is preserved.
+- **Evaluation evidence** lists recent measured runs, marks those with the same per-Slice
+  shape, and **Apply** copies a run's Slices, placement and P/D values.
+
+Deploying a DS configuration runs preflight checks in the existing deployment flow,
+without an additional review dialog. Passed checks proceed directly to deployment;
+failures and unknown constraints appear inline under **Deployment checks**.
+In Manual and Agentic plan review, **Confirm deployment** submits the plan when preflight finds a placement and no errors. Conditions outside the placement model remain advisory. Incomplete inventory or an inconclusive search still prompts **Accept risks and deploy**.
+Its **Slice deployment preview**
+shows selected versus feasible Slices, the roles per Slice, total accelerator requests,
+placement, EPP routing and the modeled Slice-to-domain and Pod-to-node placement (the real
+scheduler may choose other nodes). Check workload YAML, Router
+values and checksums under **Deployment resources** when inspecting the preflight evidence. Failed constraints block
+execution, including a Slice count with no feasible placement. An inconclusive result requires explicit acknowledgment. A feasible placement does not reserve resources or guarantee admission.
+Changing cluster or deployment inputs requires another review. The final plan freezes
+rendered inputs and Chart bytes; it does not install missing DS/LWS controllers or CRDs.
+Official Guide snapshots require vendored Kustomize dependencies.
+
+Local sources freeze referenced resources, patches, generator inputs and Router
+values with a content checksum, not a claim that dirty files match Git HEAD.
+Remote custom Kustomize sources render from an exact commit snapshot; external
+dependencies and escaping paths must be vendored before planning.
+For a stopped or failed independently deployed DS, the **restart-plan API** prepares
+a new digest without deleting old resources. Confirm the new plan to start a new
+run. Evaluation-owned deployments use the Evaluation workflow's retry action.
+
+Evaluation automatically records a bounded inference probe before benchmarking a reviewed
+DS deployment. In Evaluation details, open **Deployments** to inspect **Runtime verification**:
+Kubernetes readiness, Slice placement, P/D routing and KV transfer have independent verdicts
+and reasons. **Recorded evidence** exposes the captured Pod/Node and request evidence.
+The deployment verification API also supports an explicit smoke request and read-only metric
+snapshots. A metric snapshot is not a live rate. Slice count changes require a new reviewed configuration.
+For instrumented vLLM 0.26.0 NIXL pull workers, it correlates the response ID with
+receive completion and producer acknowledgements across all TP ranks, verifies
+Pod/engine stability and P/D revision identity, and excludes transfer-failure fallback.
+The report records actual P/D Pods, same-Slice/domain results and transferred block
+counts. Reports persist as checksummed deployment evidence and remain visible after
+reopening details. Unsupported versions/connectors or incomplete evidence remain unknown.
+Ready Pods, HTTP success, same-Slice labels and aggregate KV counters are not proof of
+request-specific transfer. Routing/KV results remain unknown without correlated evidence.
+These checks do not certify physical network bandwidth or safe online rollout.
+
+P/D deployments using Router 0.11 automatically adapt legacy plugin settings when
+created or retried. The original configuration is retained, and deployment
+diagnostics record the effective Router values. A legacy `disagg-headers-handler`
+entry is replaced by the profile handler's built-in header handling; the saved
+prefill/decode decision is preserved. A conflicting old and new decider setting
+must be corrected before deployment.
 
 ## Hardware profiles and guide variants
 
@@ -358,291 +617,12 @@ When specifying an operator preference for deployment planning, use English, suc
 The deterministic planner matches English preference keywords; Chinese keyword aliases
 are no longer supported.
 
-## Open the deployment creation flow
-
-Manual proceeds directly to **Deployment plan**; Agentic first offers an objective,
-with all numeric parameters optional.
-No request lengths, prefix reuse or workload shape are invented. These are benefit
-hints, not compatibility gates. Agentic
-can interpret explicitly stated qualitative workload traits from a goal when an
-AI provider is selected; the interpretation is displayed and editable. Without AI,
-use structured inputs. Numeric resource and performance limits are never inferred.
-
-Manual ranks supported combinations by SLA status, then the P/D decision, then the greatest
-source-verified capability coverage, not the first Guide that renders; on equal coverage a P/D combination wins.
-Manual limits `--max-num-seqs` only when you declare request sizes; otherwise vLLM
-admits requests by free KV cache. It does not maximize resource use
-or claim a measured performance optimum. Unsupported combinations remain explicit.
-**Ready for your confirmation** is a compact conclusion; failed checks block deployment and
-provide **Retry checks**. Deployment confirmation rechecks current capacity.
-
-Prefix-affinity routing, P/D separation and CPU KV offload can be combined independently.
-Routing composition retains the P/D profiles and uses affinity plugins from the same
-pinned source revision; incompatible plugins or images are reported explicitly.
-Basic attention KV caching is distinct from cross-request prefix caching and CPU
-offload. Missing explicit vLLM flags can be configured with a mandatory startup
-capability probe in the selected image; this is not a claim of verified runtime support.
-
-Deployment creation requires models registered in [Model Cache](/user-guide/model-cache).
-Select a registered cache volume containing the ready model and its revision on the
-same cluster. The Advanced configuration editor has only the **Model Cache** source.
-For local-disk storage, synchronize new nodes before deployment. Ordinary provider
-rendering configures offline serving with a read-only cache mount. Download
-or repair the cache in Model Cache first, then create or retry the deployment.
-
-Cache checks follow the active serving roles: P/D checks Prefill and Decode
-independently; other providers use Decode. Each role defaults to revision `main`.
-An explicit tokenizer must also be ready in the same cache volume; its revision
-defaults to the role's model revision unless `tokenizer-revision` is supplied.
-Conflicting dependency arguments are rejected. The rendered model and tokenizer
-arguments must match the checked dependencies before deployment proceeds.
-
-Ordinary optimized-baseline rendering does not apply custom `revision`, `tokenizer`,
-or `tokenizer-revision` arguments, so those inputs are rejected. Configuration-source
-overrides and custom `model`, `model-path`, `code-revision`, `hf-config-path`,
-`config`, and `download-dir` arguments are not supported by cache preflight.
-
-### Model Cache enforcement limitations
-
-Exact published YAML configurations (`officialGuide`) bypass ordinary provider
-rendering. Their final manifests do not yet enforce the same offline flags,
-read-only cache mounts, or backing-volume binding. Cache-only deployment is
-therefore not guaranteed for this path. Offline environment variables are also
-not a network isolation boundary.
-
-1. In the left navigation, open **Deployments**.
-2. In the page header, click **Create**.
-3. Follow [Create a deployment](/user-guide/model-market). The new deployment appears in this list after submission.
-
-Choose **Pod placement** on the setup card before building a plan: prefer one node
-(default), require one node (optionally a specific node), distribute evenly or
-require separate nodes. The choice applies to Deployment, LeaderWorkerSet and
-DisaggregatedSet model servers. Existing deployment APIs and the separate
-Configuration editor retain their placement controls. TP devices are requested by
-each model-server Pod; planned placement is not shown as actual cluster placement
-before deployment.
-
-For P/D, the Prefill, Decode and KV transfer settings include **P/D slices and
-placement**: slice count, per-slice Prefill/Decode replicas and TP, the slice
-placement policy (`None`, `ExclusiveSlice`, `ExclusiveTopology`) and its node-label
-topology key. Lens recommends values from current free devices per topology domain,
-narrowest domain first (node, then rack-like labels, zone, region). It splits role
-replicas into the fewest equal slices that each fit one domain, so KV transfer stays
-local. Latency and reliability objectives use `ExclusiveTopology` when enough
-unshared domains exist. If no domain fits a whole slice, placement stays `None`.
-Automatic hard placement also constrains role Pods to the domains that can fit a
-whole slice, preventing the first Pod from locking the slice onto a smaller node.
-This does not reserve devices; regenerate the plan if available capacity changes.
-Reviewed values are pinned in the plan and remain editable; non-`None` policies are
-hard scheduling rules and Pods stay Pending if no domain can hold a slice. The
-recommendation respects Pod placement: distribute evenly or separate nodes exclude
-node-scoped slices, and require one node keeps one slice. The slice panel disables
-conflicting topology keys, and an explicit conflict is reported when you apply changes.
-
 ## RuntimeClass Policy
 
 RuntimeClass discovery and policy overrides are available through the backend API
 only. Manual and Agentic forms do not provide a RuntimeClass input. See the
 [deployment API reference](../api-reference/modules/deployments.mdx) for discovery,
 policy modes and request examples.
-
-## Find a deployment in the list
-
-1. Review the summary cards at the top of the page: **Total**, **Ready**, **In progress**, **Failed**, and **Cleaned**.
-2. In the list toolbar, type in **Search deployments** to match a deployment by name, description, model, namespace, guide, or ID.
-3. Open **Status** to filter by deployment state.
-4. Open the cluster selector and choose **All clusters** or one cluster.
-5. If needed, change **Rows per page** and use the pager to move through the list.
-6. If no rows match, click **Clear filters**.
-
-The **Cluster** and **Namespace** columns each include a copy button.
-
-## View deployment details
-
-1. In the deployment row, open the actions menu and select **View details**.
-2. In the drawer, review the sections **Basic Information**, **Model & Serving Engine**, **Cluster & Environment**, **Network & Endpoints**, and **Audit & Timeline**.
-3. Use the copy buttons beside values such as **Namespace**, **Cluster Session ID**, **Container Image**, **Internal Endpoint**, **Forwarded Endpoint**, or **Execution ID** when you need to reuse them elsewhere.
-4. If the deployment failed, read the failure banner before making changes.
-
-Wait for **Ready** before calling the deployment. For **In progress**, check the pod logs for startup progress. For **Failed**, read the failure banner and the affected pod's logs.
-
-Missing runtime details are read from the stored rendered vLLM manifest. For P/D
-deployments, flat runtime fields are labeled **(Decode)**. Unspecified values remain
-unknown rather than being filled with assumed defaults.
-
-Normal Pending or Running-but-not-ready Pods keep a starting deployment **In progress**.
-Explicit Pod failures, including image pull failures and OOM, still show **Failed**.
-For deployments already marked Ready, the status dot also reflects live model-server Pods. A yellow dot means fewer ready model-server Pods than requested, so serving capacity is reduced. A red dot means no ready model-server Pods remain, so the service is unavailable. These conditions are also reported under **Needs attention**.
-
-**Failed** is not final. A rollout that ran past its progress deadline is recorded
-as failed, but the workload often recovers on its own -- a pod that kept crashing
-until its model cache was complete, for example. Lens keeps re-checking failed
-deployments against the cluster and flips them back to **Ready** once their pods
-serve again, so leave the deployment in place rather than recreating it
-immediately. If the namespace is gone, the deployment is corrected to **Cleaned**
-instead.
-
-Pending Pods waiting for accelerator resources, including DRA scheduler reports
-such as `cannot allocate all claims`, keep the deployment **In progress** even
-after the rollout progress deadline. Refreshing a deployment previously marked
-**Failed** returns it to **In progress** when current diagnostics confirm this
-resource wait. The scheduler reason remains available in diagnostics. This does
-not release devices held by other deployments; stop or remove an unused deployment
-to free them. Container crashes and image-pull failures still count as failures;
-Pending alone is not enough to classify a deployment as waiting for resources.
-
-After scheduling, a Running Pod can still be loading the model and not yet Ready.
-If rollout reports an exceeded progress deadline, Lens preserves **In progress**
-without automatic cleanup while current containers remain within their
-`startupProbe` budget (or `readinessProbe` budget when no startup probe exists),
-measured from each container's actual start time. Time spent Pending does not
-consume this budget. Current crashes, image-pull failures, container restarts and
-expired probe budgets are not covered by this grace period. Running alone is not
-proof of readiness; the provider's readiness checks must still pass.
-
-## View pods and stream logs
-
-For newly rendered deployments, all providers forward explicit maximum model
-length, maximum sequence count, GPU memory utilization, block size and maximum
-batched tokens to vLLM. P/D applies Prefill and Decode settings independently.
-Role settings override Guide defaults; model-level maximum length is a fallback
-when the role does not specify one. Targeted custom arguments take precedence.
-Omitted settings retain upstream defaults. These changes do not rewrite existing
-Pods or exact published manifests: create a new deployment to apply changed settings.
-Check the model-server command and logs when diagnosing KV-cache capacity errors.
-
-Lens checks `/dev/shm` in rendered model-server Pods across all deployment
-providers. Ordinary rendering adds a per-Pod, memory-backed `emptyDir` with a
-**4 GiB** limit when the mount is missing and host IPC is not enabled.
-`baseline-vllm` also defaults to 4 GiB. This avoids the container runtime's
-default 64 MiB shared-memory limit without enabling host IPC or changing
-the upstream Guide checkout.
-
-Existing mounts and their limits are preserved, including mounts with no explicit
-limit and alternative volume sources. Missing limits, alternative sources,
-read-only/subpath mounts and existing host IPC produce warnings in service logs
-and deployment diagnostics (`snapshot.shared_memory`). An omitted `sizeLimit`
-on a memory-backed volume does not mean a 64 MiB limit or unlimited usable memory.
-Duplicate `/dev/shm` mounts and invalid volume bindings are rejected.
-
-Exact published manifests (`officialGuide`) are checked but never receive an
-automatic shared-memory mount; missing mounts produce warnings instead.
-The report is also retained in the deployment artifact's
-`rendered_payload.value.deployment_contract.sharedMemory`.
-Volumes consume memory as used, not their full limit up front; account for
-shared memory when sizing Pod memory. Existing deployments retain their original
-manifests; recreate them to receive the new default or missing-mount completion.
-
-1. To see pod status inline, click the row toggle with tooltip **Show pods**.
-2. In the expanded row, review the pod table columns **Pod**, **Status**, **Restarts**, **Node**, and **Pod IP**.
-3. For the full log viewer, open the actions menu and select **View pods & logs**.
-4. Use the node filter or search fields to find the pod.
-5. Click a pod card to open **Pod Logs:** for that pod.
-6. If a pod has multiple containers, choose the needed **Container: ...** entry.
-7. Select **100 lines**, **200 lines**, **500 lines**, or **1000 lines** to change the log tail length.
-8. Turn **Previous** on if you need the previous container log.
-9. Leave **Auto-refresh (5s)** enabled to keep the pod list and logs live.
-10. Use **Filter log lines...** to narrow the log output, or click **Copy** to copy the current log text.
-
-## Graceful shutdown defaults
-
-Lens creates model-server Pods with a **120-second** termination grace period and a **5-second preStop delay**. vLLM containers also receive `--shutdown-timeout=90` when their invocation is a single recognizable `vllm serve` or `python -m vllm.entrypoints...` command (including `sh -c` scripts); compound shell scripts, unrecognized entrypoints and non-literal existing values are left unchanged with a deployment warning. During scale-down, rolling updates or node drains, Kubernetes removes the Pod from routing first; vLLM can then finish in-flight requests for up to 90 seconds before termination. Deployments created before these defaults were introduced must be restarted or recreated to receive them. SGLang does not support the vLLM flag, so only endpoint removal and the grace period apply. For P/D deployments, scale down decode before prefill. When a model container has a `--kv-transfer-config`, Lens sets `kv_load_failure_policy=recompute` in that JSON so Decode can recompute a failed Prefill KV transfer.
-
-## Create a local port-forward for a ready deployment
-
-1. Find a deployment that is already **Ready**.
-2. In that row, open the actions menu and select **Create local port-forward**.
-3. Wait for the success notice **Local endpoint connected**.
-4. Copy the updated local endpoint from the table if you want to call the service from your workstation.
-
-## Scale a deployment
-
-1. In the deployment row, open the actions menu and select **Scale deployment**.
-2. For a P/D deployment, set **Prefill replicas** and **Decode replicas**. For an aggregated deployment, set **Replicas**.
-3. Click **Scale deployment**.
-
-Manual scaling changes live Kubernetes model-server replicas only. Restarting the deployment restores its configured replica count. DisaggregatedSet deployments are created with the declared `spec.slices`; manual scaling changes role replicas and never changes `spec.slices`. For a P/D deployment, scale down Decode before Prefill; Prefill scale-down can interrupt in-flight KV transfers, but Lens configures `kv_load_failure_policy=recompute` whenever a `--kv-transfer-config` is present.
-
-## Run a benchmark against a ready deployment
-
-1. In a ready deployment's row, open the actions menu and select **Run benchmark**.
-   The action requires the `evaluate:run:create` permission.
-2. Choose a workload: **Short chat** (1,024 input / 256 output tokens at concurrency
-   1, 8 and 32), **Long input, short output** (8,192 / 256 at 1, 8 and 16) or
-   **High concurrency** (1,024 / 256 at 32, 64 and 128).
-3. Optionally enter P95 TTFT and TPOT targets, then click **Start benchmark**.
-
-The benchmark runs an in-cluster harness against this deployment through
-`POST /api/v1/evaluate/runs` with its `deployment_execution_id`. You do not choose
-Standalone or Gateway routing: the server targets the deployment's own router or, for
-a deployment served through the shared Gateway, the Gateway. The deployment is not
-changed. Lens opens the benchmark result page after the run is queued.
-
-## Open deployment monitoring and profiling
-
-1. In the deployment row, open the actions menu and select **Monitoring**.
-2. If monitoring has not been installed yet, click **Install**.
-3. If monitoring is present but paused, click **Enable**.
-
-   **Install** and **Enable** stay unavailable until the deployment itself is
-   ready -- monitoring scrapes the deployment's Pods, so there is nothing to
-   collect before then. The menu says so while you wait.
-4. When monitoring is enabled, use **Open Grafana** or **Open Prometheus** to open the dashboards in a new tab.
-5. Click **Profiling** to jump to the profiling view for that deployment.
-6. Use **Disable** to stop monitoring without uninstalling it.
-7. Use **Uninstall** to remove deployment monitoring from that service.
-
-## Edit the deployment name and description
-
-1. In the deployment row, open the actions menu and select **Edit name and description**.
-2. In **Edit deployment**, update **Display name** and **Description**.
-3. Click **Save changes**.
-4. If you decide not to keep the edit, click **Cancel**.
-To change the model, image, resources or cluster, [create a new deployment](/user-guide/model-market); this dialog only edits its name and description.
-
-## Model inference access
-
-Deployment sharing is no longer supported. Admin and maintainers manage
-deployments within their cluster scope. Consumers do not get deployment pages
-or direct deployment access; publish a model service and use its
-[Manage access drawer](/user-guide/model-services#manage-model-access) to grant
-inference to users or groups. Old deployment shares are not automatically
-converted into model grants.
-
-## Delete a deployment
-
-1. In the deployment row, open the actions menu and select **Delete deployment**.
-2. In **Delete deployment**, review **Execution ID**, **Cluster**, and **Namespace**.
-3. Leave **Also delete the Kubernetes namespace** checked if you want Lens to remove the namespace and everything inside it, or clear it to remove only the deployment record.
-4. In **Type `<phrase>` to confirm**, enter the exact confirmation phrase shown in the dialog.
-5. Click **Delete deployment**.
-6. If you do not want to continue, click **Cancel**.
-
-## Cannot find a deployment or action?
-
-Clear the search, status and cluster filters first. If the deployment or action
-is still unavailable, ask an administrator to check your role's deployment
-permissions and cluster scope.
-
-To let applications call a ready deployment, [publish a model service](/tutorials/publish-a-model-service).
-
-## Related references
-
-In the deployment creation flow, expand **Why this option** under a validated alternative to see its AISimulate TTFT, TPOT, and throughput estimate when an exact-topology estimate is available. The estimate can appear even when the AISimulate candidate search finds no configuration satisfying the original SLO; in that case, the alternative still shows **SLO not met**. Alternatives without a matching estimate show that no exact AISimulate prediction is available.
-
-The **AI score** shown beside an agentic candidate is a relative ranking score out of 100; the highest-scoring candidate is normalized to 100. It is not a benchmark result, confidence level, or probability of meeting the SLO. A deterministic fallback shows **Deterministic score** instead.
-
-**Recalculate selection** works without an AI provider. It refreshes the recommendation
-using deterministic planning and the new preference; if AI scoring fails, the
-alternatives also retain deterministic scores.
-
-Agentic alternatives are checked using the selected vLLM GPU memory utilization
-and max model length. The same values are applied when the deployment starts;
-actual free KV cache is measured by vLLM at startup and may still be lower than
-the planning estimate.
-
-If you use the agentic planner from the deployment creation flow, see the [Architecture overview](/architecture) for how workload-guided planning works.
-
 
 ## Verify profile-driven Guide configuration
 
@@ -735,3 +715,20 @@ Deleting a deployment on a Non-Admin (`edit`) cluster uses a two-phase flow:
 
 1. Lens first deletes all in-namespace workload and configuration resources inside `<deployment-ns>`.
 2. If deleting the `Namespace` or its per-namespace `ClusterRoleBinding` returns `403 Forbidden`, Lens presents the **Orchestration administrator namespace cleanup** handoff. Download or copy the generated cleanup script for an orchestration administrator to run, then click **Re-check & Delete** to confirm removal and delete the Lens deployment record. (If marker verification is unavailable, **Confirm & Delete Record** removes the Lens record after manual cleanup.)
+
+## Related references
+
+In the deployment creation flow, expand **Why this option** under a validated alternative to see its AISimulate TTFT, TPOT, and throughput estimate when an exact-topology estimate is available. The estimate can appear even when the AISimulate candidate search finds no configuration satisfying the original SLO; in that case, the alternative still shows **SLO not met**. Alternatives without a matching estimate show that no exact AISimulate prediction is available.
+
+The **AI score** shown beside an agentic candidate is a relative ranking score out of 100; the highest-scoring candidate is normalized to 100. It is not a benchmark result, confidence level, or probability of meeting the SLO. A deterministic fallback shows **Deterministic score** instead.
+
+**Recalculate selection** works without an AI provider. It refreshes the recommendation
+using deterministic planning and the new preference; if AI scoring fails, the
+alternatives also retain deterministic scores.
+
+Agentic alternatives are checked using the selected vLLM GPU memory utilization
+and max model length. The same values are applied when the deployment starts;
+actual free KV cache is measured by vLLM at startup and may still be lower than
+the planning estimate.
+
+If you use the agentic planner from the deployment creation flow, see the [Architecture overview](/architecture) for how workload-guided planning works.

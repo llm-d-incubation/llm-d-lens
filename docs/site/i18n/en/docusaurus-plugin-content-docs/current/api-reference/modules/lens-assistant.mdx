@@ -10,6 +10,11 @@ import TabItem from '@theme/TabItem';
 
 Lens Assistant uses `llm_d_lens.assistant_tools.router` in the unified Python service. Its FastAPI router exposes the stateless Streamable HTTP endpoint at `/api/assistant/mcp` using the official MCP Python SDK.
 
+:::info `/api/assistant/mcp` vs `/api/mcp`
+- **`/api/assistant/mcp`** (documented on this page) is the **internal Assistant Tool Catalog**, generated from the FastAPI OpenAPI schema plus special handlers in `definitions.json` and consumed by the built-in Lens Assistant and Agentic planner (configured via `PRISM_MCP_URL` / `PRISM_MCP_CA_FILE`).
+- **`/api/mcp`** is the **external Agent Task MCP** server exposing 46 task-oriented tools across `LENS_MCP_PROFILES` (`core`, `serving`, `storage`, `simulation`, `lens-settings`, `cluster-admin`) for external coding and operations agents (`opencode`, Claude Code, Cursor, Codex). See [MCP integration](/mcp) to connect external agents.
+:::
+
 Candidate tools advertise and forward either `workload.concurrency` or
 `workload.request_rate` (positive, mutually exclusive load targets). The compatibility
 API defaults omitted input/output token lengths to 4000/1000, matching Agentic
@@ -188,7 +193,7 @@ Representative generated MCP tools forward straight into existing Python-backed 
 | `list_deployment_executions` | `GET /api/v1/deployments/executions` | [Deployments](/api-reference/modules/deployments) via `llm_d_lens/deploy/router.py` |
 | `create_evaluate_run` | `POST /api/v1/evaluate/runs` | [Evaluation](/api-reference/modules/evaluation) via `llm_d_lens/evaluation/router.py` |
 | `get_cluster_stack_status` | `GET /api/v1/monitoring/cluster-stack/status` | [Observability](/api-reference/modules/observability) via `llm_d_lens/monitoring/cluster_stack/router.py` |
-| `list_simulation_tasks` | `GET /api/simulation/tasks` | [Simulation](/api-reference/modules/simulation) via `llm_d_lens/simulation/router.py` |
+| `list_simulation_tasks` | `GET /api/simulation/tasks` | [Trace Replayer](/api-reference/modules/simulation) via `llm_d_lens/simulation/router.py` |
 
 If you need Python rather than MCP transport, call the underlying Python domains directly instead of `/api/assistant/mcp`. For example, the MCP tool `create_standard_vllm_deployment_run` ultimately reaches the same deployment helper used by `POST /api/v1/deployments/standard-vllm-runs`:
 

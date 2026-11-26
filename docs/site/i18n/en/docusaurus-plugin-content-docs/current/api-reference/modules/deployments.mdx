@@ -1211,7 +1211,7 @@ List the distinct key/value labels on nodes of a cluster the caller can access. 
   </TabItem>
   <TabItem value="python-api" label="Python API">
     ```python
-    from llm_d_bench.deploy.router import list_deployment_node_labels
+    from llm_d_lens.deploy.router import list_deployment_node_labels
 
     labels = await list_deployment_node_labels(cluster_id="cluster-a", request=authenticated_request)
     ```
@@ -1231,11 +1231,11 @@ Conflicting old/new deciders and custom legacy header parameters are rejected.
 Other Router versions and custom image repositories retain their own settings.
 
 The same pure Python transformation is shared by configuration validation and
-`llm_d_bench.deploy.providers.deployment_bundle.install_deployment_bundle`:
+`llm_d_lens.deploy.providers.deployment_bundle.install_deployment_bundle`:
 
 ```python
 import yaml
-from llm_d_bench.configuration.router_compatibility import compatible_router_values
+from llm_d_lens.configuration.router_compatibility import compatible_router_values
 
 values = yaml.safe_load(saved_router_values_yaml)
 effective_values = compatible_router_values(values, chart_version="v0.11.0")
@@ -2636,7 +2636,7 @@ disabled, subject to authentication/permission checks.
 Authenticated SSH operations require `target.host`, `username`,
 `hostFingerprint` and a nonempty `cards` array of numeric ID strings.
 `port` defaults to 22; `authMethod` defaults to `agent` and also accepts `key`
-or `password`. Agent authentication requires the BFF's `SSH_AUTH_SOCK`.
+or `password`. Agent authentication requires the backend's `SSH_AUTH_SOCK`.
 Key authentication requires a server-side `keyPath` beneath `PRISM_SSH_KEY_DIR`
 (default `$HOME/.ssh`). Password authentication supplies
 `credentials.password` on each request; it is not stored or returned.
@@ -2651,7 +2651,7 @@ and permission errors use the gateway's Problem Details format.
 
 ### Python HTTP client for remote operations
 
-There is **no Python service-layer equivalent** for these Node endpoints.
+There is **no separate Python service-layer client wrapper** for these compatibility HTTP routes.
 The Python tabs below use this HTTP helper instead. The environment variables
 in this example are client inputs, not new Lens server configuration.
 Set them from an authenticated Lens session; never commit their values.
@@ -2702,7 +2702,7 @@ The Python examples demonstrate the complete request assembly.
 }
 ```
 
-Values come from the BFF environment. Repository uses `LLM_D_ROOT`, then
+Values come from the backend environment. Repository uses `LLM_D_ROOT`, then
 `LLM_D_REPOSITORY`, otherwise empty; there is no host-specific default checkout.
 Branch uses `LLM_D_BRANCH`. Proxy fields prefer `HTTP_PROXY`, `HTTPS_PROXY`,
 `NO_PROXY`, then their `LLM_D_` equivalents. Mount fields use

@@ -311,11 +311,11 @@ export function DeploymentDetailsModal({ deployment, clusterNameById = {}, onClo
                     </SectionCard>
                 )}
 
-                <DeploymentPlanSection key={deployment.execution_id} deployment={deployment} />
+                <DeploymentPlanSection key={`plan-${deployment.execution_id}`} deployment={deployment} />
 
                 {/* Section 6: Audit & Timeline */}
                 {!deployment.pending && deployment.execution_id && (
-                    <DeploymentVerificationPanel key={deployment.execution_id} executionId={deployment.execution_id}
+                    <DeploymentVerificationPanel key={`verification-${deployment.execution_id}`} executionId={deployment.execution_id}
                         status={deployment.status} canConnect={deployment.capabilities?.connect === true} />
                 )}
                 <SectionCard icon={Clock} title="Audit & Timeline">

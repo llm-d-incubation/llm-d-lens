@@ -1,9 +1,62 @@
 ---
 title: CLI 参考
-description: 用于运行、安装和管理 Lens 的命令行工具。
+description: 用于独立运维的 llmd 引擎 CLI，以及用于运行、安装和管理 Lens 的命令行脚本。
 ---
 
-## `llmd` 模型 PVC 选项
+Lens 提供两套定位不同的命令行工具：
+
+1. **[`llmd`（独立引擎 CLI）](#llmd-独立引擎-cli)**（来自 `apps/lens`）—— 无需 cluster-admin 权限的纯 Python CLI，可在单个 Kubernetes 或 OpenShift 命名空间内规划、拉起、扩缩、滚动更新、迁移与清理 llm-d 指南，无需 Lens 服务端、数据库或 Node.js。
+2. **[服务端与运维脚本](#服务端与运维脚本)** —— 仓库脚本与安装器脚本（`hack/lens-local.sh`、`lensctl.sh`、`LensInstaller-Ubuntu-x86_64-online.sh`、MCP 目录校验以及 `alembic`），用于运行和管理 Lens Web GUI 及 API 后端。
+
+---
+
+## `llmd` 独立引擎 CLI
+
+`llmd`（`apps/lens`，Python 包 `llm-d-lens-engine`）使用你自己的 `kubectl` 或 `oc` 凭据直接操作目标命名空间。它不需要 cluster-admin 权限，也不会创建命名空间、CRD、ClusterRole、PersistentVolume、SCC 或网络附件——`llmd plan` 会识别这些管理员前置条件，并支持通过 `--admin-yaml` 导出。
+
+:::info 入口命令说明
+`llmd`（`lens.cli:main`）才是本文档介绍的完整独立 CLI。`apps/lens` 中的 `lens` 入口（`lens.__main__:main`）目前仅为 `--version` / `--help` 占位符——请始终执行 `llmd`，不要执行 `lens`。
+:::
+
+### 安装与前置依赖
+
+- **Python**：Python 3.11+（运行时仅依赖 `PyYAML`；无需 Lens 后端、PostgreSQL 或 Node.js）。
+- **`PATH` 中的集群与渲染工具**：`kubectl`（或通过 `--kube-cli oc` / `LLMD_KUBE_CLI=oc` 使用 `oc`）、`helm`、`git` 与 `kustomize`（未安装独立 `kustomize` 时回退使用 `kubectl kustomize`）。
+
+从仓库根目录安装到虚拟环境：
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e ./apps/lens
+.venv/bin/llmd --version
+```
+
+### 全局与共享参数
+
+#### 全局参数
+
+全局参数置于子命令之前（例如 `llmd -o json status ...`）：
+
+| 参数 | 环境变量 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `--version` | — | — | 打印 `llmd <version>` 并退出。 |
+| `-o`, `--output {text,json,yaml}` | — | `text` | 输出格式（`text`、`json` 或 `yaml`）。进度行输出到 `stderr`，确保 `stdout` 上的 `-o json` / `-o yaml` 结构化输出保持纯净。 |
+| `--state-dir DIR` | `LLMD_STATE_DIR` | `$LENS_DATA_DIR/llmd`（`~/.local/share/lens/llmd`） | 本地状态目录，存放已注册的来源（`sources.yaml`）与滚动更新排空日志。 |
+
+#### 共享来源与集群参数
+
+面向来源或集群的子命令支持以下通用参数：
+
+| 参数 | 环境变量 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `--source NAME\|PATH\|URL#REF` | — | *（仅注册了 1 个来源时可省略）* | Stack 来源：已注册来源名称、本地检出目录，或带可选 `#REF` 的 Git URL（分支、标签、commit 或 PR ref 如 `#refs/pull/<N>/head`）。 |
+| `--refresh` | — | `false` | 重新拉取缓存的远端 Git 来源（`$LENS_CACHE_DIR/repos`）。 |
+| `-n`, `--namespace NS` | `LLMD_NAMESPACE` | 当前 kube context 的命名空间（`render` 回退到 `default`） | 目标 Kubernetes/OpenShift 命名空间。 |
+| `--kubeconfig FILE` | `KUBECONFIG` | kubectl 默认查找（`~/.kube/config`） | kubeconfig 文件路径。 |
+| `--context CONTEXT` | — | 当前 kube context | Kubernetes context 名称。 |
+| `--kube-cli {kubectl,oc}` | `LLMD_KUBE_CLI` | `kubectl` | 用于集群操作的 Kubernetes CLI 二进制文件。 |
+
+### 模型 PVC 选项
 
 对 `plan`、`standup` 和 `rollouts plan/start`，使用
 `--model-pvc-claim-name CLAIM --model-subpath PATH` 从已有 PVC 中加载模型目录。
@@ -23,7 +76,106 @@ Lens 不拥有或删除这个外部 PVC。
 Shell 脚本、包装程序和无法识别模型参数的命令需要自定义 overlay。
 `/model-cache` 上的挂载冲突会被拒绝，源文件中的 Secret 前置条件仍然适用。
 
-## `hack/lens-local.sh`（本地源码安装与服务管理）
+### 子命令一览（12 个顶层子命令）
+
+`llmd` 提供 **12 个顶层子命令**（其中 `status <instance>` 与 `list` 为两个独立的顶层子命令）：
+
+| 子命令 | 用途 | 关键参数与选项 |
+| --- | --- | --- |
+| `sources {add,list,remove}` | 在 `sources.yaml` 中注册、列出或移除 stack 来源。（`remove` 会保留本地检出目录。） | `add NAME LOCATION [--ref REF] [--stacks GLOB] [--exclude GLOB] [--companion TEMPLATE] [--pool-label LABEL]`；`remove NAME` |
+| `stacks [prefix]` | 列出某来源下的指南与 kustomize stack，查看某个指南的 `--var` 输入及支持矩阵，或解析 companion 模板。无需访问集群。 | `[prefix]`、`--var NAME=VALUE`、`--companions NAMESPACE`、`--source`、`--refresh` |
+| `render <stack>` | 打印指南、kustomize 目录或清单文件渲染后的 Kubernetes YAML/JSON。无需访问集群。 | `<stack>`、`-n/--namespace`、`--var NAME=VALUE`、`--set KEY=VALUE`、`--source`、`--refresh` |
+| `plan <stack>` | 渲染、应用命名空间策略、执行前置与 companion 检查及服务端 dry-run，不修改集群。输出可审阅的 `digest`。 | `<stack>`、`--offline`、`--name`、`--var`、`--set`、`--allow-privileged`、`--skip-admin-parts`、`--switch-stack`、`--manifest FILE`、`--admin-yaml FILE` |
+| `standup <stack>` | 通过服务端 apply 在目标命名空间拉起 stack（或更新已有的 `llmd` 托管实例）。 | `<stack>`、`--expected-digest DIGEST`、`--with-companions`、`--wait`、`--timeout SEC`（默认 `1800`），以及 `plan` 参数 |
+| `import <stack>` | 记录由 `kubectl`、`helm` 或 `other` 部署的现存运行中 stack，不添加标签也不修改对象。 | `<stack>`、`--manager {kubectl,helm,other}`、`--dry-run`，以及 `plan` 参数 |
+| `rollouts {plan,start,status,pause,resume,abort,finish}` | 将运行中的实例就地滚动更新到另一个来源 ref 或 stack 路径。 | `plan\|start <stack> --name INSTANCE [--floor ROLE=GROUPS] [--allow-outage] [--pool-label LABEL]`；`start` 增加 `--drain CMD \| --no-drain`、`--expected-digest`、`--watch`、`--timeout SEC`；`status\|pause\|resume\|abort\|finish INSTANCE [--pool-label LABEL] [--watch] [--timeout SEC] [-y\|--yes]` |
+| `scale <instance> WORKLOAD=N...` | 调整 Deployment、StatefulSet、LeaderWorkerSet 或 `DisaggregatedSet` 角色（`SET/ROLE`）的副本数，并在实例记录中持久化覆盖值。传入 `WORKLOAD=--` 可恢复为 stack 文件默认值。 | `<instance>`、`WORKLOAD=N...`、`--drain CMD \| --no-drain`、`--dry-run`、`-y/--yes`、`--allow-privileged`、`--skip-admin-parts` |
+| `migrate {plan,start,step,status,finish} <instance>` | 跨命名空间或跨集群逐副本迁移工作负载，保持服务不中断。 | `<action> <instance> --from NS --to NS [--workload W] [--stack PATH] [--name TARGET_NAME] [--from-context C] [--to-context C] [--from-kubeconfig F] [--to-kubeconfig F] [--from-source S] [--to-source S] [--with-companions] [--expected-digest D] [--drain CMD \| --no-drain] [--timeout SEC] [-y\|--yes]` |
+| `status <instance>` | 查看单个实例的实时对象状态、Pod 就绪度、告警事件、崩溃容器前序日志、Service 端点与已保存的扩缩容覆盖值。 | `<instance>`、`--watch`（每 10 秒轮询一次），以及共享目标参数 |
+| `list` | 列出目标命名空间内记录的所有 `llmd` 实例（`INSTANCE`、`MODE`、`PHASE`、`PODS`、`GPUS`、`STACK`）。 | 共享目标参数 |
+| `teardown <instance>` | 删除 UID（以及在托管模式下 `llmd` 标签）仍匹配的已记录对象。默认保留 PVC。 | `<instance>`、`--delete-volumes`、`--forget`（仅删除记录，保留运行中的对象）、`-y/--yes`，以及共享目标参数 |
+
+### 实例状态与生命周期阶段
+
+`llmd` 将权威实例状态存储在集群内而非本地终端上，因此从任意机器均可执行 `status`、`scale`、`rollouts` 与 `teardown`：
+
+- **ConfigMap 名称**：目标命名空间内的 `lens-instance-<name>`（schema 为 `lens.llm-d.ai/inventory/v1`，数据键为 `inventory.json`）。
+- **标签**：`app.kubernetes.io/managed-by=llm-d-lens`、`lens.llm-d.ai/instance=<name>` 与 `lens.llm-d.ai/role=inventory`。
+- **实例阶段（`phase`）**：
+  - `Applying` —— 在应用任何对象**之前**写入，确保中断的 `standup` 也能被干净地 `teardown`。
+  - `Applied` —— 所有已规划对象完成应用并记录 UID。
+  - `Deleting` —— `teardown` 已开始删除已记录的对象。
+  - `Removed` —— 当 `teardown` 结束且仍有保留的 `PersistentVolumeClaim` 对象时写入（否则直接删除 `lens-instance-<name>` ConfigMap）。
+  - `Invalid` —— 若清单 ConfigMap 未通过 schema 或标签校验，`llmd list` 会报告此状态。
+- **滚动更新阶段（`rollout.phase`）**：`Rolling`、`Paused`、`Aborting`，以及终态 `Finished` / `Aborted`。
+
+### 端到端操作示例
+
+```bash
+# 1. 注册上游 llm-d 来源（或本地检出目录）
+llmd sources add llm-d https://github.com/llm-d/llm-d.git#main
+
+# 2. 查看可用指南及 optimized-baseline 的变量
+llmd stacks
+llmd stacks optimized-baseline
+
+# 3. 针对目标命名空间审阅计划（只读）
+llmd plan optimized-baseline -n llmd-dev --var INFRA_PROVIDER=k8s
+
+# 4. 使用计划摘要 digest 拉起已审阅的准确配置并等待就绪
+llmd standup optimized-baseline -n llmd-dev \
+  --var INFRA_PROVIDER=k8s \
+  --expected-digest <digest-from-plan> \
+  --wait
+
+# 5. 查看实时状态（文本或 JSON）
+llmd list -n llmd-dev
+llmd -o json status optimized-baseline -n llmd-dev
+
+# 6. 清理（除非指定 --delete-volumes，否则保留 PVC）
+llmd teardown optimized-baseline -n llmd-dev -y
+```
+
+#### `-o json` 输出示例（`llmd -o json status`）
+
+```json
+{
+  "endpoints": [
+    "http://optimized-baseline-router.llmd-dev.svc.cluster.local:80"
+  ],
+  "health": "Ready",
+  "instance": "optimized-baseline",
+  "management": {
+    "mode": "llmd"
+  },
+  "namespace": "llmd-dev",
+  "objects": [
+    {
+      "detail": "1/1 ready",
+      "object": "Deployment/optimized-baseline-nvidia-gpu-vllm-decode",
+      "state": "ready"
+    }
+  ],
+  "overrides": {},
+  "phase": "Applied",
+  "pods": {
+    "problems": [],
+    "ready": 1,
+    "total": 1
+  },
+  "previousStack": null,
+  "stack": "guides/optimized-baseline",
+  "unreadable": []
+}
+```
+
+---
+
+## 服务端与运维脚本
+
+在运行或管理完整的 **Lens Web GUI 与统一 Python 后端**（`apps/frontend` + `apps/backend`）时，请使用以下脚本。
+
+### `hack/lens-local.sh`（本地源码安装与服务管理）
 
 | 命令 | 用途 |
 | --- | --- |
@@ -32,43 +184,27 @@ Shell 脚本、包装程序和无法识别模型参数的命令需要自定义 o
 | `hack/lens-local.sh stop` | 停止由本脚本启动的所有服务。 |
 | `hack/lens-local.sh restart` | 启用目标节点模式时先检查节点，再准备依赖并校验复用地图，全部通过后才停止并重启服务。 |
 | `hack/lens-local.sh status` | 显示哪些服务正在运行及其 PID。 |
-| `hack/lens-local.sh clean [-y\|--yes] [--cache\|--hard\|--all]` | 停止服务并删除应用数据和日志。`--cache` 还会删除源码 checkout 和 benchmark venv；`--hard` 还会删除开发 venv、工具链、TLS 证书、node_modules 和构建产物；`--all` 同时删除两者。 |
+| `hack/lens-local.sh clean [-y\|--yes] [--cache\|--hard\|--all]` | 停止服务并删除应用数据和日志。`--cache` 还会删除源码 checkout 和 benchmark venv；`--hard` 还会删除开发 venv、工具链、TLS 证书、`node_modules` 和构建产物；`--all` 同时删除两者。 |
 | `hack/lens-local.sh install-node` | 将受支持的 Node.js 安装到 `.dev-tools/`（当系统的 Node 缺失或版本过旧时会自动使用）。 |
 
-端口可以通过 `FRONTEND_PORT`（默认 `5173`）和 `BACKEND_PORT`（默认 `3000`）配置。
-`SERVER_PORT` 仍作为 Python 端口的后备值。旧的 `restart server` 目标会选择 `backend`；
-从旧版三进程结构切换时请使用 `restart all`。参见[环境变量](/environment-variables)。
+端口可以通过 `FRONTEND_PORT`（默认 `5173`）和 `BACKEND_PORT`（默认 `3000`）配置。`SERVER_PORT` 仍作为 Python 端口的后备值。旧的 `restart server` 目标会选择 `backend`；从旧版三进程结构切换时请使用 `restart all`。参见[环境变量](/environment-variables)。
 
-### 目标节点与 kubeconfig
+#### 目标节点与 kubeconfig
 
-`check`、`start` 和 `restart` 支持 `--target-node NODE` 与
-`--kubeconfig FILE`。命令行参数优先于 `TARGET_NODE` 和 `KUBECONFIG`。
-kubeconfig 参数指定单个文件，相对路径以执行命令时所在目录为基准；
-环境变量 `KUBECONFIG` 中的文件列表保持原样。
+`check`、`start` 和 `restart` 支持 `--target-node NODE` 与 `--kubeconfig FILE`。命令行参数优先于 `TARGET_NODE` 和 `KUBECONFIG`。kubeconfig 参数指定单个文件，相对路径以执行命令时所在目录为基准；环境变量 `KUBECONFIG` 中的文件列表保持原样。
 
 ```bash
 hack/lens-local.sh restart --target-node node-a --kubeconfig "$HOME/.kube/config"
 TARGET_NODE=node-a KUBECONFIG="$HOME/.kube/config" hack/lens-local.sh check
 ```
 
-不读取目标节点专用配置文件，也不保存上次的目标节点；每次启动时传参，
-或在 shell 中导出 `TARGET_NODE`。未指定目标节点时，普通启动不访问 Kubernetes，
-也不要求安装 kubectl/jq。指定目标节点后，需要 kubectl、jq，以及 `LLM_D_ROOT`
-指向的、包含 `guides/` 的源码目录；在停止已有服务之前检查节点是否可访问、
-处于 Ready 状态且未被 cordon。这不保证某个具体工作负载的资源请求、
-亲和性或污点容忍条件一定能够满足。
+不读取目标节点专用配置文件，也不保存上次的目标节点；每次启动时传参，或在 shell 中导出 `TARGET_NODE`。未指定目标节点时，普通启动不访问 Kubernetes，也不要求安装 `kubectl`/`jq`。指定目标节点后，需要 `kubectl`、`jq`，以及 `LLM_D_ROOT` 指向的、包含 `guides/` 的源码目录；在停止已有服务之前检查节点是否可访问、处于 Ready 状态且未被 cordon。这不保证某个具体工作负载的资源请求、亲和性或污点容忍条件一定能够满足。
 
-节点名称会导出为后端已有的 `PRISM_K8S_TARGET_NODE`。
-未设置 `TARGET_NODE` 时仍兼容该变量。未设置 `KUBECONFIG` 时使用 Kubernetes
-正常的配置查找方式。`stop`、`status`、`clean` 和 `install-node` 不检查目标节点，
-也不接受目标节点相关参数。
+节点名称会导出为后端已有的 `PRISM_K8S_TARGET_NODE`。未设置 `TARGET_NODE` 时仍兼容该变量。未设置 `KUBECONFIG` 时使用 Kubernetes 正常的配置查找方式。`stop`、`status`、`clean` 和 `install-node` 不检查目标节点，也不接受目标节点相关参数。
 
-硬件发现由后端和硬件 profile 负责，启动器不再自动发现 Intel 专用的 PCI 白名单；
-显式设置的 `PRISM_GPU_PCI_ALLOWLIST` 会保留。启动器也不再注入部署运行时默认值：
-未覆盖时由后端使用命名空间前缀 `llmd-`、900 秒就绪超时、300 秒命令超时，
-并保留失败的命名空间。显式设置的 `LLM_D_BENCH_*` 参数仍由原有消费者支持。
+硬件发现由后端和硬件 profile 负责，启动器不再自动发现 Intel 专用的 PCI 白名单；显式设置的 `PRISM_GPU_PCI_ALLOWLIST` 会保留。启动器也不再注入部署运行时默认值：未覆盖时由后端使用命名空间前缀 `llmd-`、900 秒就绪超时、300 秒命令超时，并保留失败的命名空间。显式设置的 `LLM_D_BENCH_*` 参数仍由原有消费者支持。
 
-## `lensctl.sh`（已安装的部署）
+### `lensctl.sh`（已安装的部署）
 
 由 Ubuntu 安装程序写入安装目录：
 
@@ -79,10 +215,9 @@ TARGET_NODE=node-a KUBECONFIG="$HOME/.kube/config" hack/lens-local.sh check
 | `lensctl.sh stop` | 停止已安装部署的服务。 |
 | `lensctl.sh uninstall` | 卸载；`--keep-data` / `--purge` 控制数据，`--keep-db` / `--purge-db` 控制内置数据库。 |
 
-## `LensInstaller-Ubuntu-x86_64-online.sh`
+### `LensInstaller-Ubuntu-x86_64-online.sh`
 
-从 main 或包含在线安装器的发布标签下载；脚本自行选择内嵌版本。
-只能安装到新建或空目录，不支持覆盖版本或就地升级。
+从 `main` 或包含在线安装器的发布标签下载；脚本自行选择内嵌版本。只能安装到新建或空目录，不支持覆盖版本或就地升级。
 
 | 标志 | 用途 |
 | --- | --- |
@@ -98,13 +233,10 @@ TARGET_NODE=node-a KUBECONFIG="$HOME/.kube/config" hack/lens-local.sh check
 
 完整用法参见[安装](/installation)和[升级](/upgrade)。
 
-## `node hack/generate-mcp-tools.mjs`
+### `node hack/generate-mcp-tools.mjs`
 
-根据当前 REST schema 校验 Python MCP 目录，遇到非预期跳过的操作时失败。
-`--check` 执行相同校验，`--json` 导出目录，不再生成 Node 服务端文件。
-本地 `start`/`restart` 和安装后的启动器直接校验同一目录。
-纯 Python 等价命令为 `.venv/bin/python -m llm_d_lens.assistant_tools.catalog`。
+根据当前 REST schema 校验 Python Assistant MCP 目录，遇到非预期跳过的操作时失败。`--check` 执行相同校验，`--json` 导出目录，不再生成 Node 服务端文件。本地 `start`/`restart` 和安装后的启动器直接校验同一目录。纯 Python 等价命令为 `.venv/bin/python -m llm_d_lens.assistant_tools.catalog`。
 
-## `alembic`
+### `alembic`
 
-应用或编写数据库 schema 迁移脚本——参见[迁移](/migration)。
+使用 `alembic -c apps/backend/alembic.ini` 应用或编写数据库 schema 迁移脚本——参见[迁移](/migration)。

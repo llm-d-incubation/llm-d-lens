@@ -1,42 +1,54 @@
 ---
 title: 概览
-description: 找到使用 Lens 部署、调用和评估模型的操作步骤。
+description: 选择使用 Lens 的方式，并查找部署、调用和评估模型的操作步骤。
 ---
 
-Lens 是一个基于 [llm-d](https://llm-d.ai/) 在 Kubernetes 上运行大模型的网页控制台。
-你可以用它部署模型、发布 API 端点并测量性能。
+Lens 通过**三种使用方式**在 Kubernetes 上运维 [llm-d](https://llm-d.ai/)。你可以按工作流选择其一，或在团队内组合使用：
 
-## 第一次使用
+## 选择使用方式
+
+| 使用方式 | 适用场景 | 运行时与鉴权 | 从这里开始 |
+| --- | --- | --- | --- |
+| **1. Web 控制台** | 多集群治理、可视化规划（手动与智能体）、Model Catalog、引导式评估、Trace Replayer、Model Services、可观测性与内置 Lens Assistant | 统一 Python FastAPI 后端（`apps/backend`，`llm_d_lens :3000`）提供前端（`apps/frontend`）+ PostgreSQL；会话与 RBAC | [快速开始](/quickstart) |
+| **2. 独立 `llmd` CLI** | 无需集群管理员权限、无需部署 Lens 服务器，按命名空间直接面向 Kubernetes/OpenShift 执行 GitOps 或终端部署 | `apps/lens`（`llm-d-lens-engine`），仅依赖 Python 3.11+ 与 `PyYAML`（需 `kubectl`/`oc`、`helm`、`git`、`kustomize`）；用户 kubeconfig（`-n <namespace>`） | [CLI 参考](/cli-reference) |
+| **3. Agent Tools（Lens MCP）** | 由编码或运维智能体（`opencode`、Claude Code、Cursor、OpenAI Codex CLI）通过 Lens 端到端编排部署、验证、基准测试与模型服务 | 无状态 Streamable HTTP `POST /api/mcp`（`Bearer lens-pat-*`，6 个 profile 共 46 个任务工具；与内部 `/api/assistant/mcp` 区分） | [MCP 集成](/mcp) |
+
+> **`llmd` 与 `lens` 说明：** 请始终使用 `llmd` 执行独立 CLI 操作（`llmd` 对应 `lens.cli:main`，包含全部 12 个顶级子命令）；`lens`（`lens.__main__:main`）目前仅是 `--version`/`--help` 存根。
+
+模型服务发布后，推理客户端（OpenAI/Anthropic SDK 或 `curl`）直接使用 `Authorization: Bearer lens-mk-*` 调用集群共享网关。
+
+## 第一次使用 Web 控制台？
 
 按[快速开始](/quickstart)安装 Lens 并获得第一条模型回复。通常按以下顺序操作：
 
-1. [添加集群](/user-guide/clusters)。
+1. [添加集群](/user-guide/clusters)（支持集群管理员直接执行或非管理员脚本交接，并可配置自定义集群 vLLM 镜像）。
 2. [准备存储](/user-guide/storage)并[下载模型权重](/user-guide/model-cache)。
-3. [部署模型](/user-guide/model-market)，等待就绪。
+3. 在 **Model Catalog** 中[部署模型](/user-guide/model-market)，等待就绪。
 4. [发布服务并创建 API 密钥](/tutorials/publish-a-model-service)。
 5. [运行评估](/tutorials/evaluate-a-deployment)。
 
-## 按任务查找
+## 在 Web 控制台按任务查找
 
 | 我想…… | 打开 |
 | --- | --- |
-| 选择并部署模型 | [模型市场](/user-guide/model-market) |
-| 检查部署状态或读取 Pod 日志 | [部署](/user-guide/deployments) |
-| 调用模型或管理 API 密钥 | [模型服务](/user-guide/model-services) |
-| 比较延迟和吞吐量 | [评估](/user-guide/evaluation) |
-| 重放请求轨迹 | [模拟](/user-guide/simulation) |
-| 连接集群或维护节点 | [集群](/user-guide/clusters) |
-| 创建或删除存储卷 | [存储](/user-guide/storage) |
-| 下载模型或释放缓存空间 | [模型缓存](/user-guide/model-cache) |
-| 打开监控仪表盘 | [可观测性](/user-guide/observability) |
-| 接入外部 AI 提供方 | [外部服务提供方](/user-guide/external-providers) |
-| 让助手查询资源或执行操作 | [Lens Assistant](/user-guide/lens-assistant) |
-| 管理用户和访问权限 | [管理](/user-guide/administration) |
+| 选择、定制并部署模型 | [Model Catalog（模型目录）](/user-guide/model-market) |
+| 检查部署状态、扩缩容或读取 Pod 日志 | [Deployments（部署）](/user-guide/deployments) |
+| 调用模型或管理 API 密钥 | [Model Services（模型服务）](/user-guide/model-services) |
+| 比较延迟和吞吐量 | [Evaluation（评估）](/user-guide/evaluation) |
+| 重放请求轨迹 | [Trace Replayer（轨迹回放）](/user-guide/simulation) |
+| 连接集群或维护节点 | [Clusters（集群）](/user-guide/clusters) |
+| 创建或删除存储卷 | [Storage（存储）](/user-guide/storage) |
+| 下载模型或释放缓存空间 | [Model Cache（模型缓存）](/user-guide/model-cache) |
+| 打开监控仪表盘 | [Observability（可观测性）](/user-guide/observability) |
+| 接入外部 AI 提供方 | [External Providers（外部服务提供方）](/user-guide/external-providers) |
+| 让内置助手查询资源或执行操作 | [Lens Assistant](/user-guide/lens-assistant) |
+| 管理用户、组、角色与访问权限 | [Administration（管理）](/user-guide/administration) |
 
 ## 遇到问题
 
 操作失败时，先查看错误提示和日志，再查[故障排查](/troubleshooting)。
 看不到资源或按钮时，请管理员检查权限。
 
-自动化调用见 [API 参考](/api-reference)。实现原理放在[架构文档](/architecture)，
+如需自动化或智能体集成，请参阅 [MCP 集成](/mcp)（`POST /api/mcp`）或
+[API 参考](/api-reference)。实现原理放在[架构文档](/architecture)，
 不需要先读懂架构才能按操作手册使用。

@@ -1,6 +1,6 @@
 ---
-title: 模拟
-description: 用于模拟任务发现与回放的后端接口与直接 Python 入口点。
+title: 轨迹回放（Trace Replayer）
+description: 用于轨迹回放与模拟任务的后端接口（/api/simulation）及直接 Python 入口点。
 ---
 
 import Tabs from '@theme/Tabs';
@@ -10,7 +10,7 @@ import TabItem from '@theme/TabItem';
 
 本地执行与 Pod 执行通过 `llm_d_lens.simulation.progress.report_request_progress` 共享请求进度报告。Pod 报告仍会等待就绪；本地报告则保留其原始开始时间。后端适配器通过 `backends.analytics.artifact_error_message` 共享产物错误格式化逻辑，同时各自保留自身的错误/超时字段优先级、状态映射和指标单位。任务 API 与后端环境准备逻辑保持不变。
 
-模拟相关路由位于 `llm_d_lens/simulation/router.py`，前缀为 `/api/simulation`。
+Trace Replayer（轨迹回放）的后端路由位于 `llm_d_lens/simulation/router.py`，路由前缀为 `/api/simulation`。
 
 ### 测试时证据与历史入库
 

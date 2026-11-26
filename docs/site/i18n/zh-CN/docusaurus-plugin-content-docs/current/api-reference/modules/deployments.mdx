@@ -625,6 +625,23 @@ def simulation_projection(execution: DeploymentExecution) -> SimulationDeploymen
     return execution.simulation_input()
 ```
 
+## 硬件渲染契约
+
+部署能力元数据描述的是提供方行为；其 `variants` 数组为空，因为变体归属于所选的源码目录。
+渲染与评估使用解析后的硬件 profile 来确定镜像、加速器资源和调度策略。旧版配置可以从其渲染出的 DRA 或扩展资源请求中解析硬件；相互冲突的硬件证据将被拒绝。
+
+Python 调用方也可以在渲染前检查相同的源码入口：
+
+```python
+from pathlib import Path
+from llm_d_lens.deploy.providers.hardware_profile import guide_overlays
+
+variants = guide_overlays(
+    Path("/path/to/llm-d"), "optimized-baseline", accelerator="nvidia",
+)
+print(sorted(variants))
+```
+
 ## 后端 API
 
 ### 部署检查
@@ -954,6 +971,29 @@ Python 开发接口，尚未接入 HTTP、MCP、配置页面或 Agentic 调度�
 `execution_diagnostics` 按配置指纹保留失败执行元数据。原生 stderr 仅是诊断文本，
 不是结构化容量结论；未知进程失败继续保持 failed／unknown，不根据内存相关措辞
 静默判定配置不可行。
+
+### 列出部署节点标签
+
+列出调用方有权限访问的集群节点上的不重复键/值标签。高级放置（Advanced placement）使用这些值来填充其可选的节点标签选择器。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/v1/deployments/node-labels?cluster_id=cluster-a`**
+
+    查询参数：`cluster_id`（必需的集群 ID）。响应：
+
+    ```json
+    {"items": [{"key": "pool", "value": "accelerator"}]}
+    ```
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+    ```python
+    from llm_d_lens.deploy.router import list_deployment_node_labels
+
+    labels = await list_deployment_node_labels(cluster_id="cluster-a", request=authenticated_request)
+    ```
+  </TabItem>
+</Tabs>
 
 ### 启动一次部署运行
 
@@ -2333,7 +2373,7 @@ SSH 传输和远程命令失败返回 `502` 及
 需认证的 SSH 操作要求 `target.host`、`username`、`hostFingerprint`
 以及非空、由数字 ID 字符串构成的 `cards` 数组。`port` 默认 22；
 `authMethod` 默认 `agent`，还支持 `key`、`password`。
-Agent 模式要求 BFF 有 `SSH_AUTH_SOCK`；key 模式要求服务端 `keyPath`
+Agent 模式要求后端有 `SSH_AUTH_SOCK`；key 模式要求服务端 `keyPath`
 位于 `PRISM_SSH_KEY_DIR` 下，默认 `$HOME/.ssh`。
 Password 模式在每次请求的 `credentials.password` 中提供密码，不保存也不返回。
 指纹发现不执行认证，也不要求 cards。使用前应通过可信渠道确认指纹；
@@ -2345,7 +2385,7 @@ SSH／命令失败通常为 `502`。网关认证和权限错误使用网关的 P
 
 ### Remote 操作的 Python HTTP 客户端
 
-这些 Node 端点**没有 Python 服务层等价方法**，下方 Python 页签使用此 HTTP helper。
+这些兼容 HTTP 路由**没有独立的 Python 服务层调用封装**，下方 Python 页签使用此 HTTP helper。
 示例环境变量只是客户端输入，不是新增的 Lens 服务端配置。
 从已登录的 Lens 会话取得值，切勿提交其内容。
 
@@ -2394,7 +2434,7 @@ target = {
 }
 ```
 
-值来自 BFF 环境：repository 优先 `LLM_D_ROOT`，然后 `LLM_D_REPOSITORY`，
+值来自后端环境：repository 优先 `LLM_D_ROOT`，然后 `LLM_D_REPOSITORY`，
 否则为空，没有主机专属的默认 checkout；branch 来自 `LLM_D_BRANCH`。
 代理优先 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY`，其次是对应的 `LLM_D_` 变量。
 挂载字段来自 `LLM_D_MOUNT_PATH`、`LLM_D_MOUNT_MODEL_NAME`。

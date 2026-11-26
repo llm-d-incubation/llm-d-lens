@@ -6,6 +6,10 @@ description: Ask questions about Lens resources and review actions before approv
 Use **Lens Assistant** to ask about clusters and deployments, or request an operation.
 For example: `List failed deployments in my clusters.`
 
+:::note Built-in Assistant vs. External Agents
+**Lens Assistant** is the built-in Web UI chat experience, powered internally by the Assistant Tool Catalog (`/api/assistant/mcp`). If you want to connect an external coding or operations agent (such as `opencode`, Claude Code, Cursor, or Codex CLI) to Lens, use [Lens MCP](/mcp) (`POST /api/mcp`) instead.
+:::
+
 ## Start a conversation
 
 Lens Assistant currently supports **External AI providers** only. Internal
@@ -75,5 +79,4 @@ networks may not reach the Hugging Face CDN directly.
 
 ## Connect an external MCP client
 
-Lens Assistant uses Lens' built-in MCP tool catalog. To drive the same tools from your own
-MCP client (MCP Inspector, an IDE agent, …), see [MCP integration](/mcp).
+Lens Assistant uses Lens's internal Assistant Tool Catalog (`/api/assistant/mcp`). To drive Lens from an external MCP client (MCP Inspector, `opencode`, Claude Code, Cursor, Codex CLI, etc.), connect to `POST /api/mcp` (Agent Task MCP) — see [MCP integration](/mcp).
