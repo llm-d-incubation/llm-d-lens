@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import time
 
+from ..argocd import delivery
 from ..status import instance_status, list_instances
 from . import Context, Handler, add_target_arguments
 
@@ -58,6 +59,19 @@ def print_status(status: dict) -> None:
                 print(f"      {text}")
     for workload, count in sorted((status.get("overrides") or {}).items()):
         print(f"  scaled       {workload} to {count} with `llmd scale` (record it in the stack's repository)")
+    argocd = status.get("argocd")
+    if argocd:
+        revision = argocd.get("revision")
+        revision = (revision[:12] if isinstance(revision, str) else ", ".join(item[:12] for item in revision)) or "?"
+        planned = (argocd.get("plannedRevision") or "")[:12]
+        made = " (made outside llmd; read only)" if argocd.get("createdBy") == delivery.OBSERVED else ""
+        print(
+            f"  argocd       {argocd['application']}{made}: {argocd['state']}, sync {argocd['sync']}, health "
+            f"{argocd['health']}, revision {revision}"
+            + (f" (planned {planned})" if planned and planned != revision else "")
+        )
+        if argocd.get("message") and argocd["state"] != "Synced":
+            print(f"               {argocd['message']}")
     for endpoint in status["endpoints"]:
         print(f"  endpoint {endpoint}")
     if status.get("unreadable"):
@@ -77,7 +91,7 @@ def command_list(ctx: Context) -> int:
     if not instances:
         print(f"No instances in {namespace}.")
         return 0
-    print(f"{'INSTANCE':<32} {'MODE':<9} {'PHASE':<10} {'PODS':<9} {'GPUS':<6} STACK")
+    print(f"{'INSTANCE':<32} {'MODE':<9} {'PHASE':<10} {'PODS':<9} {'GPUS':<6} {'BACKEND':<8} STACK")
     for item in instances:
         if item.get("phase") == "Invalid":
             print(f"{item['instance']:<32} {'?':<9} Invalid    {item.get('error', '')}")
@@ -85,7 +99,7 @@ def command_list(ctx: Context) -> int:
         pods = f"{item['pods']['ready']}/{item['pods']['total']}"
         gpus = sum(count for resource, count in item["accelerators"].items() if resource.endswith("/gpu")) or "-"
         columns = f"{item['instance']:<32} {item['management']:<9} {item['phase']:<10} {pods:<9} {gpus!s:<6}"
-        print(f"{columns} {item['stack']}")
+        print(f"{columns} {item['backend']:<8} {item['stack']}")
         if item.get("unreadable"):
             print(f"  {len(item['unreadable'])} object(s) could not be read; `llmd status` names them")
     print(f"\nDetails: llmd status INSTANCE -n {namespace}")

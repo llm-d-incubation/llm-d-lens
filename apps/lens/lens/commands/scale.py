@@ -6,10 +6,12 @@ import argparse
 import sys
 
 from .. import catalog, inventory, overrides, scaling
-from ..errors import UsageError
+from ..argocd import application, delivery
+from ..errors import ConflictError, PolicyError, UsageError
 from ..plan import Options, discovered_scope, make_plan
 from ..preflight import preflight
 from . import Context, Handler, add_source_arguments, add_target_arguments, progress
+from .plan import print_plan
 
 
 def register(commands: argparse._SubParsersAction) -> dict[str, Handler]:
@@ -88,6 +90,8 @@ def command_scale(ctx: Context) -> int:
             kept.pop(workload, None)
         else:
             kept[workload] = count
+    if delivery.is_argocd(record):
+        return _scale_argocd(ctx, kube, record, changes, kept)
     stack = catalog.find_stack(ctx.source(), record["stack"]["id"])
     progress(f"rendering {stack.id}")
     imported = inventory.management(record) == inventory.IMPORTED
@@ -144,3 +148,79 @@ def command_scale(ctx: Context) -> int:
         else:
             print("  no counts kept: the instance follows the stack's files")
     return 0
+
+
+def _scale_argocd(ctx: Context, kube, record: dict, changes: dict, kept: dict) -> int:
+    """Keep the counts on the instance's Argo CD Application and sync it: a count set on the objects
+    beside Argo CD would be set back by its next sync."""
+    args = ctx.args
+    if args.drain or args.no_drain:
+        raise UsageError(
+            "--drain and --no-drain are for the direct backend; Argo CD applies the new count",
+            hint="Lower a DisaggregatedSet role in the stack's files; Argo CD cannot keep a role's count.",
+        )
+    namespace, instance = record["namespace"], record["instance"]
+    if (record.get("rollout") or {}).get("phase") in ("Rolling", "Paused", "Aborting"):
+        raise ConflictError(f"instance {instance} has a rollout in progress; scale it once the rollout is finished")
+    stack = catalog.find_stack(ctx.source(), record["stack"]["id"])
+    running = (record.get("delivery") or {}).get("revision") or ""
+    if running and stack.source.revision != running:
+        raise ConflictError(
+            f"the source is at {stack.source.revision[:12]}, but instance {instance} runs {running[:12]}; a scale "
+            "would move it to the new commit as well",
+            hint="Move it with `llmd rollouts start --backend argocd` first, or pass a --source at that commit.",
+        )
+    progress(f"rendering {stack.id}")
+    files = file_counts(ctx, stack, record, namespace, instance, changes)
+    # A count the stack's files already say needs no override.
+    kept = {workload: count for workload, count in kept.items() if files.get(workload) != count}
+    plan = make_plan(
+        stack,
+        instance_options(record, namespace, instance, overrides=kept),
+        runner=ctx.runner,
+        scope=discovered_scope(kube),
+    )
+    for workload in changes:
+        overrides.find(plan.documents, workload)  # refuses a workload the stack does not render
+    settings = delivery.settings_for(kube, record, revision=_target_revision(kube, record))
+    delivery.check(kube, plan, settings, ctx.runner, existing="rollout")
+    if plan.blocking:
+        print_plan(plan) if args.output == "text" else ctx.emit(plan.summary())
+        return PolicyError.exit_code
+    if args.dry_run:
+        result = {"instance": instance, "namespace": namespace, "overrides": kept, "application": plan.delivery}
+        ctx.emit(result) if args.output != "text" else print(f"Would keep {kept or 'no counts'} on the Application")
+        return 0
+    for workload, count in changes.items():
+        if count == 0 and not args.yes:
+            question = f"Scale {workload} of {instance} to 0? It stops serving. [y/N] "
+            if not sys.stdin.isatty():
+                raise UsageError(f"refusing to scale {workload} to 0 without a terminal to confirm; pass -y")
+            if input(question).strip().lower() not in ("y", "yes"):
+                print("Nothing changed.")
+                return 1
+    updated = delivery.update(kube, plan, record, actor=plan.cluster.get("user", ""))
+    result = {
+        "instance": instance,
+        "namespace": namespace,
+        "backend": delivery.BACKEND,
+        "application": "/".join(delivery.application_ref(updated)),
+        "overrides": kept,
+    }
+    if args.output != "text":
+        ctx.emit(result)
+        return 0
+    listed = ", ".join(f"{name}={count}" for name, count in sorted(kept.items())) or "none"
+    print(f"Kept counts on Argo CD Application {result['application']}: {listed}; Argo CD syncs the change")
+    print(f"Follow it with: llmd status {instance} -n {namespace}")
+    return 0
+
+
+def _target_revision(kube, record: dict) -> str:
+    """The Application's ``targetRevision`` as it is now, so a scale does not move the instance to
+    another commit (one source: its revision; several: the first Git source's)."""
+    live = delivery.require_application(kube, record)
+    for source in application.application_sources(live):
+        if source.get("path") is not None or source.get("ref"):
+            return str(source.get("targetRevision") or "")
+    return ""

@@ -66,6 +66,8 @@ so the record's shape is only documented by reading them.
 - Cluster-wide prerequisites (CRDs, operators, gateways): roadmap `prepare`.
 - Gateway Mode and blue-green updates.
 - A database. The cluster stays the source of truth for instances.
+- Installing or configuring Argo CD. `llmd admin argocd check` reads an install and writes the AppProject change
+  a stack would need; an administrator applies it.
 - Moving the legacy `apps/backend` guide deployments onto the engine, or
   changing its data model (`llm_d_lens/db`).
 - Choosing a REST framework for `serve`.
@@ -289,6 +291,7 @@ Stored as JSON under key `inventory.json` in ConfigMap
 | `updatedBy` | `str` | standup, import, scale | The kube user from `kubectl auth whoami` during the plan's cluster check |
 | `overrides` | `{workload: int}` | scale, migrate | Replica counts set with `llmd scale`; every later plan sets them on the render. Absent when none differ from the files |
 | `migration` | `MigrationRecord` | migrate | On both the source and the target record while a migration runs; see below |
+| `delivery` | `DeliveryRecord` | standup, import with `--backend argocd` | Absent for the direct backend; see below |
 
 `ObjectEntry` = `{apiVersion, kind, name, resource, uid?}`. `resource` is
 `plural.group`; `uid` is set after apply and checked before any delete.
@@ -350,6 +353,19 @@ Example, after a `standup`:
 | `from`, `to` | `{namespace, instance, context}` | Both sides |
 | `startedAt` | ISO 8601 | Audit time |
 | `steps` | `list[{at, to, from}]` | Each step's counts after it: target `to`, source `from` |
+
+### `DeliveryRecord` fields
+
+Written when Argo CD delivers the instance (`--backend argocd`). The objects are then Argo CD's: `objects`
+lists those Argo CD reports the Application manages in the namespace, read back after each sync.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `backend` | `"argocd"` | Who applies the instance's objects |
+| `application`, `namespace` | `str` | The Application's name and namespace (often Argo CD's own, not the instance's) |
+| `project` | `str` | Its AppProject |
+| `revision` | `str` | The commit the instance was planned at; `status` is Ready only once the Application is synced to it. Empty for an imported Application |
+| `createdBy` | `llmd\|observed` | `observed`: someone else made the Application (`import`); llmd only reads it |
 
 ## 7. Instance lifecycle
 
@@ -450,6 +466,12 @@ and the ownership checks depend on them.
 | `migrate plan` | both records, both plans | nothing | — (reports refusals) |
 | `migrate start/step/finish` | both records, both plans, live workloads | target objects, both records, scaled objects; `finish` tears the source down | an unsettled source; another instance of that name in the target; a target not Ready before a step lowers the source; `finish` before the source is at 0 |
 | `teardown` | record, live objects | deletes objects and record | a delete permission is missing (nothing is removed) |
+| `plan --backend argocd` | source, cluster, the Application's AppProject | nothing | — (reports findings and the digest, which covers the Application) |
+| `standup --backend argocd` | plan, record | record, then the Application and one sync | blocking findings (uncommitted or unpushed stack files, objects written for another namespace, a project that refuses the Application); digest mismatch; an Application someone else made |
+| `scale`, `rollouts start/abort` of an Argo CD instance | record, the live Application, plan | record, the Application and one sync | as for the direct backend; a count llmd has no way to keep on the Application (a DisaggregatedSet role, a chart's workload); a source at another commit (`scale`) |
+| `teardown` of an Argo CD instance | record, the Application | deletes the Application (Argo CD deletes what it deployed), then the record | a claim without `Delete=false` unless `--delete-volumes`; an Application someone else made, unless `--forget` |
+| `import --backend argocd` | plan, the named Application | record only | the Application delivers another stack or namespace, unless `--allow-drift` |
+| `admin argocd check` | the Argo CD install, optionally a plan and its AppProject | nothing; `--project-yaml` file | — (reports findings) |
 
 **One JSON contract.** Every operation returns a JSON-serializable `dict`;
 `llmd -o json` prints it, and `serve` would return it as the response body.
@@ -592,6 +614,7 @@ under another command.
 | v0.3.0 | `update` with rolling updates and snapshots | Partial: `rollouts` rolls DisaggregatedSets in place and `abort` restores `rollout.previous` |
 | v0.3.0 | More well-lit paths and accelerators | Partial: 18 of 28 guides follow; the rest block on unsupported steps |
 | Later | Gateway mode, blue-green updates | Not started |
+| Not on the roadmap | Delivery through Argo CD | Partial: `--backend argocd` for plan, standup, status, scale, rollouts, import and teardown, and `admin argocd check`; tested on the in-memory cluster only (November 2026), not against a running Argo CD |
 | Later | `benchmark`, BLIS in `plan`, in-cluster Job | Not started |
 
 `sources`, `import`, PR-ref rollouts, `--switch-stack`, `scale`, `migrate` and

@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .. import paths, yamlio
+from ..argocd import application, delivery
 from ..errors import UsageError
 from ..kube import Kube, Target
 from ..model import validate_namespace
@@ -105,6 +106,62 @@ def add_source_arguments(parser: argparse.ArgumentParser) -> None:
         "(optional when exactly one source is registered)",
     )
     parser.add_argument("--refresh", action="store_true", help="fetch a remote source again")
+
+
+def add_backend_arguments(parser: argparse.ArgumentParser) -> None:
+    """How a planned stack is delivered: applied by llmd, or by Argo CD from an Application."""
+    parser.add_argument(
+        "--backend",
+        choices=["direct", "argocd"],
+        default="direct",
+        help="who applies the stack: llmd (direct, the default), or Argo CD through one Application",
+    )
+    argocd = parser.add_argument_group("Argo CD (--backend argocd)")
+    argocd.add_argument(
+        "--argocd-app",
+        default=os.environ.get("LLMD_ARGOCD_APP", ""),
+        metavar="FILE",
+        help="the Application manifest to start from, as you would write it for one stack: its project, "
+        "destination cluster and sync policy; llmd sets its sources and destination namespace "
+        "(env LLMD_ARGOCD_APP)",
+    )
+    argocd.add_argument(
+        "--argocd-namespace",
+        default="",
+        metavar="NAMESPACE",
+        help="the namespace Argo CD runs in, where its AppProjects are (default: the Application's namespace)",
+    )
+    argocd.add_argument(
+        "--argocd-revision",
+        default="",
+        metavar="REF",
+        help="the Application's targetRevision (default: the commit the plan rendered; a branch follows its "
+        "new commits)",
+    )
+    argocd.add_argument(
+        "--argocd-remote",
+        default="origin",
+        metavar="REMOTE",
+        help="the Git remote of a local checkout that Argo CD fetches (default origin)",
+    )
+
+
+def argocd_settings(args: argparse.Namespace):
+    """The ``--argocd-*`` settings, or None for ``--backend direct``."""
+    if getattr(args, "backend", "direct") != "argocd":
+        return None
+    if not args.argocd_app:
+        raise UsageError(
+            "--backend argocd needs --argocd-app FILE",
+            hint="Write the Application you would make for one stack (project, destination, sync policy); "
+            "llmd fills in its sources.",
+        )
+    return delivery.Settings(
+        template=application.load_template(Path(args.argocd_app).expanduser()),
+        namespace=args.argocd_namespace,
+        revision=args.argocd_revision,
+        remote=args.argocd_remote,
+    )
 
 
 def add_target_arguments(parser: argparse.ArgumentParser) -> None:
