@@ -8,14 +8,14 @@ findings to it (``preflight``). Its digest covers what would be applied, so ``st
 from __future__ import annotations
 
 import copy
+import shlex
 from dataclasses import dataclass, field
 from typing import Any
 
-from . import overrides, yamlio
+from . import health, overrides, yamlio
 from .catalog import Stack
-from .guides import Environment
 from .model import Finding, object_ref, validate_instance_name, validate_namespace
-from .policy import PolicyContext, PolicyResult, ScopeResolver, apply_policy, fallback_scope
+from .policy import PolicyContext, PolicyResult, ScopeResolver, apply_policy, fallback_scope, pod_templates
 from .process import Runner
 from .render import Tools, render
 
@@ -97,6 +97,7 @@ class Plan:
             "id": self.stack.id,
             "source": self.stack.source.describe(),
             **self.options.choices(),
+            "endpointDiscovery": "auto",
             "endpoints": self.endpoint_details,
         }
 
@@ -174,8 +175,7 @@ def make_plan(
     policy = apply_policy(documents, context)
     policy.findings[:0] = rendered.findings
     policy.findings.extend(scaled)
-    declarations = endpoint_declarations(stack, rendered.variables)
-    endpoints, findings = resolve_endpoints(declarations, policy.documents, options.namespace)
+    endpoints, findings = discover_endpoints(policy.documents, options.namespace)
     policy.findings.extend(findings)
     return Plan(
         stack=stack,
@@ -188,28 +188,156 @@ def make_plan(
     )
 
 
-def endpoint_declarations(stack: Stack, variables: dict[str, str]) -> Any:
-    directory = stack.path if stack.path.is_dir() else stack.path.parent
-    path = directory / ("guide.yaml" if stack.kind == "guide" else "lens.yaml")
-    if not path.is_file():
-        return []
-    data = yamlio.load_file(path)
-    if stack.kind == "guide" and isinstance(data, dict):
-        data = data.get("lens", {})
-    if not isinstance(data, dict):
-        return None
-    declarations = copy.deepcopy(data.get("endpoints", []))
-    if isinstance(declarations, list):
-        env = Environment()
-        env.values.update(variables)
-        for declaration in declarations:
-            if isinstance(declaration, dict):
-                for key in ("service", "port", "scheme", "purpose"):
-                    value = declaration.get(key)
-                    if isinstance(value, str):
-                        env.assign("LENS_ENDPOINT_VALUE", value)
-                        declaration[key] = env.get("LENS_ENDPOINT_VALUE")
-    return declarations
+def _container_role(container: dict[str, Any]) -> str | None:
+    name = str(container.get("name", "")).lower()
+    image = str(container.get("image", "")).lower()
+    invocation = " ".join(str(value) for value in [*container.get("command", []), *container.get("args", [])])
+    if any(token in name or token in image for token in ("envoy", "agentgateway")):
+        return "router"
+    if name in {"modelserver", "model-server", "vllm", "sglang"} or any(
+        token in image or token in invocation for token in ("vllm", "sglang")
+    ):
+        return "model"
+    return None
+
+
+def _container_ports(container: dict[str, Any], role: str) -> dict[str | int, int]:
+    ports = {}
+    for port in container.get("ports") or []:
+        number = port.get("containerPort")
+        name = str(port.get("name") or "").lower()
+        internal = any(part in name for part in ("metrics", "health", "status", "grpc", "admin"))
+        if type(number) is int and port.get("protocol", "TCP") == "TCP" and not internal:
+            ports[number] = number
+            if port.get("name"):
+                ports[port["name"]] = number
+    if not container.get("ports") and role == "model":
+        try:
+            tokens = shlex.split(
+                " ".join(str(value) for value in [*container.get("command", []), *container.get("args", [])])
+            )
+        except ValueError:
+            return ports
+        number = 8000
+        for index, argument in enumerate(tokens):
+            if argument == "--port":
+                if index + 1 == len(tokens):
+                    return ports
+                value = tokens[index + 1]
+            elif argument.startswith("--port="):
+                value = argument.partition("=")[2]
+            else:
+                continue
+            if not value.isdigit():
+                return ports
+            number = int(value)
+        ports[number] = number
+    return ports
+
+
+def discover_endpoints(documents: list[dict[str, Any]], namespace: str) -> tuple[list[dict[str, Any]], list[Finding]]:
+    endpoints, ranks = [], {}
+    templates = []
+    for document in documents:
+        if (document.get("metadata") or {}).get("namespace", namespace) != namespace:
+            continue
+        for location, template, _ in pod_templates(document):
+            template = copy.deepcopy(template)
+            labels = template.setdefault("metadata", {}).setdefault("labels", {})
+            kind = document.get("kind")
+            if kind == "LeaderWorkerSet":
+                labels[health.LWS_NAME_LABEL] = document["metadata"]["name"]
+            elif kind == "DisaggregatedSet":
+                labels[health.DS_NAME_LABEL] = document["metadata"]["name"]
+                labels[health.DS_ROLE_LABEL] = location.split("[", 1)[1].split("]", 1)[0]
+            templates.append((document, location, template))
+    for service in documents:
+        if service.get("kind") != "Service" or service.get("apiVersion") != "v1":
+            continue
+        if (service.get("metadata") or {}).get("namespace", namespace) != namespace:
+            continue
+        spec = service.get("spec") or {}
+        selector = spec.get("selector") or {}
+        name = service["metadata"]["name"]
+        for port in spec.get("ports") or []:
+            number = port.get("port")
+            if type(number) is not int or port.get("protocol", "TCP") != "TCP":
+                continue
+            port_name = str(port.get("name") or "").lower()
+            scheme = "https" if number == 443 or port_name == "https" else "http"
+            endpoint = {
+                "purpose": "unknown",
+                "service": name,
+                "namespace": namespace,
+                "port": number,
+                "portName": port.get("name"),
+                "portSelector": port.get("name") or number,
+                "scheme": scheme,
+                "preferred": False,
+                "url": f"{scheme}://{name}.{namespace}.svc.cluster.local:{number}",
+                "discoverySource": "service-selector",
+                "reason": "No matching serving container.",
+            }
+            excluded = number in {9002, 9090} or any(
+                part in port_name for part in ("metrics", "health", "status", "grpc", "admin")
+            )
+            if "metrics" in port_name or number == 9090:
+                endpoint["purpose"] = "metrics"
+            matches = []
+            for document, location, template in templates:
+                labels = (template.get("metadata") or {}).get("labels") or {}
+                if not selector or not all(labels.get(key) == value for key, value in selector.items()):
+                    continue
+                identity = " ".join(
+                    [location, str(document.get("metadata", {}).get("name", "")), *map(str, labels.values())]
+                ).lower()
+                for container in (template.get("spec") or {}).get("containers") or []:
+                    role = _container_role(container)
+                    if role is None or excluded:
+                        continue
+                    target = port.get("targetPort", number)
+                    if isinstance(target, str) and target.isdigit():
+                        target = int(target)
+                    resolved = _container_ports(container, role).get(target)
+                    if resolved is None or resolved in {9002, 9090}:
+                        continue
+                    invocation = " ".join(str(value) for value in container.get("args") or []).lower()
+                    if role == "model" and ("prefill" in identity or "kv_producer" in invocation):
+                        continue
+                    rank = 0 if role == "router" else 1 if "decode" in identity else 2
+                    matches.append((rank, object_ref(document), location, container.get("name", ""), resolved))
+            if matches:
+                rank = min(match[0] for match in matches)
+                endpoint.update(
+                    purpose="inference",
+                    endpointType="router" if rank == 0 else "model",
+                    reason="Service targetPort matches a serving container.",
+                    backends=[
+                        {"object": ref, "template": location, "container": container, "targetPort": target}
+                        for _, ref, location, container, target in sorted(set(matches))
+                    ],
+                )
+                ranks[len(endpoints)] = (rank, spec.get("clusterIP") == "None")
+            endpoints.append(endpoint)
+    findings = []
+    if ranks:
+        best = min(ranks.values())
+        selected = [index for index, rank in ranks.items() if rank == best]
+        if len(selected) == 1:
+            endpoints[selected[0]]["preferred"] = True
+        else:
+            findings.append(
+                Finding(
+                    "warning", "endpoint-ambiguous", "Multiple equally eligible inference endpoints; none selected."
+                )
+            )
+    else:
+        findings.append(
+            Finding(
+                "warning", "endpoint-not-found", "No inference Service could be identified from the stack's workloads."
+            )
+        )
+    return endpoints, findings
 
 
 def preferred_inference_endpoint(endpoints: list[dict[str, Any]]) -> dict[str, Any] | None:
@@ -220,64 +348,35 @@ def preferred_inference_endpoint(endpoints: list[dict[str, Any]]) -> dict[str, A
     return inference[0] if len(inference) == 1 and not preferred else None
 
 
-def resolve_endpoints(
-    declarations: Any, documents: list[dict[str, Any]], namespace: str
-) -> tuple[list[dict[str, Any]], list[Finding]]:
-    endpoints, findings = [], []
-    if not isinstance(declarations, list):
-        return [], [Finding("error", "endpoint-invalid", "Endpoint declarations must be a list.")]
-    services = {
-        doc["metadata"]["name"]: doc
-        for doc in documents
-        if doc.get("apiVersion") == "v1" and doc.get("kind") == "Service"
-    }
-    for declaration in declarations:
-        if not isinstance(declaration, dict):
-            findings.append(Finding("error", "endpoint-invalid", "Each endpoint must be a mapping."))
-            continue
-        purpose, service, port = (declaration.get(key) for key in ("purpose", "service", "port"))
-        scheme, preferred = declaration.get("scheme", "http"), declaration.get("preferred", False)
-        if (
-            not isinstance(purpose, str)
-            or not purpose.strip()
-            or not isinstance(service, str)
-            or not service
-            or type(port) not in (str, int)
-            or scheme not in ("http", "https")
-            or not isinstance(preferred, bool)
-            or (preferred and purpose != "inference")
-        ):
-            findings.append(Finding("error", "endpoint-invalid", f"Invalid endpoint declaration: {declaration!r}"))
-            continue
-        document = services.get(service)
-        ports = [
-            candidate
-            for candidate in ((document or {}).get("spec") or {}).get("ports", [])
-            if (candidate.get("name") == port if isinstance(port, str) else candidate.get("port") == port)
-            and candidate.get("protocol", "TCP") == "TCP"
-        ]
-        if len(ports) != 1:
-            findings.append(
-                Finding(
-                    "error", "endpoint-unresolved", f"Endpoint requires one TCP port {port!r} on Service/{service}."
-                )
+def revalidate_endpoint(
+    recorded: dict[str, Any], candidates: list[dict[str, Any]], available_objects: set[str]
+) -> tuple[dict[str, Any] | None, list[Finding]]:
+    selector = recorded.get("portSelector", recorded["port"])
+    matching = [
+        endpoint
+        for endpoint in candidates
+        if endpoint["service"] == recorded["service"]
+        and (endpoint["portName"] == selector if isinstance(selector, str) else endpoint["port"] == selector)
+        and endpoint["purpose"] == "inference"
+    ]
+    backends = {backend["object"] for backend in recorded.get("backends", [])}
+    if len(matching) != 1 or (backends and not backends.issubset(available_objects)):
+        return None, [
+            Finding(
+                "warning",
+                "endpoint-unresolved",
+                "The recorded inference Service, port or backing workload is unavailable.",
             )
-            continue
-        resolved = ports[0]
-        endpoints.append(
-            {
-                "purpose": purpose,
-                "service": service,
-                "namespace": namespace,
-                "port": resolved["port"],
-                "portName": resolved.get("name"),
-                "portSelector": port,
-                "scheme": scheme,
-                "preferred": preferred,
-                "url": f"{scheme}://{service}.{namespace}.svc.cluster.local:{resolved['port']}",
-            }
-        )
-    inference = [endpoint for endpoint in endpoints if endpoint["purpose"] == "inference"]
-    if inference and preferred_inference_endpoint(endpoints) is None:
-        findings.append(Finding("error", "endpoint-ambiguous", "Declare exactly one preferred inference endpoint."))
-    return endpoints, findings
+        ]
+    endpoint = matching[0]
+    expected = {
+        (backend["object"], backend["container"], backend["targetPort"]) for backend in recorded.get("backends", [])
+    }
+    actual = {
+        (backend["object"], backend["container"], backend["targetPort"]) for backend in endpoint.get("backends", [])
+    }
+    if expected and not expected.issubset(actual):
+        return None, [
+            Finding("warning", "endpoint-unresolved", "The recorded inference backend or targetPort changed.")
+        ]
+    return endpoint, []

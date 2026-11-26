@@ -5,41 +5,31 @@ description: 用于运行、安装和管理 Lens 的命令行工具。
 
 ## `llmd` 推理入口
 
-推理入口由 stack 声明，Lens engine 负责解析和验证，workflow 不再猜测 Service 或端口。
-在 `guide.yaml` 中声明：
-
-```yaml
-lens:
-	endpoints:
-		- purpose: inference
-			service: ${GUIDE_NAME}-router
-			port: http
-			preferred: true
-		- purpose: metrics
-			service: ${GUIDE_NAME}-router
-			port: metrics
-```
-
-示例名称需替换为实际渲染得到的 Service 和端口名，guide 变量会展开。
-kustomize 或 manifest stack 使用 stack 目录中的 `lens.yaml`；单文件 stack 使用该文件旁的
-`lens.yaml`。其中直接以 `endpoints:` 为根，不使用 `lens:` 包装。
-
-`purpose`、`service` 和 `port` 必填。`port` 是 Service 端口名或整数端口号，不是 `targetPort`。
-`scheme` 支持 `http`（默认）和 `https`；`preferred` 默认为 `false`，只有推理入口可以设为 `true`。
-只有一个推理入口时自动选用；存在多个时必须恰好指定一个首选入口。
-声明无效、Service 缺失、端口无法解析或不是 TCP，以及首选入口不明确，都会阻止 plan 通过。
+Lens engine 从渲染资源自动发现推理入口。guide、kustomize 和 manifest stack
+均不需要声明 endpoint，也不需要额外的元数据文件。
+Service selector 用于关联工作负载的 Pod template，包括 LeaderWorkerSet 和 DisaggregatedSet。
+TCP `targetPort` 必须对应已识别的服务容器；模型容器未声明端口时解析 `--port`，
+只有该参数不存在时才默认使用 8000。
+Envoy/agentgateway 路由入口优先于 vLLM/SGLang 模型直连入口，decode 优先于普通模型入口，
+排除 prefill-only 入口。同类候选中优先使用非 headless Service。
+metrics、health、admin 和 EPP gRPC 内部端口不作为推理入口。
+同级候选无法区分时报告歧义，不回退到第一个 Service 或端口。
+缺少或歧义的推理入口会产生警告并返回空的首选入口，但不阻止部署。
 
 `llmd -o json plan STACK -n NAMESPACE` 和 `llmd -o json status INSTANCE -n NAMESPACE`
 返回 `endpointDetails` 和 `inferenceEndpoint`（对象或 `null`）。每个对象包含 `purpose`、
 `service`、`namespace`、`port`、`portName`、`scheme`、`preferred` 和 `url`。
 Python 的 `Plan.summary()` 与 `instance_status()` API 返回相同契约。
-声明纳入 plan digest 并随实例保存。声明的入口还包含 `portSelector`，保留原始端口名或端口号：
-命名端口可跟随 Service 的数字端口变化，数字选择器必须始终匹配所声明的端口号。
-status 会重新验证实时 Service 及其 UID；
-验证失败时返回 `endpointFindings`，并将推理入口设为 `null`。这不代表已验证 HTTP 可达性或模型就绪状态。
+`discoverySource` 和 `reason` 说明发现依据；推断出的入口还包含 `endpointType` 和 `backends`，
+记录工作负载、template、容器及目标端口。结果纳入 plan digest 并随实例保存。
+`portSelector` 保留 Service 端口名或端口号：命名端口可跟随数字端口变化，数字选择器必须精确匹配。
+status 重新验证 UID 匹配的实时资源及可用后端。Service 或后端缺失、被替换、不可读取，
+或目标端口改变时返回 `endpointFindings`，并将推理入口设为 `null`，不会自动改选其他 Service。
+这不代表已验证 HTTP 可达性。
 
-status 保留旧的 `endpoints` URL 列表。未声明用途的端口在 `endpointDetails` 中标为 `unknown`，
-不会被猜成推理入口。workflow 只读取 `inferenceEndpoint.url` 并传给 benchmark；缺失时应失败：
+status 保留旧的 `endpoints` URL 列表。无法识别的端口在 `endpointDetails` 中标为 `unknown`。
+旧实例仅从自身 inventory 自动发现，不扫描 namespace 中的无关资源；原有显式 endpoint 声明不再读取。
+workflow 只读取 `inferenceEndpoint.url` 并传给 benchmark；缺失时应失败：
 
 ```sh
 llmd -o json status my-instance -n my-namespace > status.json

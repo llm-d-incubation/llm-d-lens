@@ -39,66 +39,82 @@ def test_status_finds_pods_through_the_workload_selector(llmrepo, cluster):
     assert "lens.llm-d.ai/instance" not in pod["metadata"]["labels"]
 
 
-def test_status_resolves_declared_inference_without_guessing_metrics(llmrepo, cluster, capsys):
-    (llmrepo / STACK / "lens.yaml").write_text(
-        "endpoints:\n  - purpose: inference\n    service: model-a\n    port: http\n    preferred: true\n"
-    )
+def test_status_discovers_inference_without_guessing_metrics(llmrepo, cluster, capsys):
     kube = stood_up(llmrepo, cluster)
     service = cluster.get("team-a", "services", "model-a")
     service["spec"]["ports"].insert(0, {"name": "metrics", "port": 9090})
     status = instance_status(kube, "team-a", "r1")
     assert status["inferenceEndpoint"]["url"] == "http://model-a.team-a.svc.cluster.local:8000"
     assert status["inferenceEndpoint"]["portName"] == "http"
-    assert status["endpointDetails"][0]["purpose"] == "unknown"
+    assert status["endpointDetails"][0]["purpose"] == "metrics"
     assert status["endpointDetails"][1]["purpose"] == "inference"
     assert not status["endpointFindings"]
     print_status(status)
     output = capsys.readouterr().out
     assert "inference http://model-a.team-a.svc.cluster.local:8000 (Service/model-a, port http)" in output
+    service["spec"]["ports"][1]["targetPort"] = 8000
     service["spec"]["ports"][1]["port"] = 8080
     assert instance_status(kube, "team-a", "r1")["inferenceEndpoint"]["port"] == 8080
     service["spec"]["ports"].pop()
     status = instance_status(kube, "team-a", "r1")
     assert status["inferenceEndpoint"] is None
-    assert status["endpointFindings"][0]["code"] == "endpoint-unresolved"
+    assert any(finding["code"] == "endpoint-unresolved" for finding in status["endpointFindings"])
     print_status(status)
     assert "endpoint-unresolved" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("change", ["replaced", "missing", "unreadable"])
+@pytest.mark.parametrize(
+    "change", ["replaced", "missing", "unreadable", "backend_replaced", "backend_unavailable", "retargeted"]
+)
 def test_status_never_returns_an_unverified_inference_endpoint(llmrepo, cluster, change):
-    (llmrepo / STACK / "lens.yaml").write_text(
-        "endpoints:\n  - purpose: inference\n    service: model-a\n    port: http\n"
-    )
     kube = stood_up(llmrepo, cluster)
     if change == "replaced":
         cluster.get("team-a", "services", "model-a")["metadata"]["uid"] = "replacement"
     elif change == "missing":
         del cluster.objects[("team-a", "services", "model-a")]
-    else:
+    elif change == "unreadable":
         cluster.denied.add(("get", "services"))
+    elif change == "backend_replaced":
+        cluster.get("team-a", "deployments.apps", "model-a")["metadata"]["uid"] = "replacement"
+    elif change == "retargeted":
+        cluster.get("team-a", "services", "model-a")["spec"]["ports"][0]["targetPort"] = 9090
+    else:
+        cluster.get("team-a", "deployments.apps", "model-a")["status"] = {}
+        pod = cluster.get("team-a", "pods", "model-a-0")
+        pod["status"] = {"phase": "Pending"}
     status = instance_status(kube, "team-a", "r1")
     assert status["inferenceEndpoint"] is None
     assert status["endpointFindings"]
 
 
-def test_legacy_instances_do_not_guess_an_inference_endpoint(llmrepo, cluster):
-    status = instance_status(stood_up(llmrepo, cluster), "team-a", "r1")
-    assert status["inferenceEndpoint"] is None
-    assert status["endpointDetails"][0]["purpose"] == "unknown"
+def test_legacy_instances_discover_from_their_own_inventory(llmrepo, cluster):
+    from lens import inventory
 
-
-def test_status_preserves_a_numeric_port_declaration(llmrepo, cluster):
-    (llmrepo / STACK / "lens.yaml").write_text(
-        "endpoints:\n  - purpose: inference\n    service: model-a\n    port: 8000\n"
-    )
     kube = stood_up(llmrepo, cluster)
-    assert instance_status(kube, "team-a", "r1")["inferenceEndpoint"]["portSelector"] == 8000
-    service = cluster.get("team-a", "services", "model-a")
-    service["spec"]["ports"][0]["port"] = 8080
+    record = inventory.require(kube, "team-a", "r1")
+    record["stack"].pop("endpointDiscovery")
+    record["stack"].pop("endpoints")
+    inventory.write(kube, record)
+    status = instance_status(kube, "team-a", "r1")
+    assert status["inferenceEndpoint"]["service"] == "model-a"
+
+
+def test_status_does_not_switch_to_an_unrelated_service(llmrepo, cluster):
+    kube = stood_up(llmrepo, cluster)
+    cluster.put(
+        "team-a",
+        {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {"name": "other-model"},
+            "spec": {"selector": {"app": "model-a"}, "ports": [{"name": "http", "port": 8000}]},
+        },
+    )
+    del cluster.objects[("team-a", "services", "model-a")]
     status = instance_status(kube, "team-a", "r1")
     assert status["inferenceEndpoint"] is None
-    assert status["endpointFindings"][0]["code"] == "endpoint-unresolved"
+    assert not status["endpoints"]
+    assert status["endpointFindings"]
 
 
 def test_pod_problems_and_replaced_objects(llmrepo, cluster):

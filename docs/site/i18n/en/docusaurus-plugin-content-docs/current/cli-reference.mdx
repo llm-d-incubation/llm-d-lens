@@ -5,43 +5,32 @@ description: Command-line tools for running, installing and managing Lens.
 
 ## `llmd` inference endpoints
 
-The Lens engine resolves inference endpoints declared by a stack, rather than asking workflows to
-guess a Service or port. In `guide.yaml`, declare:
-
-```yaml
-lens:
-	endpoints:
-		- purpose: inference
-			service: ${GUIDE_NAME}-router
-			port: http
-			preferred: true
-		- purpose: metrics
-			service: ${GUIDE_NAME}-router
-			port: metrics
-```
-
-Replace the example names with the rendered Service and port names. Guide variables are expanded.
-For kustomize and manifest stacks, use `lens.yaml` in the stack directory (beside a single manifest
-when the stack is a file), with `endpoints:` at the root and no `lens:` wrapper.
-
-`purpose`, `service` and `port` are required. The port is a Service port name or integer port number,
-not `targetPort`. `scheme` accepts `http` (default) or `https`; `preferred` defaults to `false` and
-can be true only for inference. A single inference entry is selected automatically; multiple entries
-require exactly one preferred entry. Invalid declarations, missing Services, unresolved or non-TCP
-ports and ambiguous inference selection block the plan.
+The Lens engine discovers inference endpoints automatically from rendered resources. Guides,
+kustomize and manifest stacks need no endpoint declarations or extra metadata files.
+Service selectors are matched to workload templates, including LeaderWorkerSets and DisaggregatedSets.
+TCP `targetPort` values must match a recognized serving container. Model containers without declared
+ports use `--port`, or 8000 when absent. Envoy/agentgateway routers are preferred over direct
+vLLM/SGLang model access; decode endpoints are preferred over ordinary model endpoints, and prefill-only
+endpoints are excluded. Within a category, non-headless Services are preferred. Internal metrics,
+health, admin and EPP gRPC ports are excluded. Equally eligible endpoints are ambiguous; there is no
+fallback to the first Service or port. Missing or ambiguous inference endpoints produce warnings and
+a null selected endpoint, without blocking deployment.
 
 `llmd -o json plan STACK -n NAMESPACE` and `llmd -o json status INSTANCE -n NAMESPACE` return
 `endpointDetails` and `inferenceEndpoint` (an object or `null`). Each object contains `purpose`,
 `service`, `namespace`, `port`, `portName`, `scheme`, `preferred` and `url`. The same contract is
-returned by the Python `Plan.summary()` and `instance_status()` APIs. Declarations are covered by
-the plan digest and stored with the instance. Declared endpoints also carry `portSelector`, the original
-port name or number. Named ports follow changes to their numeric Service port; numeric selectors must
-still match the exact declared number. Status validates live, UID-matching Services again,
-returning `endpointFindings` and a null inference endpoint on validation failure. This does not
-check HTTP reachability or model readiness.
+returned by the Python `Plan.summary()` and `instance_status()` APIs. `discoverySource` and `reason`
+explain discovery, while inferred endpoints also include `endpointType` and `backends` with the
+workload, template, container and target port. Results are covered by the plan digest and stored
+with the instance. `portSelector` preserves the Service port name or number. Named ports follow
+numeric Service port changes; numeric selectors must still match exactly. Status validates live,
+UID-matching resources and available backing workloads. A missing, replaced or unreadable Service
+or backend, or a changed target port, returns `endpointFindings` and a null inference endpoint,
+without switching to another Service. This is not an HTTP reachability probe.
 
-Status retains the legacy `endpoints` URL list; undeclared ports have purpose `unknown` in
-`endpointDetails` and are never guessed to be inference. A workflow should only extract
+Status retains the legacy `endpoints` URL list; unrecognized ports have purpose `unknown` in
+`endpointDetails`. Older instances discover from their own inventory, not unrelated namespace
+resources. Explicit endpoint declarations are no longer read. A workflow should only extract
 `inferenceEndpoint.url` and pass it to the benchmark, failing if it is absent:
 
 ```sh
