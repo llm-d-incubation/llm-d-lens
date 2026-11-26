@@ -326,7 +326,10 @@ def discover_endpoints(
                 endpoint["purpose"] = "metrics"
             matches = []
             for document, location, template, labels, selector_labels in templates:
-                if document.get("kind") in {"LeaderWorkerSet", "DisaggregatedSet"} and LWS_WORKER_INDEX_LABEL in selector:
+                if (
+                    document.get("kind") in {"LeaderWorkerSet", "DisaggregatedSet"}
+                    and LWS_WORKER_INDEX_LABEL in selector
+                ):
                     worker_index = selector[LWS_WORKER_INDEX_LABEL]
                     if not _lws_worker_index_matches(document, location, worker_index):
                         continue

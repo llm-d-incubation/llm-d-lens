@@ -252,7 +252,9 @@ def test_auto_discovery_revalidation_preserves_disaggregated_role_identity():
     assert findings[0].code == "endpoint-unresolved"
 
 
-@pytest.mark.parametrize("pod_status", [None, {"phase": "Pending", "conditions": [{"type": "Ready", "status": "True"}]}])
+@pytest.mark.parametrize(
+    "pod_status", [None, {"phase": "Pending", "conditions": [{"type": "Ready", "status": "True"}]}]
+)
 def test_auto_discovery_requires_a_ready_running_selected_backend(pod_status):
     resources = endpoint_resources()
     pods = []
