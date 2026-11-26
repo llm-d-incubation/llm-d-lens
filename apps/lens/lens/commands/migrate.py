@@ -111,6 +111,8 @@ def _plan(ctx: Context, side: migration.Side, stack: dict, source, kept: dict[st
             skip_admin_parts=args.skip_admin_parts,
             variables=dict(stack.get("variables") or {}),
             sets=list(stack.get("sets") or []),
+            model_pvc_claim_name=stack.get("modelPvcClaimName", ""),
+            model_subpath=stack.get("modelSubpath", ""),
             overrides=kept,
         ),
         runner=ctx.runner,

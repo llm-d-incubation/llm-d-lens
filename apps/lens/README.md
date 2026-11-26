@@ -89,6 +89,25 @@ what `llmd` did with it:
 
 Gateway Mode needs a cluster Gateway, so `llmd` follows Standalone Mode.
 
+## Model files on a PVC
+
+To serve a model directory already downloaded into a PVC, pass the claim and its
+relative directory to both `plan` and `standup`:
+
+```sh
+llmd plan optimized-baseline -n <namespace> \
+  --model-pvc-claim-name model-weights \
+  --model-subpath models/Qwen3-0.6B --offline
+llmd standup optimized-baseline -n <namespace> \
+  --model-pvc-claim-name model-weights \
+  --model-subpath models/Qwen3-0.6B --wait
+```
+
+`llmd` mounts the existing claim at `/model-cache`, loads the relative directory
+from there, and configures the model server for offline Hugging Face access. The
+claim must already exist; it remains a prerequisite and is not owned or deleted
+by `llmd teardown`.
+
 ## An empty namespace
 
 ```sh

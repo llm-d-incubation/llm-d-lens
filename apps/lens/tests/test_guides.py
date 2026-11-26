@@ -134,6 +134,47 @@ def test_the_router_metrics_rbac_is_an_administrator_part_unless_turned_off(llmr
 
 
 @needs_tools
+def test_plan_mounts_a_model_pvc_subpath_for_the_modelserver(llmrepo, tmp_path, capsys):
+    argv = [
+        "--state-dir",
+        str(tmp_path),
+        "-o",
+        "json",
+        "plan",
+        GUIDE,
+        "--source",
+        str(llmrepo),
+        "-n",
+        "team-a",
+        "--offline",
+        "--set",
+        "router.monitoring.prometheus.auth.enabled=false",
+        "--model-pvc-claim-name",
+        "model-weights",
+        "--model-subpath",
+        "models/Qwen3-0.6B",
+    ]
+    assert main(argv) == 0
+    summary = json.loads(capsys.readouterr().out)
+    deployment = next(
+        doc
+        for doc in summary["documents"]
+        if doc["kind"] == "Deployment"
+        and any(container["name"] == "modelserver" for container in doc["spec"]["template"]["spec"]["containers"])
+    )
+    pod = deployment["spec"]["template"]["spec"]
+    container = next(item for item in pod["containers"] if item["name"] == "modelserver")
+    assert {"name": "model-cache", "persistentVolumeClaim": {"claimName": "model-weights"}} in pod["volumes"]
+    assert {"name": "model-cache", "mountPath": "/model-cache"} in container["volumeMounts"]
+    assert container["args"][0] == "/model-cache/models/Qwen3-0.6B"
+    assert "command" not in container
+    assert {"name": "HF_HUB_OFFLINE", "value": "1"} in container["env"]
+    assert summary["choices"]["modelPvcClaimName"] == "model-weights"
+    assert summary["choices"]["modelSubpath"] == "models/Qwen3-0.6B"
+    assert any(item["kind"] == "PersistentVolumeClaim" and item["name"] == "model-weights" for item in summary["prerequisites"])
+
+
+@needs_tools
 def test_stacks_and_render_commands_for_a_guide(llmrepo, tmp_path, capsys):
     state = ["--state-dir", str(tmp_path)]
     assert main([*state, "stacks", "demo-baseline", "--source", str(llmrepo)]) == 0

@@ -42,6 +42,18 @@ def add_plan_arguments(parser: argparse.ArgumentParser) -> None:
         "takes it (repeatable)",
     )
     parser.add_argument(
+        "--model-pvc-claim-name",
+        default="",
+        metavar="CLAIM",
+        help="mount this existing PVC at /model-cache for modelserver containers",
+    )
+    parser.add_argument(
+        "--model-subpath",
+        default="",
+        metavar="PATH",
+        help="relative model directory inside the PVC (for example models/Qwen3-0.6B)",
+    )
+    parser.add_argument(
         "--allow-privileged",
         action="store_true",
         help="acknowledge privileged containers, host namespaces, hostPath volumes and SCC bindings "
@@ -85,6 +97,8 @@ def plan_from_args(ctx: Context, kube: Kube | None, *, label: bool = True) -> Pl
         switch_stack=getattr(args, "switch_stack", False),
         variables=parse_variables(args.var),
         sets=list(args.sets),
+        model_pvc_claim_name=args.model_pvc_claim_name,
+        model_subpath=args.model_subpath,
         # Counts set with `llmd scale` stay until cleared, so an update does not set them back.
         overrides=dict((record or {}).get("overrides") or {}),
     )
