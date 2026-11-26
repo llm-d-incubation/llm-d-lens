@@ -147,6 +147,8 @@ def test_plan_mounts_a_model_pvc_subpath_for_the_modelserver(llmrepo, tmp_path, 
         "-n",
         "team-a",
         "--offline",
+        "--var",
+        "MODEL=Qwen/Qwen3-0.6B",
         "--set",
         "router.monitoring.prometheus.auth.enabled=false",
         "--model-pvc-claim-name",
@@ -167,6 +169,8 @@ def test_plan_mounts_a_model_pvc_subpath_for_the_modelserver(llmrepo, tmp_path, 
     assert {"name": "model-cache", "persistentVolumeClaim": {"claimName": "model-weights"}} in pod["volumes"]
     assert {"name": "model-cache", "mountPath": "/model-cache"} in container["volumeMounts"]
     assert container["args"][0] == "/model-cache/models/Qwen3-0.6B"
+    served_name_index = container["args"].index("--served-model-name")
+    assert container["args"][served_name_index + 1] == "Qwen/Qwen3-0.6B"
     assert "command" not in container
     assert {"name": "HF_HUB_OFFLINE", "value": "1"} in container["env"]
     assert summary["choices"]["modelPvcClaimName"] == "model-weights"

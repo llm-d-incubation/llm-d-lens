@@ -45,11 +45,23 @@ def test_model_pvc_supports_direct_server_argument_layouts(container):
     assert values[-2:] == ["--served-model-name", "original"]
 
 
-@pytest.mark.parametrize("alias", [["--served-model-name", "public"], ["--served-model-name=public"]])
-def test_model_pvc_keeps_explicit_api_model_names(alias):
+@pytest.mark.parametrize(
+    ("alias", "expected"),
+    [
+        (["--served-model-name", "public"], ["--served-model-name", "original"]),
+        (["--served-model-name=public"], ["--served-model-name=original"]),
+    ],
+)
+def test_model_pvc_rewrites_explicit_api_model_names_to_original_model(alias, expected):
     container = {"command": ["vllm", "serve"], "args": ["original", *alias]}
     _set_model_argument(container, "/model-cache/model")
-    assert container["args"] == ["/model-cache/model", *alias]
+    assert container["args"] == ["/model-cache/model", *expected]
+
+
+def test_model_pvc_uses_requested_guide_model_as_api_name():
+    container = {"command": ["vllm", "serve"], "args": ["guide-model", "--served-model-name=guide-alias"]}
+    _set_model_argument(container, "/model-cache/model", "requested/model")
+    assert container["args"] == ["/model-cache/model", "--served-model-name=requested/model"]
 
 
 @pytest.mark.parametrize(

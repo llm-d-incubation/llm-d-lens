@@ -134,7 +134,11 @@ def discovered_scope(kube) -> ScopeResolver:
 
 
 def _apply_model_pvc(
-    documents: list[dict[str, Any]], claim_name: str, subpath: str, container_names: list[str] | None = None
+    documents: list[dict[str, Any]],
+    claim_name: str,
+    subpath: str,
+    container_names: list[str] | None = None,
+    served_model_name: str = "",
 ) -> None:
     if not claim_name:
         if subpath or container_names:
@@ -189,7 +193,7 @@ def _apply_model_pvc(
                     raise UsageError("the modelserver container already defines a different model-cache mount")
                 if not existing_mounts:
                     mounts.append(mount)
-                _set_model_argument(container, model_path)
+                _set_model_argument(container, model_path, served_model_name)
                 env = container.get("env") or []
                 container["env"] = env
                 for name, value in env_values.items():
@@ -201,7 +205,7 @@ def _apply_model_pvc(
         raise UsageError("the selected stack has no modelserver container; select one with --model-container NAME")
 
 
-def _set_model_argument(container: dict[str, Any], model_path: str) -> None:
+def _set_model_argument(container: dict[str, Any], model_path: str, served_model_name: str = "") -> None:
     command = container.get("command") or []
     args = container.get("args") or []
     values = [*command, *args]
@@ -243,8 +247,22 @@ def _set_model_argument(container: dict[str, Any], model_path: str) -> None:
             raise UsageError("cannot identify the model argument in the modelserver container")
         original_model = values[position]
         values[position] = model_path
-    if not any(value == "--served-model-name" or value.startswith("--served-model-name=") for value in values):
-        values.extend(["--served-model-name", original_model])
+    api_model_name = served_model_name or original_model
+    served_model_arguments = [
+        index
+        for index, value in enumerate(values)
+        if value == "--served-model-name" or value.startswith("--served-model-name=")
+    ]
+    if not served_model_arguments:
+        values.extend(["--served-model-name", api_model_name])
+    else:
+        for index in served_model_arguments:
+            if values[index] == "--served-model-name":
+                if index + 1 == len(values) or values[index + 1].startswith("-"):
+                    raise UsageError("--served-model-name has no model name in the modelserver container")
+                values[index + 1] = api_model_name
+            else:
+                values[index] = "--served-model-name=" + api_model_name
     if "command" in container or command:
         container["command"] = values[: len(command)]
     if "args" in container or values[len(command) :]:
@@ -280,7 +298,13 @@ def make_plan(
         scope=scope,
     )
     documents = copy.deepcopy(rendered.documents)
-    _apply_model_pvc(documents, options.model_pvc_claim_name, options.model_subpath, options.model_containers)
+    _apply_model_pvc(
+        documents,
+        options.model_pvc_claim_name,
+        options.model_subpath,
+        options.model_containers,
+        options.variables.get("MODEL", "") if stack.kind == "guide" else "",
+    )
     scaled = overrides.apply(documents, options.overrides)
     policy = apply_policy(documents, context)
     policy.findings[:0] = rendered.findings
