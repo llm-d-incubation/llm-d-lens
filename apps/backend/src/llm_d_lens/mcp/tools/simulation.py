@@ -64,7 +64,7 @@ class StartSimulationInput(BaseModel):
     scale_factor: float = Field(
         1.0, gt=0, le=50, description="Speed-up of the trace; only datasets whose format supports it accept != 1."
     )
-    backend: str | None = Field(None, description="Replay backend; default is the dataset's preferred one.")
+    backend: str | None = Field(None, description="Replay backend; defaults to 'aiperf'.")
     name: str | None = Field(None, max_length=120, description="Display name; generated when omitted.")
 
 
@@ -201,8 +201,8 @@ async def _pick_backend(
     ctx: ToolContext, dataset: dict[str, Any], requested: str | None, scale: float
 ) -> tuple[str, bool]:
     """Return the backend name and whether it accepts a source-time range for this dataset's format."""
-    supported = dataset.get("supported_backends") or []
-    name = requested or ("trace-replayer" if "trace-replayer" in supported else (supported or [None])[0])
+    supported = [b for b in (dataset.get("supported_backends") or []) if b != "trace-replayer"]
+    name = requested or ("aiperf" if "aiperf" in supported else (supported or [None])[0])
     if not name or name not in supported:
         raise ToolError(
             "unsupported_combination",

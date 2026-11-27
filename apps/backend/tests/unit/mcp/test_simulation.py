@@ -20,7 +20,7 @@ DATASETS = {
             "path": "/data/qwen_thinking.jsonl",
             "size_bytes": 1000,
             "license": "Apache-2.0",
-            "supported_backends": ["aiperf", "trace-replayer"],
+            "supported_backends": ["aiperf"],
         },
         {
             "name": "bailian-coder",
@@ -28,14 +28,14 @@ DATASETS = {
             "trace_format": "bailian_trace",
             "downloaded": False,
             "path": "/data/qwen_coder.jsonl",
-            "supported_backends": ["trace-replayer"],
+            "supported_backends": ["aiperf"],
         },
     ]
 }
 BACKENDS = {
     "backends": [
         {
-            "name": "trace-replayer",
+            "name": "aiperf",
             "available": True,
             "capabilities": {
                 "trace_formats": ["bailian_trace"],
@@ -44,7 +44,6 @@ BACKENDS = {
                 },
             },
         },
-        {"name": "aiperf", "available": True, "capabilities": {"trace_formats": ["bailian_trace"]}},
     ]
 }
 EXECUTION = {
@@ -150,9 +149,28 @@ async def test_start_simulation_sends_the_deployment_target(api, sim_ctx):
     assert payload["simulation_id"] == "ab12cd34" and payload["status"] == "queued"
     (body,) = api.called("POST", "/simulation/tasks")
     assert body["endpoint_mode"] == "deployment" and body["endpoint_deployment_execution_id"] == EXECUTION_ID
-    assert body["scenario"] == "chat" and body["backend"] == "trace-replayer"
+    assert body["scenario"] == "chat" and body["backend"] == "aiperf"
     assert body["trace_path"] == "/data/qwen_thinking.jsonl" and body["trace_end_seconds"] == 30
     assert "scale_factor" not in body and body["model_name"] == "Qwen/Qwen3-0.6B"
+
+
+@pytest.mark.asyncio
+async def test_start_simulation_rejects_retired_trace_replayer_backend(api, sim_ctx):
+    target = own_deployment(api)
+    sim_routes(api)
+    stale_datasets = {
+        "datasets": [
+            {
+                **DATASETS["datasets"][0],
+                "supported_backends": ["aiperf", "trace-replayer"],
+            },
+            DATASETS["datasets"][1],
+        ]
+    }
+    api.on("GET", "/simulation/trace-datasets", stale_datasets)
+    payload, is_error = await start(sim_ctx, target_id=target, backend="trace-replayer")
+    assert is_error and payload["error"]["code"] == "unsupported_combination"
+    assert api.called("POST", "/simulation/tasks") == []
 
 
 @pytest.mark.asyncio

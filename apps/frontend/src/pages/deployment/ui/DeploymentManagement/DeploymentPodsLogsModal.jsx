@@ -16,7 +16,7 @@ import {
     getDeploymentExecutionPodLogs,
     getDeploymentExecutionPods,
 } from '../../../optimization';
-import { deploymentTitle } from './deploymentPresentation';
+import { deploymentTitle, formatPodStatusLabel } from './deploymentPresentation';
 import { PodStatusBadge } from './PodStatusBadge';
 
 export function DeploymentPodsLogsModal({ deployment, clusterNameById = {}, onClose }) {
@@ -149,12 +149,14 @@ export function DeploymentPodsLogsModal({ deployment, clusterNameById = {}, onCl
             }
             if (podSearchQuery.trim()) {
                 const q = podSearchQuery.toLowerCase();
+                const statusLabel = formatPodStatusLabel(p).toLowerCase();
                 const matches =
                     p.name?.toLowerCase().includes(q) ||
                     p.pod_ip?.toLowerCase().includes(q) ||
                     p.node_name?.toLowerCase().includes(q) ||
                     p.phase?.toLowerCase().includes(q) ||
-                    p.status_reason?.toLowerCase().includes(q);
+                    p.status_reason?.toLowerCase().includes(q) ||
+                    statusLabel.includes(q);
                 if (!matches) return false;
             }
             return true;
@@ -281,7 +283,7 @@ export function DeploymentPodsLogsModal({ deployment, clusterNameById = {}, onCl
                                         tabIndex={0}
                                         onClick={() => setSelectedPodName(pod.name)}
                                         onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedPodName(pod.name); } }}
-                                        title={`Pod: ${pod.name}\nStatus: ${pod.status_reason || pod.phase || 'Unknown'}${pod.ready ? ' (Ready)' : ''}\nNode: ${pod.node_name || '—'}\nIP: ${pod.pod_ip || '—'}${pod.restarts ? `\nRestarts: ${pod.restarts}` : ''}`}
+                                        title={`Pod: ${pod.name}\nStatus: ${formatPodStatusLabel(pod)}${pod.ready ? ' (Ready)' : ''}\nNode: ${pod.node_name || '—'}\nIP: ${pod.pod_ip || '—'}${pod.restarts ? `\nRestarts: ${pod.restarts}` : ''}`}
                                         className={`cursor-pointer rounded-lg border px-2.5 py-1.5 min-h-[44px] transition-all text-xs flex items-center justify-between gap-2 min-w-0 ${
                                             isSelected
                                                 ? 'border-cyan-500 bg-cyan-950/40 text-white font-medium ring-1 ring-cyan-500/50 dark:shadow-sm'

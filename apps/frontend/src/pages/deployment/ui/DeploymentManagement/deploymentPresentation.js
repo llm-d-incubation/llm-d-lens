@@ -107,14 +107,42 @@ const POD_HARD_FAILURE_REASONS = new Set([
 const POD_RETRYABLE_FAILURE_REASONS = new Set(['CrashLoopBackOff', 'Error']);
 const RETRYABLE_FAILURE_RESTART_THRESHOLD = 3;
 
-function isFailingPod(pod) {
+function stripInitPrefix(reason) {
+    if (typeof reason !== 'string') return '';
+    return reason.startsWith('Init:') ? reason.slice(5) : reason;
+}
+
+function isRetryableFailureBaseReason(baseReason) {
+    return POD_RETRYABLE_FAILURE_REASONS.has(baseReason)
+        || baseReason.startsWith('ExitCode:')
+        || baseReason.startsWith('Signal:');
+}
+
+export function isPodFailureReason(reason) {
+    const base = stripInitPrefix(reason);
+    if (!base) return false;
+    return POD_HARD_FAILURE_REASONS.has(base) || isRetryableFailureBaseReason(base);
+}
+
+export function isFailingPod(pod) {
     if (!pod) return false;
     if (pod.phase === 'Failed') return true;
-    if (POD_HARD_FAILURE_REASONS.has(pod.status_reason)) return true;
-    if (POD_RETRYABLE_FAILURE_REASONS.has(pod.status_reason)) {
+    const base = stripInitPrefix(pod.status_reason);
+    if (!base) return false;
+    if (POD_HARD_FAILURE_REASONS.has(base)) return true;
+    if (isRetryableFailureBaseReason(base)) {
         return (pod.restarts || 0) >= RETRYABLE_FAILURE_RESTART_THRESHOLD;
     }
     return false;
+}
+
+export function formatPodStatusLabel(pod) {
+    const { phase, reason, status_reason, ready } = pod || {};
+    const resolvedReason = reason ?? status_reason;
+    if (phase === 'Running' && !ready && (!resolvedReason || resolvedReason === 'Running')) {
+        return 'Starting';
+    }
+    return resolvedReason || phase || 'Unknown';
 }
 
 // Derive a status group purely from live pod data, independent of the

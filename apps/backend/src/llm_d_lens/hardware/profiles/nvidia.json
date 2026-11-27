@@ -60,7 +60,10 @@
     "device_metric_sources": {
       "utilization": { "metric": "DCGM_FI_DEV_GPU_UTIL", "unit": "percent", "output_unit": "percent", "aggregation": "avg", "tile_aggregation": "avg" },
       "framebuffer_used": { "metric": "DCGM_FI_DEV_FB_USED", "unit": "bytes", "scale": 1048576, "output_unit": "bytes", "aggregation": "sum", "tile_aggregation": "sum" },
-      "memory_bandwidth_utilization": { "metric": "DCGM_FI_PROF_DRAM_ACTIVE", "unit": "ratio", "scale": 100, "output_unit": "percent", "aggregation": "avg", "tile_aggregation": "avg" }
+      "framebuffer_free": { "metric": "DCGM_FI_DEV_FB_FREE", "unit": "bytes", "scale": 1048576, "output_unit": "bytes", "aggregation": "sum", "tile_aggregation": "sum" },
+      "memory_bandwidth_utilization": { "metric": "DCGM_FI_PROF_DRAM_ACTIVE", "unit": "ratio", "scale": 100, "output_unit": "percent", "aggregation": "avg", "tile_aggregation": "avg" },
+      "power": { "metric": "DCGM_FI_DEV_POWER_USAGE", "unit": "watt", "output_unit": "watt", "aggregation": "sum", "tile_aggregation": "sum" },
+      "temperature": { "metric": "DCGM_FI_DEV_GPU_TEMP", "unit": "celsius", "output_unit": "celsius", "aggregation": "avg", "tile_aggregation": "avg" }
     },
     "label_schema": { "node": "Hostname", "device": "gpu", "uuid": "UUID", "namespace": "namespace", "pod": "pod", "name": "modelName", "fallback_device": "UUID" },
     "allocation_join": "none",

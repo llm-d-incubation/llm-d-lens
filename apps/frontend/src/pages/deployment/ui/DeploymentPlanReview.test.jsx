@@ -1219,3 +1219,155 @@ test('DeploymentSummary disables Recheck resources while adminHandoff is generat
         assert.match(html, /<button[^>]*disabled=""[^>]*>Recheck resources<\/button>/);
     }
 });
+
+test('DeploymentSummary renders collapsed preflight scope notes without configuration warning alert when warnings are empty', () => {
+    const notes = [
+        'Node capacity derived from Prometheus metrics (cluster-wide Kubernetes read restricted).',
+        'Admission, quota, competing scheduling and rollout surge are not reserved or simulated',
+    ];
+    for (const planPatch of [
+        { validation: { status: 'resources_checked', warnings: [], unmodeled: [...notes, notes[0]] } },
+        { validation: { status: 'resources_checked', warnings: [], hardware: { unmodeled: notes } } },
+        {
+            validation: { status: 'resources_checked', warnings: [] },
+            source_bundle: { files: [{ name: 'deployment.yaml', content: 'manifest' }], validation: { unmodeled: notes } },
+        },
+        {
+            validation: { status: 'resources_checked', warnings: [] },
+            source_bundle: { files: [{ name: 'deployment.yaml', content: 'manifest' }], validation: { hardware: { unmodeled: notes } } },
+        },
+    ]) {
+        const run = {
+            ...summaryRun(),
+            configuration_plan: {
+                ...summaryRun().configuration_plan,
+                ...planPatch,
+            },
+        };
+        const html = renderToStaticMarkup(<DeploymentSummary run={run} draft={summaryDraft} endpoint="inference:80" />);
+        assert.doesNotMatch(html, /configuration warning/);
+        assert.match(html, /<details class="deployment-check deployment-tone-neutral flex-col"><summary[^>]*>.*?Preflight scope notes \(2\)<\/summary>/);
+        assert.doesNotMatch(html, /<details class="deployment-check deployment-tone-neutral flex-col"[^>]*open/);
+        for (const note of notes) {
+            assert.match(html, new RegExp(note.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+        }
+    }
+});
+
+test('DeploymentSummary sanitizes malformed unmodeled entries and merges distinct notes across locations', () => {
+    const run = {
+        ...summaryRun(),
+        configuration_plan: {
+            ...summaryRun().configuration_plan,
+            validation: {
+                status: 'resources_checked',
+                warnings: [],
+                unmodeled: [null, '', '   ', '\t', { bad: true }, '  Note from validation  '],
+                hardware: { unmodeled: ['Note from validation', 'Note from validation hardware'] },
+            },
+            source_bundle: {
+                files: [{ name: 'deployment.yaml', content: 'manifest' }],
+                validation: {
+                    unmodeled: ['  Note from bundle  ', 'Note from validation hardware'],
+                    hardware: { unmodeled: ['Note from bundle hardware', 42] },
+                },
+            },
+        },
+    };
+    const html = renderToStaticMarkup(<DeploymentSummary run={run} draft={summaryDraft} endpoint="inference:80" />);
+    assert.doesNotMatch(html, /configuration warning/);
+    assert.match(html, /Preflight scope notes \(4\)/);
+    assert.match(html, /<li>Note from validation<\/li>/);
+    assert.match(html, /<li>Note from validation hardware<\/li>/);
+    assert.match(html, /<li>Note from bundle<\/li>/);
+    assert.match(html, /<li>Note from bundle hardware<\/li>/);
+
+    const dirtyOnlyRun = {
+        ...summaryRun(),
+        configuration_plan: {
+            ...summaryRun().configuration_plan,
+            validation: {
+                status: 'resources_checked',
+                warnings: [],
+                unmodeled: 'not-an-array',
+                hardware: { unmodeled: [null, '', '   ', '\t', { bad: true }] },
+            },
+            source_bundle: {
+                files: [{ name: 'deployment.yaml', content: 'manifest' }],
+                validation: { unmodeled: 123 },
+            },
+        },
+    };
+    const dirtyHtml = renderToStaticMarkup(<DeploymentSummary run={dirtyOnlyRun} draft={summaryDraft} endpoint="inference:80" />);
+    assert.doesNotMatch(dirtyHtml, /Preflight scope notes/);
+});
+
+test('DeploymentSummary renders N configuration warning(s) alongside preflight scope notes when warnings are non-empty', () => {
+    const run = summaryRun();
+    run.configuration_plan.validation = {
+        status: 'resources_checked',
+        warnings: ['Could not verify external PVC/weights (403 Forbidden).', 'Check storage access on each node.'],
+        unmodeled: ['Admission, quota, competing scheduling and rollout surge are not reserved or simulated'],
+    };
+    const html = renderToStaticMarkup(<DeploymentSummary run={run} draft={summaryDraft} />);
+    assert.match(html, /2 configuration warnings/);
+    assert.match(html, /Could not verify external PVC\/weights \(403 Forbidden\)\./);
+    assert.match(html, /Check storage access on each node\./);
+    assert.match(html, /<details class="deployment-check deployment-tone-neutral flex-col"><summary[^>]*>.*?Preflight scope notes \(1\)<\/summary>/);
+    assert.doesNotMatch(html, /<details class="deployment-check deployment-tone-neutral flex-col"[^>]*open/);
+});
+
+test('DeploymentPlanReview Checks tab falls back and merges sanitized preflight scope notes across validation and hardware', async (t) => {
+    await withWorkflowDom(
+        t,
+        async () => {
+            throw new Error('Unexpected fetch');
+        },
+        async ({ root, doc, clickButton }) => {
+            await act(async () => {
+                root.render(
+                    <DeploymentPlanReview
+                        content={'apiVersion: v1\nkind: Service\nmetadata:\n  name: endpoint'}
+                        validation={{
+                            status: 'resources_checked',
+                            warnings: [],
+                            unmodeled: [null, '   ', { bad: true }],
+                            hardware: {
+                                unmodeled: [
+                                    '  Admission, quota, competing scheduling and rollout surge are not reserved or simulated  ',
+                                    'Admission, quota, competing scheduling and rollout surge are not reserved or simulated',
+                                ],
+                            },
+                        }}
+                    />,
+                );
+            });
+            await clickButton(/^Checks$/);
+            const detailsList = findElements(doc.body, (el) => el.tagName === 'DETAILS');
+            const scopeDetails = detailsList.find((el) => /Preflight scope notes \(1\)/.test(el.textContent));
+            assert.ok(scopeDetails, 'Expected collapsed Preflight scope notes details element in Checks tab');
+            assert.equal(scopeDetails.hasAttribute('open'), false);
+            assert.match(scopeDetails.textContent, /Admission, quota, competing scheduling and rollout surge are not reserved or simulated/);
+            assert.equal(detailsList.some((el) => /warnings/.test(el.textContent)), false);
+
+            await act(async () => {
+                root.render(
+                    <DeploymentPlanReview
+                        content={'apiVersion: v1\nkind: Service\nmetadata:\n  name: endpoint'}
+                        validation={{
+                            status: 'resources_checked',
+                            warnings: [],
+                            unmodeled: ['Top-level scope note'],
+                            hardware: { unmodeled: ['Top-level scope note', 'Hardware scope note'] },
+                        }}
+                    />,
+                );
+            });
+            const updatedDetails = findElements(doc.body, (el) => el.tagName === 'DETAILS');
+            const mergedScope = updatedDetails.find((el) => /Preflight scope notes \(2\)/.test(el.textContent));
+            assert.ok(mergedScope, 'Expected merged Preflight scope notes (2) in Checks tab');
+            assert.match(mergedScope.textContent, /Top-level scope note/);
+            assert.match(mergedScope.textContent, /Hardware scope note/);
+        },
+    );
+});

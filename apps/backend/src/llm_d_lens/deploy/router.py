@@ -980,6 +980,89 @@ def _resolve_execution_cluster_id(context) -> str | None:
     return None
 
 
+def _derive_pod_status_reason(item: dict) -> str:
+    """Derive a kubectl-style pod status reason from a Kubernetes Pod object."""
+    metadata = item.get("metadata") or {}
+    status = item.get("status") or {}
+    spec = item.get("spec") or {}
+
+    reason = status.get("reason") or status.get("phase") or "Unknown"
+    init_restart_policies = {
+        c.get("name"): c.get("restartPolicy") for c in (spec.get("initContainers") or []) if c.get("name")
+    }
+    init_statuses = status.get("initContainerStatuses") or []
+    init_total = len(spec.get("initContainers") or []) or len(init_statuses)
+
+    initializing = False
+    for index, cs in enumerate(init_statuses):
+        state = cs.get("state") or {}
+        is_sidecar = init_restart_policies.get(cs.get("name")) == "Always"
+        if "terminated" in state and state["terminated"] is not None:
+            term = state["terminated"]
+            exit_code = term.get("exitCode", 0)
+            signal = term.get("signal")
+            if exit_code == 0 and not signal:
+                continue
+            if term.get("reason"):
+                reason = f"Init:{term['reason']}"
+            elif signal:
+                reason = f"Init:Signal:{signal}"
+            else:
+                reason = f"Init:ExitCode:{exit_code}"
+            initializing = True
+            break
+        if "waiting" in state and state["waiting"] is not None:
+            wait_reason = state["waiting"].get("reason") or ""
+            reason = (
+                f"Init:{wait_reason}"
+                if wait_reason and wait_reason != "PodInitializing"
+                else f"Init:{index}/{init_total}"
+            )
+            initializing = True
+            break
+        if "running" in state and state["running"] is not None:
+            if is_sidecar and cs.get("started"):
+                continue
+            reason = f"Init:{index}/{init_total}"
+            initializing = True
+            break
+        reason = f"Init:{index}/{init_total}"
+        initializing = True
+        break
+
+    if not initializing:
+        container_statuses = status.get("containerStatuses") or status.get("container_statuses") or []
+        has_running_any = any(
+            "running" in (cs.get("state") or {}) and (cs.get("state") or {})["running"] is not None
+            for cs in container_statuses
+        )
+        active_reason: str | None = None
+        completed_reason: str | None = None
+        for cs in reversed(container_statuses):
+            state = cs.get("state") or {}
+            waiting = state.get("waiting")
+            terminated = state.get("terminated")
+            if waiting and waiting.get("reason"):
+                active_reason = waiting["reason"]
+            elif "terminated" in state and terminated is not None:
+                exit_code = terminated.get("exitCode", 0)
+                signal = terminated.get("signal")
+                t_reason = terminated.get("reason") or (f"Signal:{signal}" if signal else f"ExitCode:{exit_code}")
+                if exit_code != 0 or signal:
+                    active_reason = t_reason
+                else:
+                    completed_reason = t_reason
+        if active_reason is not None:
+            reason = active_reason
+        elif completed_reason is not None:
+            reason = "Running" if has_running_any and status.get("phase") != "Succeeded" else completed_reason
+
+    if metadata.get("deletionTimestamp"):
+        reason = "Unknown" if status.get("reason") == "NodeLost" else "Terminating"
+
+    return reason
+
+
 def _has_phase1_cleanup_completed(context) -> bool:
     """Return True when execution diagnostics record completed Phase 1 namespace cleanup."""
     execution = getattr(context, "execution", None)
@@ -1016,14 +1099,7 @@ def _map_k8s_pod_item(item: dict) -> dict:
     restarts = sum(cs.get("restartCount", 0) for cs in container_statuses) + sum(
         cs.get("restartCount", 0) for cs in init_statuses
     )
-
-    status_reason = status.get("phase", "Unknown")
-    for cs in container_statuses + init_statuses:
-        state = cs.get("state") or {}
-        if "waiting" in state:
-            status_reason = state["waiting"].get("reason") or status_reason
-        elif "terminated" in state and state["terminated"].get("reason"):
-            status_reason = state["terminated"].get("reason")
+    status_reason = _derive_pod_status_reason(item)
 
     containers = []
     for cs in container_statuses:
@@ -1053,6 +1129,7 @@ def _map_k8s_pod_item(item: dict) -> dict:
         "labels": metadata.get("labels") or {},
         "phase": status.get("phase", "Unknown"),
         "ready": ready,
+        "deleting": bool(metadata.get("deletionTimestamp")),
         "pod_ip": status.get("podIP"),
         "node_name": spec.get("nodeName"),
         "restarts": restarts,

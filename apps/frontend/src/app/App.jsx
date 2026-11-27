@@ -250,7 +250,7 @@ function AuthenticatedApp({ initialView = null, theme, onToggleTheme }) {
       else params.delete(urlKey);
       resolvedParams[key] = value || null;
     };
-    assign('action', ['clusters', 'admin/model-service', 'model-cache', 'optimization-simulate', 'ai-providers', 'storage-management'].includes(view) ? extraParams?.action || null : null);
+    assign('action', ['clusters', 'admin/model-service', 'model-cache', 'optimization-simulate', 'ai-providers', 'storage-management', 'api-keys'].includes(view) ? extraParams?.action || null : null);
     assign('groupId', view === 'admin/model-service' ? extraParams?.groupId || null : null);
     assign('executionId', ['cluster-monitoring-stack', 'admin/model-service'].includes(view) ? extraParams?.executionId || null : null);
     assign('volumeId', view === 'storage-management' ? extraParams?.volumeId || null : null);
@@ -351,7 +351,7 @@ function AuthenticatedApp({ initialView = null, theme, onToggleTheme }) {
             {currentView === 'model-cache' && <ModelCachePage onNavigate={handleNavigate} initialClusterId={navigationParams.clusterId || ''} initialEntryId={navigationParams.entryId || ''} initialAction={navigationParams.action || ''} initialDownload={navigationParams.downloadModel} onDownloadHandled={() => setNavigationParams((current) => ({ ...current, downloadModel: null }))} onNavigateBack={cacheFromModelMarket ? () => handleNavigate('model-market') : undefined} />}
             {currentView === 'ai-providers' && <AIProvidersPage initialAction={navigationParams.action || ''} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'model-service' && <ModelServicePage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
-            {currentView === 'api-keys' && <ApiKeysPage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
+            {currentView === 'api-keys' && <ApiKeysPage initialAction={navigationParams.action || ''} onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'usage' && <ModelUsagePage mode="self" onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'playground' && <PlaygroundPage onToggleMobileNav={() => setIsMobileNavOpen(!isMobileNavOpen)} />}
             {currentView === 'optimization-deployments' && <DeploymentManagementPage key={JSON.stringify([navigationParams.deploymentSearch, navigationParams.clusterId])} initialSearch={navigationParams.deploymentSearch} initialClusterId={navigationParams.clusterId || ''} onNavigate={handleNavigate} />}

@@ -24,6 +24,7 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import shlex
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -37,16 +38,18 @@ from .errors import SimulationCancelledError, SimulationConfigurationError, Simu
 from .models import SimulationTask
 from .process import CommandResult, RunContext, _copy_stream, terminate_process, utc_now
 from .progress import report_request_progress
+from .telemetry_live import redact_secret_text
 from .traces import BaseTrace
 
 _IMAGE_ENV_VAR = "SIMULATION_INCLUSTER_IMAGE"
 _DEFAULT_INCLUSTER_IMAGE = "python:3.12-slim"
 _AIPERF_IMAGE_ENV_VAR = "SIMULATION_AIPERF_INCLUSTER_IMAGE"
+_DEFAULT_AIPERF_VERSION = "0.14.0"
 # AIPerf publishes a ready-to-run image with the exact pinned CLI version
 # already installed (at ``/opt/aiperf/venv/bin/aiperf``, already on ``PATH``),
 # so in-cluster aiperf runs use it directly instead of ``pip install``-ing
 # aiperf on top of a bare Python image on every pod launch.
-_DEFAULT_AIPERF_INCLUSTER_IMAGE = "nvcr.io/nvidia/ai-dynamo/aiperf:0.12.0"
+_DEFAULT_AIPERF_INCLUSTER_IMAGE = f"nvcr.io/nvidia/ai-dynamo/aiperf:{_DEFAULT_AIPERF_VERSION}"
 _POD_LABEL = "llm-d-lens-simulation-runner"
 _POD_STARTUP_TIMEOUT_SECONDS = 120
 _POD_STARTUP_POLL_SECONDS = 2
@@ -77,9 +80,16 @@ def incluster_image(tool_name: str | None = None) -> str:
 #: host side to anchor the "tool ready" timestamp/elapsed-time clock instead
 #: of using the moment the pod/staging process merely begins.
 _TOOL_READY_SENTINEL = "__llm_d_lens_tool_ready__"
+_ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
-def _pod_exec_command(executable: str, args: Sequence[str], *, executable_copied: bool) -> str:
+def _pod_exec_command(
+    executable: str,
+    args: Sequence[str],
+    *,
+    executable_copied: bool,
+    env: Mapping[str, str] | None = None,
+) -> str:
     """Build the command string to run inside the pod, installing tools on demand if needed.
 
     ``executable`` is resolved on the *host* (e.g. ``<venv>/bin/aiperf``) and is
@@ -93,11 +103,19 @@ def _pod_exec_command(executable: str, args: Sequence[str], *, executable_copied
     """
     arg_list = [str(argument) for argument in args]
     bootstrap = "export PATH=/root/.local/bin:$PATH; "
+    env_exports = ""
+    if env:
+        export_parts: list[str] = []
+        for key, value in env.items():
+            if not _ENV_NAME_RE.fullmatch(key):
+                raise SimulationConfigurationError(f"Invalid environment variable name: {key}")
+            export_parts.append(f"export {key}={shlex.quote(str(value))}; ")
+        env_exports = "".join(export_parts)
     tool_name = Path(executable).name
     ready_marker = f"printf '%s\\n' {shlex.quote(_TOOL_READY_SENTINEL)} 1>&2; "
     if executable_copied:
         full_cmd = shlex.join([executable, *arg_list])
-        return f"{bootstrap}{ready_marker}{full_cmd}"
+        return f"{bootstrap}{ready_marker}{env_exports}{full_cmd}"
     if tool_name == "aiperf":
         # The official aiperf image already has this on PATH -- this branch
         # only self-installs via pip as a fallback for callers who override
@@ -105,22 +123,13 @@ def _pod_exec_command(executable: str, args: Sequence[str], *, executable_copied
         full_cmd = shlex.join(["aiperf", *arg_list])
         bootstrap += (
             "if ! command -v aiperf >/dev/null 2>&1; then "
-            "  pip install --no-cache-dir --disable-pip-version-check aiperf==0.12.0 "
+            f"  pip install --no-cache-dir --disable-pip-version-check aiperf=={_DEFAULT_AIPERF_VERSION} "
             "|| pip install --no-cache-dir aiperf; "
             "fi; "
         )
-        return f"{bootstrap}{ready_marker}{full_cmd}"
-    if tool_name == "trace-replayer":
-        full_cmd = shlex.join(["trace-replayer", *arg_list])
-        bootstrap += (
-            "if ! command -v trace-replayer >/dev/null 2>&1; then "
-            "  echo 'trace-replayer executable was not staged into the pod and is not installable via pip; "
-            "build it on the host first (cargo/git) so it can be cached and copied in' >&2; exit 127; "
-            "fi; "
-        )
-        return f"{bootstrap}{ready_marker}{full_cmd}"
+        return f"{bootstrap}{ready_marker}{env_exports}{full_cmd}"
     full_cmd = shlex.join([executable, *arg_list])
-    return f"{bootstrap}{ready_marker}{full_cmd}"
+    return f"{bootstrap}{ready_marker}{env_exports}{full_cmd}"
 
 
 def _pod_name(task_id: str) -> str:
@@ -376,6 +385,35 @@ async def _copy_stream_watching_sentinel(
             log(message)
 
 
+async def _tail_pod_file_once(
+    pod: _PodHandle,
+    remote_path: Path,
+    local_path: Path,
+    offset: int,
+) -> int:
+    """Append newly written bytes from ``remote_path`` in ``pod`` starting at ``offset``.
+
+    POSIX ``tail -c`` is 1-indexed, so byte offset ``0`` starts at ``+1`` and
+    byte offset ``N`` starts at ``+(N + 1)``.
+    """
+    runner = scoped_runner(pod.cluster_id)
+    result = await runner.run(
+        ["kubectl", "exec", "-n", pod.namespace, pod.name, "--", "tail", "-c", f"+{offset + 1}", str(remote_path)],
+        timeout=15,
+    )
+    if result.returncode != 0 or not result.stdout:
+        return offset
+    chunk = result.stdout.encode("utf-8")
+    if not chunk:
+        return offset
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    if local_path.is_symlink() or local_path.parent.is_symlink():
+        return offset
+    with local_path.open("ab") as handle:
+        handle.write(chunk)
+    return offset + len(chunk)
+
+
 async def execute_command_in_pod(
     *,
     namespace: str,
@@ -389,6 +427,7 @@ async def execute_command_in_pod(
     progress_request_counts: Callable[[], tuple[int, int | None] | None] | None = None,
     tolerate_timeout: bool = False,
     env: Mapping[str, str] | None = None,
+    live_tail_relative_path: str | None = None,
 ) -> CommandResult:
     """Run a backend command inside a Pod in ``namespace``, mirroring :func:`execute_command`.
 
@@ -407,7 +446,7 @@ async def execute_command_in_pod(
     started_at = utc_now()
 
     context.log(f"Launching in-cluster simulation pod in namespace {namespace}")
-    pod = await _create_pod(namespace, cluster_id, image, timeout_seconds, extra_env=env)
+    pod = await _create_pod(namespace, cluster_id, image, timeout_seconds, extra_env=None)
     try:
         await _wait_pod_running(pod, context)
         context.log(f"In-cluster simulation pod {pod.ref} is running; staging task data")
@@ -439,7 +478,7 @@ async def execute_command_in_pod(
         # doesn't have the executable at all, the pod-side installer must
         # place it on PATH and the command must invoke it by bare name.
         executable_copied = exec_path is not None
-        remote_command = _pod_exec_command(executable, args, executable_copied=executable_copied)
+        remote_command = _pod_exec_command(executable, args, executable_copied=executable_copied, env=env)
         exec_argv = [
             "kubectl",
             "exec",
@@ -449,21 +488,29 @@ async def execute_command_in_pod(
             pod.name,
             "--",
             "sh",
-            "-c",
-            remote_command,
+            "-s",
         ]
-        env = kubeconfig_environment(cluster_id)
+        kubectl_env = kubeconfig_environment(cluster_id)
         with stdout_path.open("wb") as stdout, stderr_path.open("wb") as stderr:
             try:
                 process = await spawn(
                     exec_argv,
-                    env=env,
-                    stdin=asyncio.subprocess.DEVNULL,
+                    env=kubectl_env,
+                    stdin=asyncio.subprocess.PIPE,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
             except OSError as error:
                 raise SimulationExecutionError(str(error)) from error
+            if process.stdin is not None:
+                wrapped_script = f"{{\n{remote_command}\n}} </dev/null\n".encode()
+                try:
+                    with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                        process.stdin.write(wrapped_script)
+                        await process.stdin.drain()
+                finally:
+                    with contextlib.suppress(BrokenPipeError, ConnectionResetError):
+                        process.stdin.close()
             context.process = process
             assert process.stdout is not None and process.stderr is not None
             ready_event = asyncio.Event()
@@ -482,7 +529,24 @@ async def execute_command_in_pod(
             cancel_task = asyncio.create_task(context.cancel_event.wait())
             timeout_task = asyncio.create_task(asyncio.sleep(timeout_seconds))
             sync_task: asyncio.Task | None = None
-            if progress_request_counts is not None:
+            if live_tail_relative_path:
+                resolved_artifact_dir = artifact_dir.resolve()
+                target_file = (resolved_artifact_dir / live_tail_relative_path).resolve()
+                if not target_file.is_relative_to(resolved_artifact_dir):
+                    raise SimulationConfigurationError("live_tail_relative_path must stay within artifact_dir")
+                remote_tail_file = artifact_dir / live_tail_relative_path
+
+                async def sync_tail_artifact() -> None:
+                    await ready_event.wait()
+                    offset = 0
+                    while True:
+                        await asyncio.sleep(2)
+                        # Incremental tailing must never abort the run.
+                        with contextlib.suppress(Exception):
+                            offset = await _tail_pod_file_once(pod, remote_tail_file, target_file, offset)
+
+                sync_task = asyncio.create_task(sync_tail_artifact())
+            elif progress_request_counts is not None:
                 # Progress/live-metrics computation (``progress_request_counts``,
                 # and any dashboard reading task artifacts while it runs) reads
                 # ``artifact_dir`` on the *host*. Unlike host-side execution,
@@ -537,7 +601,8 @@ async def execute_command_in_pod(
                 return_code = exit_task.result()
                 await asyncio.gather(stdout_task, stderr_task)
                 if return_code != 0:
-                    tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-2000:]
+                    raw_tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-2000:]
+                    tail = redact_secret_text(raw_tail, max_len=2000) or ""
                     raise SimulationExecutionError(f"Simulation exited with code {return_code}: {tail}")
                 return CommandResult(
                     return_code=return_code,

@@ -81,7 +81,7 @@ preview = ingest_simulation_task(saved_task, apply=False)  # no writes
           "display_name": "AIPerf",
           "api_version": 1,
           "available": true,
-          "version": "0.12.0",
+          "version": "0.14.0",
           "unavailable_reason": null,
           "scenarios": [
             {
@@ -104,14 +104,24 @@ preview = ingest_simulation_task(saved_task, apply=False)  # no writes
             "supports_request_count": false,
             "supports_request_rate": false,
             "supports_streaming": true,
+            "supports_concurrency": true,
             "supports_per_request_results": true,
             "supports_cancellation": true,
             "supports_trace_range": true,
             "scale_factor_trace_formats": ["baseten_trace"],
             "trace_format_capabilities": {
-              "mooncake_trace": {"supports_trace_range": true, "supports_scale_factor": false}
+              "mooncake_trace": {
+                "supports_trace_range": true,
+                "supports_scale_factor": false,
+                "supports_fixed_schedule": true,
+                "supports_concurrency": true
+              }
             },
-            "advanced_options": [],
+            "advanced_options": [
+              {"name": "random_seed", "label": "Random seed", "minimum": 0, "default": 666},
+              {"name": "trajectory_start_min_ratio", "label": "Trajectory start min ratio", "minimum": 0.0, "maximum": 1.0, "default": 0.25},
+              {"name": "trajectory_start_max_ratio", "label": "Trajectory start max ratio", "minimum": 0.0, "maximum": 1.0, "default": 0.75}
+            ],
             "trace_formats": [
               "mooncake_trace",
               "bailian_trace",
@@ -147,7 +157,8 @@ for backend in list_backends():
 
     请求体：`ModelDiscoveryRequest`
     - `endpoint_url` (`string`，必填)
-    - `api_key`（`string`，可选，最多 4096 个字符；仅用于本次请求）
+    - `api_key`（`string`，可选，最多 4096 个字符；仅用于本次请求；与 `model_access_token_id` 互斥——同时提供将返回 HTTP 422；为 CLI 与直接 API 调用保持向后兼容）
+    - `model_access_token_id`（`string`，可选；调用方名下有效且未过期的模型访问令牌 ID——需要已认证调用方，会为本次探测签发短期委托令牌，且与 `api_key` 互斥）
 
     ```json
     {
@@ -204,7 +215,7 @@ asyncio.run(main())
           "name": "chat",
           "display_name": "Chat",
           "description": "Conversational and general assistant traffic.",
-          "supported_backends": ["aiperf", "trace-replayer"]
+          "supported_backends": ["aiperf"]
         },
         {
           "name": "coding",
@@ -256,7 +267,7 @@ for scenario in list_scenarios():
           "license": "Apache-2.0",
           "sha256": "f0c15fb14b60d0afca8b1f7c1ff29378f3df54318e6d112b47ad3b2a2f5881ef",
           "source_repository": "https://github.com/kvcache-ai/Mooncake.git",
-          "supported_backends": ["aiperf", "trace-replayer"]
+          "supported_backends": ["aiperf"]
         }
       ]
     }
@@ -387,7 +398,7 @@ asyncio.run(main())
     **`GET /api/simulation/tasks`**
 
     请求：无请求体。
-    - 查询参数：`status`、`scenario`、`search`、`backend`、`model`、`dataset`、`trace_format`、`endpoint`、`created_after`、`created_before`、`offset`、`limit`。
+    - 查询参数：`status`、`scenario`、`search`（同时匹配任务 `hardware`）、`backend`、`model`、`hardware`（按检测到的加速器型号或硬件 Profile 进行不区分大小写筛选）、`dataset`、`trace_format`、`endpoint`、`created_after`、`created_before`、`offset`、`limit`。
 
     响应：
 
@@ -412,8 +423,8 @@ asyncio.run(main())
           "endpoint_url": "http://127.0.0.1:38000/v1",
           "model_name": "Qwen/Qwen3-8B",
           "simulation": {
-            "backend": "trace-replayer",
-            "backend_options": {},
+            "backend": "aiperf",
+            "backend_options": {"random_seed": 666},
             "duration_seconds": 60.0,
             "num_requests": null,
             "stream": true,
@@ -440,6 +451,7 @@ asyncio.run(main())
           "artifacts_incomplete": false,
           "backend_version_inferred": false,
           "backend_version": null,
+          "hardware": null,
           "configuration_ids": ["config-1"],
           "progress_percent": 42.5,
           "progress_message": "Simulation running",
@@ -469,8 +481,9 @@ asyncio.run(main())
         "cancelled": 0
       },
       "facets": {
-        "backends": ["trace-replayer"],
+        "backends": ["aiperf"],
         "models": ["Qwen/Qwen3-8B"],
+        "hardware": [],
         "datasets": ["mooncake-arxiv"],
         "trace_formats": ["mooncake_trace"],
         "endpoints": ["http://127.0.0.1:38000/v1"]
@@ -515,17 +528,24 @@ asyncio.run(main())
     - `model_service_group_id` (`string`，可选) — 用于指定一个已发布、持续进行健康探测的
       模型服务（Model Service），而非原始的部署执行实例。设置该字段后，后端会将其解析为该
       分组当前活跃成员及其已发布名称，并强制将 `endpoint_mode` 设为 `"deployment"`，
-      覆盖任何传入的 `endpoint_deployment_execution_id`/`model_name`。需要同时提供 `api_key`。
-    - `api_key` (`string`，可选) — 模型访问令牌；当设置了 `model_service_group_id` 时为必填。
+      覆盖任何传入的 `endpoint_deployment_execution_id`/`model_name`。需要提供 `model_access_token_id` 或 `api_key`。
+    - `model_access_token_id` (`string`，可选) — 调用方名下有效且未过期的模型访问令牌 ID。需要已认证调用方，会在任务执行时签发新的短期委托令牌（原始密钥绝不持久化），且与 `api_key` 互斥（同时提供将返回 HTTP 422）。
+    - `api_key` (`string`，可选) — 原始模型访问令牌；与 `model_access_token_id` 互斥，为 CLI 与直接 API 调用保持向后兼容。当设置了 `model_service_group_id` 时，必须提供 `model_access_token_id` 或 `api_key` 之一。
     - `endpoint_url`, `model_name`, `trace_dataset`, `trace_path`
-    - `duration_seconds`, `scale_factor`, `trace_start_seconds`, `trace_end_seconds`, `trace_timeout_seconds`, `fixed_schedule`, `stream`, `backend_options`
+    - `duration_seconds`、`scale_factor`、`trace_start_seconds`、`trace_end_seconds`、`trace_timeout_seconds`、`stream`（AIPerf 要求 `stream: true`）
+    - `fixed_schedule`（`boolean`，可选，默认 `true`）：对于 AIPerf 后端，`true` 表示按轨迹时间戳回放（Fixed Schedule），`false` 表示通过 `--concurrency` 切换为并发槽位模式（Concurrency Slots）。文件轨迹格式（`mooncake_trace`、`bailian_trace`、`baseten_trace`、`burst_gpt_trace`）同时支持两种模式（`supports_fixed_schedule: true`、`supports_concurrency: true`）；`weka_public_dataset` 始终使用并发模式（`supports_fixed_schedule: false`、`supports_concurrency: true`）。
+    - `backend`（`string`，可选，默认 `"aiperf"`）：唯一支持的执行后端。创建时传入 `"trace-replayer"` 将返回 HTTP 422，历史 `"trace-replayer"` 任务记录仍可正常读取和删除。
+    - `backend_options`（`object`，可选）：支持 `random_seed`（`>= 0` 的整数，默认 `666`，通过 `--random-seed` 传递给 AIPerf）、`concurrency`（正整数 `>= 1`，当 `fixed_schedule: false` 且未指定时默认为 `1`，在所有 AIPerf 轨迹格式中均通过 `--concurrency` 传递）、`trajectory_start_min_ratio` 和 `trajectory_start_max_ratio`（`[0.0, 1.0]` 范围内的可选浮点数，需满足 `min <= max`，仅对兼容 `inferencex-agentx-mvp` 的负载生效，未设置或清空时会被省略），以及可选的 `warmup_seconds >= 0`、`e2e_slo >= 0` 与布尔值 `collect_server_telemetry`。
+    - `grace_period_seconds`（`number`，可选，默认 `30.0`，范围 `0.0`–`3600.0` 秒）— 发送窗口 `duration_seconds` 结束后，等待在途请求完成排空的宽限期。
+
+    AIPerf 始终传递 `--use-server-token-count`、`--slice-duration 1.0` 和 `--streaming`。在兼容 `inferencex-agentx-mvp` 的负载（兼容的 Weka subagent 公开数据集以及 Concurrency Slots 模式下的 `mooncake_trace`）上，还会传递 `--scenario inferencex-agentx-mvp`，并在 `duration_seconds < 900` 或使用本地 `mooncake_trace` 时附加 `--unsafe-override`。
 
     ```json
     {
       "name": "Trace simulation",
       "description": "Replay a chat trace against a ready deployment",
       "scenario": "chat",
-      "backend": "trace-replayer",
+      "backend": "aiperf",
       "endpoint_mode": "deployment",
       "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
       "endpoint_namespace": "prism-sim",
@@ -539,6 +559,7 @@ asyncio.run(main())
       "trace_dataset": "mooncake-arxiv",
       "trace_path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
       "duration_seconds": 60,
+      "grace_period_seconds": 30.0,
       "scale_factor": 1,
       "trace_start_seconds": 0,
       "trace_end_seconds": null,
@@ -557,7 +578,7 @@ asyncio.run(main())
     {
       "name": "Trace simulation",
       "scenario": "chat",
-      "backend": "trace-replayer",
+      "backend": "aiperf",
       "endpoint_mode": "deployment",
       "model_service_group_id": "01998e6b-4b2e-7c7e-8c6d-8e2a3f0c9b11",
       "api_key": "lens-mk-…",
@@ -592,8 +613,8 @@ asyncio.run(main())
         "endpoint_url": "http://127.0.0.1:38000/v1",
         "model_name": "Qwen/Qwen3-8B",
         "simulation": {
-          "backend": "trace-replayer",
-          "backend_options": {},
+          "backend": "aiperf",
+          "backend_options": {"random_seed": 666},
           "duration_seconds": 60.0,
           "num_requests": null,
           "stream": true,
@@ -649,7 +670,7 @@ async def main() -> None:
     task = await create_task(
         SimulationTaskCreateRequest(
             scenario="chat",
-            backend="trace-replayer",
+            backend="aiperf",
             endpoint_mode="deployment",
             endpoint_deployment_execution_id="00000000-0000-4000-8000-000000000001",
             endpoint_url="http://127.0.0.1:38000/v1",
@@ -665,7 +686,7 @@ async def main() -> None:
     task = await create_task(
         SimulationTaskCreateRequest(
             scenario="chat",
-            backend="trace-replayer",
+            backend="aiperf",
             endpoint_mode="deployment",
             model_service_group_id="01998e6b-4b2e-7c7e-8c6d-8e2a3f0c9b11",
             api_key="lens-mk-…",
@@ -715,8 +736,8 @@ asyncio.run(main())
       "endpoint_url": "http://127.0.0.1:38000/v1",
       "model_name": "Qwen/Qwen3-8B",
       "simulation": {
-        "backend": "trace-replayer",
-        "backend_options": {},
+        "backend": "aiperf",
+        "backend_options": {"random_seed": 666},
         "duration_seconds": 60.0,
         "num_requests": null,
         "stream": true,
@@ -746,10 +767,10 @@ asyncio.run(main())
       "configuration_ids": ["config-1"],
       "progress_percent": 100.0,
       "progress_message": "Simulation completed",
-      "logs": ["Starting trace-replayer", "Simulation completed"],
+      "logs": ["Starting aiperf", "Simulation completed"],
       "result": {
-        "run_id": "trace-replayer-1",
-        "backend": "trace-replayer",
+        "run_id": "aiperf-1",
+        "backend": "aiperf",
         "backend_version": "0.2.0",
         "summary": {
           "throughput_tps": 1180.4,
@@ -812,18 +833,87 @@ asyncio.run(main())
   </TabItem>
 </Tabs>
 
+### 获取运行中模拟任务的实时遥测
+
+轮询运行中模拟任务的轻量级 `O(1)` 内存快照，包含阶段、回放保真度、6 项 KPI、滑动窗口图表、滞回告警以及供 `Live Monitoring` 使用的 `target_deployments`。该接口已登记至 MCP `intentionalSkips`，不暴露为 MCP 工具。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/simulation/tasks/{task_id}/live-telemetry`**
+
+    请求：无请求体。
+    - 路径参数：`task_id`（`string`，必填）
+    - 权限：`simulation:task:read` + `require_cluster_access`
+
+    响应：`200 OK`，返回实时遥测快照（`live_phase`、`fidelity`、`kpis`、`series`、`live_alerts`、`target_deployments`）。当任务已进入终态（`completed`、`failed` 或 `cancelled`）时返回 `409 Conflict`。
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_lens.simulation.service import get_live_telemetry
+
+
+async def main() -> None:
+    snapshot = await get_live_telemetry("1a2b3c4d")
+    print(snapshot["live_phase"])
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 获取模拟任务的测试后遥测
+
+获取模拟任务的持久化测试后遥测、取证 Verdict 结论与按模块筛选的诊断数据。以 `get_simulation_telemetry` 暴露给 Lens Assistant MCP。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/simulation/tasks/{task_id}/telemetry`**
+
+    请求：无请求体。
+    - 路径参数：`task_id`（`string`，必填）
+    - 查询参数：
+      - `section`（`string`，默认 `"all"`）：可选 `overview`、`bottlenecks`、`serving`、`requests`、`system`、`all`
+      - `warmup_seconds`（`float`，可选）：覆盖预热窗口秒数，用于即时重算 Steady-State 与 Full Run 对比
+    - 权限：`simulation:task:read` + `require_cluster_access`
+
+    响应：`200 OK`，返回持久化的 `forensics`、`summary`、`client_series`（含用于槽位紧凑型 **Sessions over Time** 泳道图的 schema v5 `client_series.slot_lanes`）、`server_telemetry`（在采集硬件遥测时包含 `accelerator_summary` 以及 `hardware_profiles[].models` / `hardware_profiles[].allocated_accelerators`）与 `sessions_summary`（按 `section` 裁剪）。
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_lens.simulation.service import get_post_run_telemetry
+
+
+async def main() -> None:
+    data = await get_post_run_telemetry("1a2b3c4d", section="overview")
+    print(data["forensics"]["verdict"])
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
 ### 下载模拟产物
 
-根据任务 id 和产物类型，以文件附件形式下载已保存的模拟产物。
+根据任务 id 和产物类型，以文件附件形式下载已保存或按需生成的模拟产物。强制执行 `simulation:task:read` 与 `require_cluster_access`。
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
     **`GET /api/simulation/tasks/{task_id}/artifacts/{kind}`**
 
     请求：无请求体。
-    - 路径参数：`task_id`（`string`，必填）、`kind`（`string`，必填）
+    - 路径参数：
+      - `task_id`（`string`，必填）
+      - `kind`（`string`，必填）：`report_html`、`report_bundle`、`forensics`、`server_telemetry`、`client_series`、`sessions_summary`、`summary`、`summary_csv`、`run_manifest`、`per_request`、`stdout` 或 `stderr`
 
-    响应：文件附件，从已保存的产物路径流式传输。不返回 JSON 响应体。任务的 `result.artifacts` 列表会告知哪些 `kind` 值可用。
+    响应：文件附件，从已保存的产物路径流式传输（`report_html` 与 `report_bundle` 支持按需生成并原子缓存）。不返回 JSON 响应体。任务的 `result.artifacts` 列表会告知哪些 `kind` 值可用。
   </TabItem>
   <TabItem value="python-api" label="Python API">
 
@@ -853,7 +943,8 @@ asyncio.run(main())
 
     请求：无请求体。
     - 路径参数：`task_id`（`string`，必填）
-    - 查询参数：`status_code`（`string`，必填；缺失状态码时使用 `unknown`）、`offset`（`integer`，默认 `0`）、`limit`（`integer`，默认 `100`，最大 `500`）
+    - 查询参数：`status_code`（`string`，可选，默认 `"all"`；支持 `"all"`、`"4xx"`、`"5xx"`、`"timeout"`、`"transport"`、`"unknown"` 或 `"100"`..`"599"`）、`sort`（`string`，默认 `"request_number"`；支持 `"newest"` 或 `"request_number"`）、`offset`（`integer`，默认 `0`）、`limit`（`integer`，默认 `100`，最大 `500`）
+    - 行为：运行期间直接 `O(1)` 读取 `LiveTelemetryCollector` 内存错误索引（合并 `requests.jsonl` 失败记录与 `stdout.log` 传输错误），并在响应中附带 `counts_by_code` 分类计数与分页 `issues`。
 
     响应：
 
@@ -953,6 +1044,11 @@ asyncio.run(main())
     - `model_service_group_id` (`string`，可选) — 重新绑定到一个已发布、经过健康探测的模型服务，
       而非原始的部署执行实例；其解析方式与创建任务时相同，当两者同时提供时优先于
       `endpoint_deployment_execution_id`。
+    - `model_access_token_id` (`string`，可选) — 调用方名下有效且未过期的模型访问令牌 ID（绝不会继承其他用户的任务令牌）。与 `api_key` 互斥（同时提供将返回 HTTP 422）。
+    - `api_key` (`string`，可选) — 原始模型访问令牌；与 `model_access_token_id` 互斥，为 CLI 与直接 API 调用保持向后兼容。
+    - `grace_period_seconds`（`number`，可选，范围 `0.0`–`3600.0` 秒）— 覆盖发送窗口结束后的在途请求排空宽限期。
+
+    当任务关联了已保存的令牌 ID 时，`SimulationTask` 响应会包含 `model_access_token_id`（`string | null`）；原始令牌密钥绝不会返回。重跑历史 `"trace-replayer"` 任务将返回 HTTP 400（请改用 `aiperf` 创建新任务）。
 
     ```json
     {
@@ -988,8 +1084,8 @@ asyncio.run(main())
         "endpoint_url": "http://127.0.0.1:39000/v1",
         "model_name": "Qwen/Qwen3-8B",
         "simulation": {
-          "backend": "trace-replayer",
-          "backend_options": {},
+          "backend": "aiperf",
+          "backend_options": {"random_seed": 666},
           "duration_seconds": 60.0,
           "num_requests": null,
           "stream": true,
@@ -1095,6 +1191,73 @@ from llm_d_lens.simulation.service import delete_task
 
 async def main() -> None:
     await delete_task("1a2b3c4d")
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### 使用 AI 分析模拟任务
+
+使用已配置的外部 AI 提供商（`ai_providers`），基于脱敏后的测试后遥测、客户端 KPI、自动化诊断（forensics）以及服务端/系统指标，对模拟任务运行 AI 驱动的瓶颈诊断与调优建议。支持单轮初始诊断与多轮追问。
+
+- **认证 / 权限**：需要 `simulation:task:read` 权限以及任务所属集群的访问权限。由于 Lens Assistant 已具备 AI 推理能力，该接口已从 MCP 工具目录中排除（`intentionalSkips`）。
+- **安全 / 脱敏**：在构造提示词之前会自动脱敏任务密钥（`api_key`、URL 凭据），且提供商 API 密钥绝不会在响应或错误信息中返回或暴露。
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/simulation/tasks/{task_id}/ai-analysis`**
+
+    - 路径参数：`task_id`（`string`，必填）
+
+    请求体（`application/json`，所有字段均可选）：
+
+    | 字段 | 类型 | 说明 |
+    | --- | --- | --- |
+    | `provider_id` | `string \| null` | 外部 AI 提供商 ID；默认使用第一个已配置的提供商。 |
+    | `model` | `string \| null` | 可选模型覆盖；默认使用该提供商配置的模型。 |
+    | `question` | `string \| null` | 可选聚焦提示词或追问问题（最多 4000 个字符）。 |
+    | `messages` | `array<{ role: "user" \| "assistant", content: string }>` | 用于多轮追问的历史对话轮次（最多 20 条）。 |
+
+    响应（`200 OK`）：
+
+    | 字段 | 类型 | 说明 |
+    | --- | --- | --- |
+    | `task_id` | `string` | 模拟任务 ID。 |
+    | `provider_id` | `string` | 所使用的外部 AI 提供商 ID。 |
+    | `provider_name` | `string` | 外部 AI 提供商显示名称。 |
+    | `model` | `string` | 本次分析使用的模型名称。 |
+    | `analysis` | `string` | Markdown 格式的诊断结论与调优建议。 |
+    | `generated_at` | `string` | 生成分析的 ISO 8601 UTC 时间戳。 |
+    | `telemetry_scope` | `string` | 纳入提示词的遥测范围（`"full_telemetry"`、`"server_and_client"`、`"client_only"`、`"server_only"` 或 `"task_summary_only"`）。 |
+
+    错误码：
+    - `400`：模拟配置无效。
+    - `422`：请求体校验错误（例如 `question` 超过 4000 个字符、`messages` 超过 20 条或包含未预期的额外字段）。
+    - `403`：缺少 `simulation:task:read` 权限或集群访问权限。
+    - `404`：未找到模拟任务或外部 AI 提供商。
+    - `409`：未配置外部 AI 提供商。
+    - `502`：上游外部 AI 提供商返回错误（返回脱敏后的 `application/problem+json` 详情，`code: "ai_analysis_upstream_error"`）。
+    - `504`：外部 AI 提供商请求超时。
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_lens.simulation.models import SimulationAIAnalysisRequest
+from llm_d_lens.simulation.service import analyze_task_with_ai
+
+
+async def main() -> None:
+    result = await analyze_task_with_ai(
+        "1a2b3c4d",
+        request=SimulationAIAnalysisRequest(
+            question="分析 TTFT 瓶颈并给出 vLLM 与 llm-d 调优参数建议。",
+        ),
+    )
+    print(result.model, result.analysis)
 
 
 asyncio.run(main())

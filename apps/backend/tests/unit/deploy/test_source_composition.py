@@ -842,8 +842,10 @@ def test_check_target_handles_403_external_refs_prometheus_fallback_and_401(monk
     result = asyncio.run(composition.check_target(None, body, parsed))
     assert result["available"]["nvidia.com/gpu"] == 3.0
     assert any("Could not verify external Gateway/shared-gw" in w for w in result["warnings"])
-    assert any("Prometheus metrics" in w for w in result["warnings"])
-    assert any("synthesized from Prometheus" in w for w in result["warnings"])
+    assert not any("prometheus" in w.lower() for w in result["warnings"])
+    assert not any("Admission, quota" in w for w in result["warnings"])
+    assert any("synthesized from Prometheus" in item for item in result["unmodeled"])
+    assert sum("prometheus" in item.lower() for item in result["unmodeled"]) == 1
 
     async def kubectl_not_found(args, **kwargs):
         if args[1] == "Gateway":
@@ -1694,6 +1696,309 @@ async def test_router_render_manages_both_transport_and_proxy_after_user_overrid
         "--set",
         f"router.proxy.enabled={enabled}",
     ]
+
+
+def test_device_class_403_suppressed_when_profile_matched_accelerator_present(monkeypatch):
+    profile = next(p for p in composition.all_profiles() if p.device_classes)
+    device_class = profile.device_classes[0]
+    parsed = [
+        workload(replicas=1),
+        {
+            "apiVersion": "resource.k8s.io/v1",
+            "kind": "ResourceClaimTemplate",
+            "metadata": {"name": "accel-devices", "namespace": "cache"},
+            "spec": {
+                "spec": {
+                    "devices": {
+                        "requests": [{"name": "accelerator", "exactly": {"deviceClassName": device_class, "count": 1}}]
+                    }
+                }
+            },
+        },
+    ]
+    pod = parsed[0]["spec"]["template"]["spec"]
+    pod["resourceClaims"] = [{"name": "devices", "resourceClaimTemplateName": "accel-devices"}]
+    pod["containers"][0]["resources"] = {"claims": [{"name": "devices"}]}
+    pod["volumes"] = [{"name": "ext", "secret": {"secretName": "external-secret"}}]
+    pod["nodeSelector"] = {"pool": "accel"}
+
+    overview_calls = 0
+
+    async def session(*_):
+        return SimpleNamespace(server_id="fixture")
+
+    async def overview(_):
+        nonlocal overview_calls
+        overview_calls += 1
+        return {
+            "hardware": {
+                "usableGpuCount": 2,
+                "accelerators": [{"id": profile.id, "gpuCount": 4}],
+            }
+        }
+
+    async def kubectl(args, **kwargs):
+        if args[1] in {"DeviceClass", "Secret"}:
+            return SimpleNamespace(ok=False, stdout="", stderr="Error from server (Forbidden): is forbidden")
+        if args[1] == "nodes":
+            return SimpleNamespace(
+                ok=True,
+                stdout=json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "n1", "labels": {"pool": "accel"}},
+                                "status": {
+                                    "conditions": [{"type": "Ready", "status": "True"}],
+                                    "allocatable": {"cpu": "16", "pods": "110"},
+                                },
+                            }
+                        ]
+                    }
+                ),
+            )
+        return SimpleNamespace(ok=True, stdout='{"items":[]}')
+
+    monkeypatch.setattr(composition, "validate_planning_session", session)
+    monkeypatch.setattr(composition, "run_kubectl", kubectl)
+    monkeypatch.setattr("llm_d_lens.cluster.registry.require_cluster", lambda _: SimpleNamespace(id="fixture"))
+    monkeypatch.setattr("llm_d_lens.cluster.service.build_overview", overview)
+
+    body = {"clusterId": "fixture", "clusterSessionId": "session"}
+    result = asyncio.run(composition.check_target(None, body, parsed))
+    assert overview_calls == 1
+    assert not any("DeviceClass" in w for w in result["warnings"])
+    assert "Could not verify external Secret/external-secret in cache (403 Forbidden)." in result["warnings"]
+    assert "DRA allocation" not in result["unmodeled"]
+    assert (
+        "Admission, quota, competing scheduling and rollout surge are not reserved or simulated" in result["unmodeled"]
+    )
+
+
+@pytest.mark.parametrize("case", ["zero_gpu", "missing_profile", "profile_not_detected", "overview_fails"])
+def test_device_class_403_preserved_when_unverified_or_overview_fails(monkeypatch, case):
+    custom_profile = SimpleNamespace(id="custom-accel", device_classes=("accel.example.com",))
+    monkeypatch.setattr(composition, "all_profiles", lambda: [custom_profile])
+
+    target_dc = "unmapped.example.com" if case == "missing_profile" else "accel.example.com"
+    parsed = [workload(replicas=1)]
+    pod = parsed[0]["spec"]["template"]["spec"]
+    pod["volumes"] = [{"name": "ext", "secret": {"secretName": "external-secret"}}]
+
+    monkeypatch.setattr(
+        composition,
+        "resource_references",
+        lambda _parsed: [
+            {"kind": "DeviceClass", "name": target_dc, "namespace": None},
+            {"kind": "Secret", "name": "external-secret", "namespace": "cache"},
+        ],
+    )
+    monkeypatch.setattr(composition, "accelerator_demand", lambda _parsed: ({}, []))
+
+    async def session(*_):
+        return SimpleNamespace(server_id="fixture")
+
+    async def kubectl(args, **kwargs):
+        if args[1] in {"DeviceClass", "Secret"}:
+            return SimpleNamespace(ok=False, stdout="", stderr="Error from server (Forbidden): is forbidden")
+        return SimpleNamespace(ok=True, stdout='{"items":[]}')
+
+    async def overview(_):
+        if case == "overview_fails":
+            raise RuntimeError("overview unavailable")
+        if case == "missing_profile":
+            return {"hardware": {"accelerators": [{"id": "custom-accel", "gpuCount": 4}]}}
+        if case == "profile_not_detected":
+            return {"hardware": {"accelerators": [{"id": "other-accel", "gpuCount": 4}]}}
+        return {"hardware": {"accelerators": [{"id": "custom-accel", "gpuCount": 0}]}}
+
+    monkeypatch.setattr(composition, "validate_planning_session", session)
+    monkeypatch.setattr(composition, "run_kubectl", kubectl)
+    monkeypatch.setattr("llm_d_lens.cluster.registry.require_cluster", lambda _: SimpleNamespace(id="fixture"))
+    monkeypatch.setattr("llm_d_lens.cluster.service.build_overview", overview)
+
+    result = asyncio.run(
+        composition.check_target(None, {"clusterId": "fixture", "clusterSessionId": "session"}, parsed)
+    )
+    assert f"Could not verify external DeviceClass/{target_dc} (403 Forbidden)." in result["warnings"]
+    assert "Could not verify external Secret/external-secret in cache (403 Forbidden)." in result["warnings"]
+
+
+def test_mixed_mapped_and_unmapped_dra_claims_keep_dra_allocation_unmodeled(monkeypatch):
+    profile = next(p for p in composition.all_profiles() if p.device_classes)
+    mapped_dc = profile.device_classes[0]
+    unmapped_dc = "nic.example.com"
+    parsed = [
+        workload(replicas=1),
+        {
+            "apiVersion": "resource.k8s.io/v1",
+            "kind": "ResourceClaimTemplate",
+            "metadata": {"name": "mixed-devices", "namespace": "cache"},
+            "spec": {
+                "spec": {
+                    "devices": {
+                        "requests": [
+                            {"name": "accelerator", "exactly": {"deviceClassName": mapped_dc, "count": 1}},
+                            {"name": "nic", "exactly": {"deviceClassName": unmapped_dc, "count": 2}},
+                        ]
+                    }
+                }
+            },
+        },
+    ]
+    pod = parsed[0]["spec"]["template"]["spec"]
+    pod["resourceClaims"] = [{"name": "devices", "resourceClaimTemplateName": "mixed-devices"}]
+    pod["containers"][0]["resources"] = {"claims": [{"name": "devices"}]}
+    pod["nodeSelector"] = {"pool": "accel"}
+
+    async def session(*_):
+        return SimpleNamespace(server_id="fixture")
+
+    async def overview(_):
+        return {
+            "hardware": {
+                "usableGpuCount": 2,
+                "accelerators": [{"id": profile.id, "gpuCount": 4}],
+            }
+        }
+
+    async def kubectl(args, **kwargs):
+        if args[1] == "DeviceClass":
+            return SimpleNamespace(ok=False, stdout="", stderr="Error from server (Forbidden): is forbidden")
+        if args[1] == "nodes":
+            return SimpleNamespace(
+                ok=True,
+                stdout=json.dumps(
+                    {
+                        "items": [
+                            {
+                                "metadata": {"name": "n1", "labels": {"pool": "accel"}},
+                                "status": {
+                                    "conditions": [{"type": "Ready", "status": "True"}],
+                                    "allocatable": {"cpu": "16", "pods": "110"},
+                                },
+                            }
+                        ]
+                    }
+                ),
+            )
+        return SimpleNamespace(ok=True, stdout='{"items":[]}')
+
+    monkeypatch.setattr(composition, "validate_planning_session", session)
+    monkeypatch.setattr(composition, "run_kubectl", kubectl)
+    monkeypatch.setattr("llm_d_lens.cluster.registry.require_cluster", lambda _: SimpleNamespace(id="fixture"))
+    monkeypatch.setattr("llm_d_lens.cluster.service.build_overview", overview)
+
+    result = asyncio.run(
+        composition.check_target(None, {"clusterId": "fixture", "clusterSessionId": "session"}, parsed)
+    )
+    assert f"Could not verify external DeviceClass/{mapped_dc} (403 Forbidden)." not in result["warnings"]
+    assert f"Could not verify external DeviceClass/{unmapped_dc} (403 Forbidden)." in result["warnings"]
+    assert "DRA allocation" in result["unmodeled"]
+
+
+def test_unmodeled_and_prometheus_notes_separated_from_warnings_and_propagated_to_compose(source_tree, monkeypatch):
+    from llm_d_lens.cluster.service import PrometheusNodeInventory
+    from llm_d_lens.deploy import placement_preflight as preflight_module
+    from llm_d_lens.deploy import slice_capacity
+
+    inv = PrometheusNodeInventory(
+        reachable=True,
+        all_nodes=[
+            {
+                "name": "gpu-1",
+                "role": "worker",
+                "ready": True,
+                "schedulingDisabled": False,
+                "cpu": 16,
+                "memoryBytes": 64 * 1024 * 1024 * 1024,
+                "gpuByProfile": {"nvidia": 4},
+                "gpuModelsByProfile": {"nvidia": ["NVIDIA-H100"]},
+            }
+        ],
+        allocatable_by_node={
+            "gpu-1": {"cpu": 16, "memoryBytes": 64 * 1024 * 1024 * 1024, "gpuByProfile": {"nvidia": 4}}
+        },
+        allocated_gpu_by_node={"gpu-1": 0},
+    )
+
+    async def session(*_):
+        return SimpleNamespace(server_id="fixture")
+
+    async def kubectl_403(args, **kwargs):
+        return SimpleNamespace(ok=False, stdout="", stderr="Error from server (Forbidden): is forbidden")
+
+    monkeypatch.setattr(composition, "validate_planning_session", session)
+    monkeypatch.setattr(composition, "run_kubectl", kubectl_403)
+    monkeypatch.setattr(slice_capacity, "fetch_prometheus_node_inventory", lambda _cid: asyncio.sleep(0, result=inv))
+
+    # Unconstrained workload with Prometheus fallback -> Prometheus note in unmodeled, NOT warnings.
+    unconstrained_parsed = [workload(replicas=1)]
+    unconstrained_parsed[0]["spec"]["template"]["spec"]["containers"][0]["resources"] = {
+        "limits": {"nvidia.com/gpu": 1}
+    }
+    body = {"clusterId": "fixture", "clusterSessionId": "session"}
+    unconstrained_result = asyncio.run(composition.check_target(None, body, unconstrained_parsed))
+    assert unconstrained_result["warnings"] == []
+    assert unconstrained_result["unmodeled"] == [
+        "Node capacity derived from Prometheus metrics (cluster-wide Kubernetes read restricted)."
+    ]
+
+    # Constrained workload with placement warnings (str & dict) + duplicate unmodeled entries.
+    constrained_parsed = deepcopy(unconstrained_parsed)
+    constrained_parsed[0]["spec"]["template"]["spec"]["nodeSelector"] = {"nvidia.com/gpu.product": "NVIDIA-H100"}
+    monkeypatch.setattr(
+        preflight_module,
+        "placement_preflight",
+        lambda *_args, **_kwargs: {
+            "status": "pass",
+            "errors": [],
+            "warnings": ["Direct warning", {"message": "Dict warning"}],
+            "unmodeled": [
+                "Node inventory synthesized from Prometheus; node taints and custom labels may be incomplete",
+                "Admission, quota, competing scheduling and rollout surge are not reserved or simulated",
+                "Admission, quota, competing scheduling and rollout surge are not reserved or simulated",
+            ],
+        },
+    )
+    constrained_result = asyncio.run(composition.check_target(None, body, constrained_parsed))
+    assert constrained_result["warnings"] == ["Direct warning", "Dict warning"]
+    assert constrained_result["unmodeled"] == [
+        "Node inventory synthesized from Prometheus; node taints and custom labels may be incomplete",
+        "Admission, quota, competing scheduling and rollout surge are not reserved or simulated",
+    ]
+
+    # compose() propagates hardware["unmodeled"] to validation["unmodeled"] without leaking into warnings.
+    async def authorized(request, req_body):
+        return source_tree, await catalog_module.inventory(source_tree)
+
+    async def binding(request, req_body):
+        return BINDING
+
+    async def target(request, req_body, parsed):
+        return constrained_result
+
+    monkeypatch.setattr(composition, "authorized_inventory", authorized)
+    monkeypatch.setattr(composition, "model_binding", binding)
+    monkeypatch.setattr(composition, "check_target", target)
+
+    async def run_compose():
+        catalog = await catalog_module.inventory(source_tree)
+        composed = await composition.compose(
+            None,
+            {
+                "commit": catalog["commit"],
+                "clusterId": "fixture",
+                "clusterSessionId": "session",
+                "namespace": "cache",
+                "units": [{"path": "guides/optimized-baseline/modelserver/overlay"}],
+                "validateCluster": False,
+            },
+        )
+        assert composed["validation"]["warnings"] == ["Direct warning", "Dict warning"]
+        assert composed["validation"]["unmodeled"] == constrained_result["unmodeled"]
+
+    asyncio.run(run_compose())
 
 
 def test_bind_model_strips_hf_secrets_across_non_modelserver_containers_and_syncs_probe_image():

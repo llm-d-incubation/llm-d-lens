@@ -32,7 +32,7 @@ export function ChartTooltip({ title, className, children }) {
     return (
         <div
             className={cn(
-                'bg-white/95 dark:bg-slate-900/95 border border-slate-200 dark:border-slate-700/50',
+                'lens-chart-tooltip bg-theme-card/95 border border-theme-border text-theme-text',
                 'rounded-lg shadow-xl p-3 min-w-[180px] backdrop-blur-md z-[100]',
                 className
             )}

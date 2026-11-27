@@ -1,23 +1,36 @@
+import { formatPodStatusLabel, isPodFailureReason } from './deploymentPresentation';
+
 // Small pulsing status dot + tooltip for a single pod, shared by the pods/logs
 // modal and the inline pod list under an expanded deployment row.
 
 export function PodStatusBadge({ phase, reason, ready }) {
     let dotColor = 'bg-slate-500';
     let ringColor = 'ring-slate-500/30';
-    const textStatus = reason || phase || 'Unknown';
+    const textStatus = formatPodStatusLabel({ phase, reason, ready });
 
-    if (phase === 'Running' && ready) {
-        dotColor = 'bg-emerald-400';
-        ringColor = 'ring-emerald-500/30';
-    } else if (phase === 'Running' && !ready) {
-        dotColor = 'bg-amber-400';
-        ringColor = 'ring-amber-500/30';
-    } else if (phase === 'Pending' || reason === 'ContainerCreating') {
-        dotColor = 'bg-cyan-400 animate-pulse';
-        ringColor = 'ring-cyan-500/30';
-    } else if (phase === 'Failed' || reason?.includes('CrashLoop') || reason?.includes('Error')) {
+    if (phase === 'Failed' || isPodFailureReason(reason)) {
         dotColor = 'bg-rose-500';
         ringColor = 'ring-rose-500/30';
+    } else if (reason === 'Terminating') {
+        dotColor = 'bg-slate-400 animate-pulse';
+        ringColor = 'ring-slate-400/30';
+    } else if (phase === 'Succeeded' || reason === 'Completed') {
+        dotColor = 'bg-slate-400';
+        ringColor = 'ring-slate-400/30';
+    } else if (phase === 'Running' && ready) {
+        dotColor = 'bg-emerald-400';
+        ringColor = 'ring-emerald-500/30';
+    } else if (phase === 'Running' && !ready && (!reason || reason === 'Running' || reason === 'Starting')) {
+        dotColor = 'bg-sky-400 animate-pulse';
+        ringColor = 'ring-sky-500/30';
+    } else if (
+        phase === 'Pending'
+        || reason === 'ContainerCreating'
+        || reason === 'PodInitializing'
+        || reason?.startsWith('Init:')
+    ) {
+        dotColor = 'bg-cyan-400 animate-pulse';
+        ringColor = 'ring-cyan-500/30';
     }
 
     return (

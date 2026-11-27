@@ -13,13 +13,22 @@
 // limitations under the License.
 
 import React from 'react';
-import { Panel } from '../../../../shared/ui';
+import { cn } from '../../../../shared/lib/cn';
+import { HelpTooltip } from '../../../../shared/ui';
 
-export function DetailCard({ label, value, accent = 'text-slate-100', detail }) {
+export function DetailCard({ label, value, accent = 'text-slate-100', detail, help, helpFormula }) {
+    const hasHelp = Boolean(help || helpFormula);
     return (
         <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-            <div className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">{label}</div>
-            <div className={`mt-1 break-words text-xl font-bold ${accent}`}>{value ?? '—'}</div>
+            <div className="flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                <span>{label}</span>
+                {hasHelp && (
+                    <HelpTooltip label={`${label} help`} align="start" iconSize={12} formula={helpFormula}>
+                        {help}
+                    </HelpTooltip>
+                )}
+            </div>
+            <div className={cn('mt-1 break-words text-xl font-bold', accent)}>{value ?? '—'}</div>
             {detail && <div className="mt-1 text-[10px] text-slate-500">{detail}</div>}
         </div>
     );

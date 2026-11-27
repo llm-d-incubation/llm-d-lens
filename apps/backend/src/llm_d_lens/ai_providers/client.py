@@ -349,6 +349,29 @@ class _TruncatedResponseError(AIProviderClientError):
     e.g. a malformed response body (which a bigger budget can't fix).
     """
 
+    def __init__(self, message: str, *, partial_content: str | None = None) -> None:
+        super().__init__(message)
+        self.partial_content = partial_content
+
+
+def _is_max_tokens_validation_failure(error: httpx.HTTPStatusError) -> bool:
+    """True when a 400 rejects the requested ``max_tokens`` budget."""
+    if error.response is None or error.response.status_code != 400:
+        return False
+    try:
+        rendered = json.dumps(error.response.json())
+    except (ValueError, TypeError):
+        rendered = error.response.text or ""
+    return "max_tokens" in rendered.lower()
+
+
+def _next_capped_max_tokens(current_max_tokens: int, tried_budgets: set[int]) -> int | None:
+    """Step down ``max_tokens`` across common provider ceilings without repeating."""
+    for ceiling in (8192, 4096):
+        if current_max_tokens > ceiling and ceiling not in tried_budgets:
+            return ceiling
+    return None
+
 
 class AIProviderClient(ABC):
     """A single-turn chat/completion client for one saved AI provider."""
@@ -440,6 +463,10 @@ class OpenAICompatibleClient(AIProviderClient):
         return "response_format" in json.dumps(body).lower()
 
     @staticmethod
+    def _is_max_tokens_validation_failure(error: httpx.HTTPStatusError) -> bool:
+        return _is_max_tokens_validation_failure(error)
+
+    @staticmethod
     def _content(response: dict[str, Any]) -> str:
         choices = response.get("choices")
         if not isinstance(choices, list) or not choices:
@@ -453,7 +480,11 @@ class OpenAICompatibleClient(AIProviderClient):
         # be empty even though the request otherwise "succeeded" (200 OK).
         # Both cases are retriable with a larger `max_tokens` (see `complete`).
         if choice.get("finish_reason") == "length" or not isinstance(content, str) or not content.strip():
-            raise _TruncatedResponseError("response was empty or truncated by the token budget")
+            partial_content = content if isinstance(content, str) and content.strip() else None
+            raise _TruncatedResponseError(
+                "response was empty or truncated by the token budget",
+                partial_content=partial_content,
+            )
         return content
 
     def _mode_ladder(self, json_schema: dict[str, Any] | None) -> tuple[StructuredOutputMode, ...]:
@@ -516,7 +547,12 @@ class OpenAICompatibleClient(AIProviderClient):
                 for index, mode in enumerate(modes):
                     is_last_mode = index == len(modes) - 1
                     current_max_tokens = max_tokens
-                    for attempt in range(2):
+                    effective_ceiling = self._EMPTY_CONTENT_MAX_TOKENS_CEILING
+                    last_partial_content: str | None = None
+                    truncation_retried = False
+                    tried_budgets: set[int] = set()
+                    for _ in range(4):
+                        tried_budgets.add(current_max_tokens)
                         payload = self._build_payload(mode, messages, json_schema, current_max_tokens, temperature)
                         response = await _post_provider_request(
                             client, endpoint=endpoint, payload=payload, headers=headers
@@ -524,18 +560,31 @@ class OpenAICompatibleClient(AIProviderClient):
                         try:
                             response.raise_for_status()
                         except httpx.HTTPStatusError as error:
+                            if self._is_max_tokens_validation_failure(error):
+                                if json_schema is None and last_partial_content is not None:
+                                    return last_partial_content
+                                capped = _next_capped_max_tokens(current_max_tokens, tried_budgets)
+                                if capped is not None:
+                                    effective_ceiling = min(effective_ceiling, capped)
+                                    current_max_tokens = capped
+                                    continue
+                                raise
                             if is_last_mode or not self._is_structured_output_validation_failure(error):
                                 raise
                             break  # demote to the next mode
                         try:
                             return self._content(response.json())
-                        except _TruncatedResponseError:
-                            can_retry_bigger_budget = (
-                                attempt == 0 and current_max_tokens < self._EMPTY_CONTENT_MAX_TOKENS_CEILING
-                            )
+                        except _TruncatedResponseError as error:
+                            if error.partial_content:
+                                last_partial_content = error.partial_content
+                            usable_partial = error.partial_content or last_partial_content
+                            can_retry_bigger_budget = not truncation_retried and current_max_tokens < effective_ceiling
                             if can_retry_bigger_budget:
-                                current_max_tokens = min(current_max_tokens * 2, self._EMPTY_CONTENT_MAX_TOKENS_CEILING)
+                                truncation_retried = True
+                                current_max_tokens = min(current_max_tokens * 2, effective_ceiling)
                                 continue
+                            if json_schema is None and usable_partial is not None:
+                                return usable_partial
                             if is_last_mode:
                                 raise
                             break  # demote to the next mode
@@ -656,21 +705,34 @@ class AnthropicCompatibleClient(AIProviderClient):
         headers = {"anthropic-version": DEFAULT_ANTHROPIC_VERSION}
         if self.api_key:
             headers["x-api-key"] = self.api_key
-        payload = {
-            "model": self.model,
-            "system": system_prompt,
-            "messages": [{"role": "user", "content": user_content}],
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        }
         endpoint = f"{self.base_url}v1/messages"
+        current_max_tokens = max_tokens
+        tried_budgets: set[int] = set()
         try:
             async with self._http_client() as client:
-                response = await _post_provider_request(client, endpoint=endpoint, payload=payload, headers=headers)
-                response.raise_for_status()
-            return self._content(response.json())
+                for _ in range(3):
+                    tried_budgets.add(current_max_tokens)
+                    payload = {
+                        "model": self.model,
+                        "system": system_prompt,
+                        "messages": [{"role": "user", "content": user_content}],
+                        "max_tokens": current_max_tokens,
+                        "temperature": temperature,
+                    }
+                    response = await _post_provider_request(client, endpoint=endpoint, payload=payload, headers=headers)
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError as error:
+                        if _is_max_tokens_validation_failure(error):
+                            capped = _next_capped_max_tokens(current_max_tokens, tried_budgets)
+                            if capped is not None:
+                                current_max_tokens = capped
+                                continue
+                        raise
+                    return self._content(response.json())
         except httpx.HTTPError as error:
             raise AIProviderClientError(f"Anthropic-compatible provider request failed: {error}") from error
+        raise AIProviderClientError("Anthropic-compatible provider request failed: max_tokens fallback exhausted")
 
     async def complete_tool_turn(
         self,

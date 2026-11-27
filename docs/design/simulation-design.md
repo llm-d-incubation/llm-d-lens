@@ -32,8 +32,8 @@ The implementation follows these rules:
 2. **Server-authoritative capabilities.** Backend, dataset, range, scale, and
    advanced-option compatibility are enforced by the API even when the UI has
    already hidden an invalid combination.
-3. **Backend-neutral results.** AIPerf and Trace-Replayer outputs are normalized
-   into the same `SimulationSummary` shape. Backend-native data remains available
+3. **Normalized results.** AIPerf outputs are normalized
+   into the `SimulationSummary` shape. Backend-native data remains available
    in `backend_metrics`.
 4. **Durable tasks.** Each task and its artifacts are persisted below
    `SIMULATION_TASK_ROOT`; queued tasks resume after service restart.
@@ -49,9 +49,7 @@ flowchart LR
     API --> S[Simulation service and queue]
     API --> D[Trace download and timeline service]
     S --> A[AIPerf adapter]
-    S --> R[Trace-Replayer adapter]
     A --> E[OpenAI-compatible endpoint]
-    R --> E
     S --> FS[(Task store and artifacts)]
     D --> TS[(Trace data directory)]
 ```
@@ -93,26 +91,26 @@ stateDiagram-v2
 
 ### 4. Native capability matrix
 
-| Trace format | AIPerf | Trace-Replayer | Start/end | Scale factor |
-|---|---:|---:|---|---|
-| `mooncake_trace` | Yes | Yes | AIPerf: start/end; Trace-Replayer: end only, start fixed at 0 | Trace-Replayer only |
-| `bailian_trace` | Yes | Yes | AIPerf: start/end; Trace-Replayer: end only, start fixed at 0 | Trace-Replayer only |
-| `baseten_trace` | Yes | No | AIPerf | AIPerf |
-| `burst_gpt_trace` | Yes | No | AIPerf | No |
-| `weka_public_dataset` | Yes | No | No | No |
+| Trace format | AIPerf | Start/end | Scale factor |
+|---|---:|---|---|
+| `mooncake_trace` | Yes | AIPerf: start/end | No |
+| `bailian_trace` | Yes | AIPerf: start/end | No |
+| `baseten_trace` | Yes | AIPerf | AIPerf |
+| `burst_gpt_trace` | Yes | AIPerf | No |
+| `weka_public_dataset` | Yes | No | No |
 
 Registered datasets:
 
 | Dataset | Scenario | Format | Native backends |
 |---|---|---|---|
-| `mooncake-arxiv` | `chat` | `mooncake_trace` | both |
-| `mooncake-conversation` | `chat` | `mooncake_trace` | both |
-| `mooncake-synthetic` | `chat` | `mooncake_trace` | both |
-| `mooncake-toolagent` | `api-calling` | `mooncake_trace` | both |
-| `bailian-trace-a` | `chat` | `bailian_trace` | both |
-| `bailian-trace-b` | `api-calling` | `bailian_trace` | both |
-| `bailian-thinking` | `chat` | `bailian_trace` | both |
-| `bailian-coder` | `coding` | `bailian_trace` | both |
+| `mooncake-arxiv` | `chat` | `mooncake_trace` | AIPerf |
+| `mooncake-conversation` | `chat` | `mooncake_trace` | AIPerf |
+| `mooncake-synthetic` | `chat` | `mooncake_trace` | AIPerf |
+| `mooncake-toolagent` | `api-calling` | `mooncake_trace` | AIPerf |
+| `bailian-trace-a` | `chat` | `bailian_trace` | AIPerf |
+| `bailian-trace-b` | `api-calling` | `bailian_trace` | AIPerf |
+| `bailian-thinking` | `chat` | `bailian_trace` | AIPerf |
+| `bailian-coder` | `coding` | `bailian_trace` | AIPerf |
 | `baseten-synthetic` | `chat` | `baseten_trace` | AIPerf |
 | `burstgpt-conversation` | `chat` | `burst_gpt_trace` | AIPerf |
 | `burstgpt-api` | `api-calling` | `burst_gpt_trace` | AIPerf |
@@ -139,23 +137,14 @@ presentation and do not become AIPerf CLI flags.
 
 | Key | Type | Constraint/applicability |
 |---|---|---|
-| `random_seed` | integer | `>= 0` |
+| `random_seed` | integer | `>= 0` (default `666`) |
 | `num_profile_runs` | integer | `1..10`, default `1` |
 | `profile_run_cooldown_seconds` | number | `>= 0`; only when runs > 1 |
 | `concurrency` | integer | `>= 1`; Weka only |
 | `max_context_length` | integer | `>= 1`; Weka only |
 | `trace_idle_gap_cap_seconds` | number | `>= 0`; Weka only |
-
-#### 5.3 Trace-Replayer options
-
-| Key | Type/unit |
-|---|---|
-| `num_producer` | integer |
-| `channel_capacity` | integer |
-| `threads` | integer |
-| `early_stop_error_threshold` | number |
-| `metric_percentiles` | non-empty number array |
-| `tokenizer_config` | server-managed path |
+| `trajectory_start_min_ratio` | number | `0.0..1.0` (`min <= max`, default `0.25`); `inferencex-agentx-mvp`-compatible workloads only |
+| `trajectory_start_max_ratio` | number | `0.0..1.0` (`min <= max`, default `0.75`); `inferencex-agentx-mvp`-compatible workloads only |
 
 ### 6. API conventions
 
@@ -188,7 +177,8 @@ type ValidationIssue = {
 ### 7. Reusable response schemas
 
 ```ts
-type BackendName = "aiperf" | "trace-replayer";
+type BackendName = "aiperf";
+type StoredBackendName = "aiperf" | "trace-replayer"; // historical read compatibility only
 type ScenarioName = "chat" | "api-calling" | "coding";
 type TaskStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 type TraceFormat =
@@ -629,7 +619,7 @@ type CreateSimulationTaskRequest = {
   name?: string; // default "Trace simulation"
   description?: string; // default ""
   scenario: ScenarioName;
-  backend?: BackendName; // default "trace-replayer"
+  backend?: BackendName; // default "aiperf"
   endpoint_mode?: "external" | "in-cluster"; // default "external"
   endpoint_namespace?: string | null;
   endpoint_service?: string | null;
@@ -781,8 +771,6 @@ Status codes:
 | `SIMULATION_TASK_ROOT` | task JSON and artifacts |
 | `TRACE_REPLAY_DATA_DIR` | approved local trace root |
 | `AIPERF_EXECUTABLE` | AIPerf command |
-| `TRACE_REPLAYER_EXECUTABLE` | Trace-Replayer command |
-| `TRACE_REPLAYER_TOKENIZER` | default Trace-Replayer tokenizer |
 | `SIMULATION_BACKEND_CACHE_DIR` | managed backend installations |
 | `SIMULATION_MAX_CONCURRENT_DOWNLOADS` | trace download concurrency |
 | `SIMULATION_MAX_TASK_LOG_LINES` | retained task log lines |
@@ -820,13 +808,12 @@ flowchart LR
 Simulation is a long-running service with equivalent REST and Python APIs. The
 REST router serializes the same domain objects returned by the Python API; it
 does not implement a separate business path. Simulation persists task state on
-disk and manages a bounded pool of concurrent backend subprocesses. Two
-backends are supported:
+disk and manages a bounded pool of concurrent backend subprocesses. Only `aiperf` is
+supported:
 
 | Backend | Display Name | Trace Formats |
 |---|---|---|
 | `aiperf` | AIPerf | mooncake_trace, bailian_trace, baseten_trace, burst_gpt_trace, weka_public_dataset |
-| `trace-replayer` | Trace Replayer | mooncake_trace, bailian_trace |
 
 The `Backend` base validates the common trace replay and SLO contract. Each
 current backend is a `CommandBackend` responsible for its additional
@@ -1053,7 +1040,7 @@ SimulationTaskCreateRequest(
     name: str,
     description: str,
     scenario: Literal["chat", "api-calling", "coding"],
-    backend: Literal["aiperf", "trace-replayer"],
+    backend: Literal["aiperf"],
     endpoint_mode: Literal["external", "in-cluster"],
     endpoint_namespace: str | None,
     endpoint_service: str | None,
@@ -1075,7 +1062,7 @@ SimulationTaskCreateRequest(
 | Field | Meaning |
 |---|---|
 | `scenario` | Must match the selected trace dataset's scenario. |
-| `backend` | Must be `aiperf` or `trace-replayer`. |
+| `backend` | Must be `aiperf`. |
 | `endpoint_mode` | `external` for user-provided URLs; `in-cluster` for Kubernetes service endpoints resolved via `endpoint_namespace` and `endpoint_service`. |
 | `endpoint_url` | Required HTTP or HTTPS URL of the OpenAI-compatible chat completions endpoint. |
 | `model_name` | The model to pass in each request's `model` field. |
@@ -1087,12 +1074,7 @@ SimulationTaskCreateRequest(
 | `trace_timeout_seconds` | Maximum subprocess wall-clock time before the runner kills it. |
 | `fixed_schedule` | If true, the backend replays trace inter-arrival gaps faithfully. If false, it issues requests as fast as concurrency allows. Must be `False` for `aiperf_public_dataset` sources. |
 | `stream` | Whether to request streaming responses (`stream: true`). |
-| `backend_options` | Backend-specific key-value overrides such as `error_rate_slo`, `ttft_slo`, `tpot_slo`, or `concurrency`. |
-
-Trace-Replayer defaults to 16 token producers, a channel capacity of 32, and 32
-worker threads so
-prompt generation does not throttle the recorded request schedule. Explicit
-`num_producer`, `channel_capacity`, and `threads` options override these defaults.
+| `backend_options` | Backend-specific key-value overrides such as `random_seed` (default `666`), `error_rate_slo`, `ttft_slo`, `tpot_slo`, or `concurrency`. |
 
 Validation is performed by the selected `CommandBackend` and may reject
 incompatible combinations of dataset, backend, scale factor, and trace range.
@@ -1302,7 +1284,7 @@ queued -> running -> completed
 
 ```python
 SimulationConfig(
-    backend: Literal["aiperf", "trace-replayer"],
+    backend: Literal["aiperf"],
     backend_options: dict[str, Any],
     duration_seconds: float,
     num_requests: None,
@@ -1355,7 +1337,7 @@ reaches `completed` status.
 ```python
 SimulationResult(
     run_id: str,
-    backend: Literal["aiperf", "trace-replayer"],
+    backend: Literal["aiperf"],
     backend_version: str | None,
     summary: dict[str, Any],
     artifacts: list[SimulationArtifact],
@@ -1503,3 +1485,74 @@ Simulation and benchmark remain parallel consumers of deploy output. The
 existing Evaluate API and Guide adapter are not consumers of these contracts.
 
 <!-- /design-part: domain-contract -->
+
+
+## Runtime Monitoring, Post-Run Diagnostics, and Offline Reporting
+
+### 1. Runtime Incremental Telemetry Architecture
+
+- **`LiveTelemetryCollector`**: Runs alongside active simulation tasks (`queued`, `running`, `cancelling`) and eliminates repeated full-file `O(N)` scans during polling.
+  - **Client incremental tailing (1.5s)**: Locally uses `seek(offset)`. For in-cluster Pods (`incluster.py`), `AIPerfBackend` keeps `live_tail_relative_path = None` and continues using `sync_partial_artifacts` (with a final `kubectl cp` on task completion).
+  - **O(1) polling & live error index**: `GET /tasks/{task_id}/live-telemetry`, `report_request_progress()`, `get_task()`, and `list_tasks()` read the in-memory `LiveTelemetryCollector` snapshot in `O(1)` when active, falling back to disk only for inactive/historical tasks. The collector maintains a bounded live error ring/index merging non-2xx/timeout records from `requests.jsonl` with transport/stream errors matched by `_REQUEST_ERROR_PATTERN` in `stdout.log`.
+  - **Server Prometheus sliding scrape (5s)**: Executes parallel instant/short-range PromQL queries (aligned with `SCRAPE_INTERVAL = 5s`, `RATE_WINDOW = 10s`), updates bounded ring buffers (`<= 720` points), and evaluates hysteresis-guarded alert rules (`ERROR_BURST`, `QUEUE_SATURATION`, `KV_EVICTION_RISK`, `PD_IMBALANCE`, `SCHEDULE_DRIFT`).
+
+### 2. Runtime UI Sub-Views
+
+When a task is `queued`, `running`, or `cancelling`, `SimulationTaskDetails` renders three runtime sub-tabs:
+1. **`Replay Monitor`** (default): Five-phase state machine (`Preparing` -> `Warmup` -> `Profiling` -> `Cooldown` -> `Collecting Telemetry`), Replay Schedule Fidelity badge (`On-schedule <= 50ms`, `Mild Drift 50-250ms`, `Lagging > 250ms` based on `s_time_drift` p90), 6 live KPI cards, 2x2 streaming charts, hysteresis alert ticker, and a clickable **Live Error Inspector** (triggered from `Error Rate`, `Failed: N`, or `ERROR_BURST`, with status-code filter pills, `3s` auto-refresh toggle, and copy-error support).
+2. **`Live Monitoring`**: Reuses Evaluation's `DeploymentProfilingPanel` (`Flow Map`) driven by `target_deployments` resolved across direct `deployment` executions, `model_service_group_id` member executions (with an execution selector), and `in-cluster` `(endpoint_cluster_id, endpoint_namespace)` deployments, including `Enable monitoring / retry` support.
+3. **`Logs & Configuration`**: Live `aiperf` stdout/stderr tail with ANSI stripping, keyword search, error-only filtering, and run configuration summary.
+
+### 3. Post-Run 6-Tab Diagnostic Workspace & Forensics
+
+Terminal tasks (`completed`, `failed`, `cancelled`, including partial/legacy runs) open a persistent 6-tab workspace:
+- **Toolbar**: `Profiling Steady-State` vs `Full Run` analysis window toggle (controlled by `backend_options.warmup_seconds`), **Compare Runs** (side-by-side comparison of 2–4 runs), **Download HTML Report**, and dropdown for `.tar.gz` bundle, Summary CSV, Forensics JSON, and individual artifacts.
+- **Tabs**:
+  1. `Overview`: Automated Verdict Hero Card, SLO Attainment % & Goodput (`e2e_slo`, `ttft_slo`, `tpot_slo`, `error_rate_slo`), Warmup vs Steady-State KPI tiles, and 5 overview charts (Throughput, Latency, dual-source In-Flight Concurrency, Cold Start vs Steady State, Accelerator Power & Energy).
+  2. `Bottlenecks`: Ranked findings, minute-by-minute role status timeline, **Where TTFT Goes** 3-layer decomposition (`vLLM Prefill Compute`, `vLLM Queue Wait`, `Client + Gateway + EPP Overhead`), follow-up turn cache behavior, EPP vs vLLM cache-hit comparison, and per-pod skew.
+  3. `Serving`: Recorded historical `<FlowMap historical />` (`Requests` / `Tokens`), Gateway & EPP routing, vLLM engine metrics, KV Cache / Offload / NIXL / Eviction, profile-driven Accelerator Telemetry, and time-windowed **Grafana Deep Links** (`http:`/`https:` only).
+  4. `Requests`: Replay fidelity (`s_time_drift`), **Sessions over Time** swimlanes (for `bailian_trace`, correlated via `scheduled_ms = max(0, s_time - s_time_drift)` and `input_length` within `±5ms` tolerance with honest `correlation` disclosure), Prompt Length & Cache-Hit bucket heatmaps, Conversation Structure, CDF & percentile table, and error drill-down.
+  5. `System`: Host CPU, memory, disk I/O, and host/accelerator power (gracefully degraded when `node_exporter` is absent).
+  6. `Logs & Configuration`: Sanitized `run-manifest.yaml`, searchable lifecycle/tool logs, and Artifacts Download Hub with sizes and SHA-256 checksums.
+
+**`ForensicsAnalyzer` 8-Priority Verdict Rules** (evaluated on Steady-State window):
+1. `error_saturation`
+2. `client_schedule_drift`
+3. `kv_cache_eviction`
+4. `queue_bound`
+5. `prefill_bound`
+6. `decode_bound`
+7. `routing_cache_miss`
+8. `healthy`
+
+### 4. Hardware-Profile-Driven Telemetry
+
+- `hardware/profiles/nvidia.json` declares `framebuffer_free` (`DCGM_FI_DEV_FB_FREE`), `power` (`DCGM_FI_DEV_POWER_USAGE`), and `temperature` (`DCGM_FI_DEV_GPU_TEMP`).
+- `monitoring/profiling/service.py` includes a `namespace`/`pod` fallback for NVIDIA DRA exporters lacking `pci` labels.
+- Topology rendering adapts dynamically to `topology_mode` (`aggregated` vs `disaggregated` Prefill/Decode) without hardcoded vendor strings, and integrates trapezoidal energy (`Wh` / `kWh`) and efficiency (`Output Tok / Wh`).
+
+### 5. Offline HTML Report & Reproducible Bundle Layout
+
+Generated artifacts are stored under `DATA/artifacts/simulations/<task_id>/artifacts/report/` and registered via `artifact-manifest.v1` (zero DB schema migrations):
+- **Single-file offline HTML report** (`trace-replayer-report-<task_id>.html`): Zero external network requests, ~30 KB Canvas/SVG micro-chart kernel, dark/light themes, `@media print` styles, `<10 MB` hard cap (typical `250 KB–1.2 MB`; pure-memory `Blob` + `DecompressionStream('gzip')` fallback above `5 MB`), escaped JSON payload, zero `innerHTML`, and strict `Content-Security-Policy: default-src 'none'`.
+- **On-demand cached `.tar.gz` bundle** (`trace-replayer-bundle-<task_id>.tar.gz`): Contains `report/index.html`, `forensics.json`, `summary.json`, `summary.csv`, `timeseries/{client-series,server-telemetry}.json`, `requests/{requests.jsonl,sessions-summary.json}`, `config/run-manifest.yaml`, and `logs/{trace-replayer,task-lifecycle}.log`.
+
+### 6. REST API, RBAC, and MCP Catalog Contract
+
+- **RBAC**: All `/tasks/{task_id}/*` routes enforce `ROUTE_PERMISSIONS` (`simulation:task:read` for read/download routes) and `require_cluster_access`, with credential/token sanitization across logs, manifests, and reports.
+- **MCP Catalog**:
+  - `GET /api/simulation/tasks/{task_id}/live-telemetry` omits `operation_id` and is registered in `apps/backend/src/llm_d_lens/mcp/definitions.json` (`intentionalSkips`) as a UI-only polling endpoint.
+  - `GET /api/simulation/tasks/{task_id}/telemetry` declares `operation_id="get_simulation_telemetry"` for Lens Assistant MCP access.
+  - `GET /api/simulation/tasks/{task_id}/response-code-issues` accepts optional `status_code` (default `"all"`) and `sort=newest|request_number`, returning `counts_by_code` in `O(1)` during live runs.
+
+## AIPerf 0.14.0 and InferenceX AgentX MVP Contract
+
+- **Version & Image**: `AIPerfBackend.VERSION` is `0.14.0`; the default in-cluster image is `nvcr.io/nvidia/ai-dynamo/aiperf:0.14.0` (with fallback `pip install aiperf==0.14.0`).
+- **CLI Contract**:
+  - Always passes `--use-server-token-count`, `--slice-duration 1.0`, and `--streaming` (and requires `stream: true`).
+  - Conditionally passes `--scenario inferencex-agentx-mvp` on compatible workloads (the 14 `semianalysis_cc_traces_weka_*` subagent datasets and `mooncake_trace` in Concurrency Slots mode), plus `--unsafe-override` when `duration_seconds < 900` or when using local `mooncake_trace`.
+  - Optionally passes `--trajectory-start-min-ratio` and `--trajectory-start-max-ratio` (`[0.0, 1.0]`, `min <= max`) when set in `backend_options` for `inferencex-agentx-mvp`-compatible workloads, omitting unset/cleared keys so AIPerf uses its scenario defaults (`0.0` / `1.0`) while preserving `0.0`.
+- **Artifacts & Parsing**:
+  - `rglob()` artifact discovery excludes `checkpoints/` (preferring direct root files, then shallowest non-`checkpoints` matches) and registers `profile_export_aiperf_timeslices.json` / `profile_export_aiperf_timeslices.csv`.
+  - Warmup filtering checks `phase_kind` (`"warmup"`) alongside `benchmark_phase`.
+  - Server token count parsing falls back to `usage_prompt_tokens`, `usage_completion_tokens`, and `usage_prompt_cache_read_tokens` (`total_usage_*`).

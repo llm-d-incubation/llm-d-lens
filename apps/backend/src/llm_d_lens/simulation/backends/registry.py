@@ -66,9 +66,13 @@ def list_scenarios() -> list[ScenarioDescriptor]:
     return list(scenarios.values())
 
 
-def _get_registered_backend(name: str) -> Backend:
+def get_registered_backend_or_none(name: str) -> Backend | None:
     discover_backends()
-    backend = _BACKENDS.get(name)
+    return _BACKENDS.get(name)
+
+
+def _get_registered_backend(name: str) -> Backend:
+    backend = get_registered_backend_or_none(name)
     if backend is None:
         raise SimulationConfigurationError(f"Unknown simulation backend '{name}'")
     return backend

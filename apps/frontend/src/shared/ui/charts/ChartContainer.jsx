@@ -14,27 +14,45 @@
 
 import React from 'react';
 import { cn } from '../../lib/cn';
+import { HelpTooltip } from '../FormControls';
 
 // Chart panel shell. Successor to common/ChartCard, theme-aware. In dark mode
 // it keeps ChartCard's translucent "glass" surface so the page's dotted grid
 // and glow blobs bleed through. Put filter controls in `actions`; keep them in
 // one row above the plot.
-export function ChartContainer({ title, subtitle, actions, className, children }) {
+export function ChartContainer({ title, subtitle, help, helpFormula, formula, helpAlign = 'start', actions, className, children }) {
+    const resolvedFormula = helpFormula ?? formula;
+    const hasHelp = Boolean(help || resolvedFormula);
     return (
         <div
             className={cn(
+                'relative hover:z-30 focus-within:z-30',
                 'bg-theme-card dark:bg-slate-900/50 border border-theme-border dark:border-slate-800/80',
                 'backdrop-blur-xl rounded-2xl p-6 shadow-2xl transition-all',
                 className
             )}
         >
-            {(title || actions) && (
+            {(title || hasHelp || actions) && (
                 <div className="flex items-start justify-between gap-4 mb-5">
                     <div className="min-w-0">
-                        {title && (
-                            <h3 className="text-slate-600 dark:text-slate-300 text-xs font-bold uppercase tracking-wider font-mono">
-                                {title}
-                            </h3>
+                        {(title || hasHelp) && (
+                            <div className="flex items-center gap-1.5">
+                                {title && (
+                                    <h3 className="text-slate-600 dark:text-slate-300 text-xs font-bold uppercase tracking-wider font-mono">
+                                        {title}
+                                    </h3>
+                                )}
+                                {hasHelp && (
+                                    <HelpTooltip
+                                        label={`${typeof title === 'string' ? title : 'Chart'} help`}
+                                        align={helpAlign}
+                                        iconSize={13}
+                                        formula={resolvedFormula}
+                                    >
+                                        {help}
+                                    </HelpTooltip>
+                                )}
+                            </div>
                         )}
                         {subtitle && <p className="text-[11px] text-theme-muted mt-1">{subtitle}</p>}
                     </div>

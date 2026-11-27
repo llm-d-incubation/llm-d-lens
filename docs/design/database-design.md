@@ -766,7 +766,7 @@ The `live_summary` field is a transient progress snapshot of a running task (the
 | `endpoint_deployment_name` | String(255) | NULL |  |  | - | `endpoint_deployment_name` |
 | `endpoint_url` | Text | NOT NULL |  |  | - | `endpoint_url` |
 | `model_name` | String(255) | NOT NULL |  |  | - | `model_name` |
-| `simulation_backend` | String(16) | NOT NULL |  |  | - | `simulation.backend`; `CHECK IN ('aiperf','trace-replayer')` |
+| `simulation_backend` | String(16) | NOT NULL |  |  | - | `simulation.backend`; `CHECK IN ('aiperf','trace-replayer')` (retained for historical DB compatibility; new tasks only accept `'aiperf'`) |
 | `simulation_backend_options` | JSONVariant | NOT NULL |  |  | `'{}'` | `simulation.backend_options` (Rule 3) |
 | `simulation_duration_seconds` | Float | NOT NULL |  |  | - | `simulation.duration_seconds` |
 | `simulation_stream` | Boolean | NOT NULL |  |  | `True` | `simulation.stream` |

@@ -14,6 +14,7 @@ from llm_d_lens.infrastructure.process import CommandNotFoundError, run_sync, sp
 from .errors import SimulationCancelledError, SimulationExecutionError
 from .models import BackendAvailability
 from .progress import report_request_progress
+from .telemetry_live import redact_secret_text
 
 
 def utc_now() -> datetime:
@@ -159,7 +160,8 @@ async def execute_command(
             return_code = exit_task.result()
             await asyncio.gather(stdout_task, stderr_task)
             if return_code != 0:
-                tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-2000:]
+                raw_tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-2000:]
+                tail = redact_secret_text(raw_tail, max_len=2000) or ""
                 raise SimulationExecutionError(f"Simulation exited with code {return_code}: {tail}")
             return CommandResult(
                 return_code=return_code,

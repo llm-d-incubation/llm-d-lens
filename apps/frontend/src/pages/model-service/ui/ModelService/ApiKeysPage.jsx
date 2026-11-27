@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { KeyRound, Plus, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react';
+import { Info, KeyRound, Plus, RefreshCw, ShieldAlert, Trash2 } from 'lucide-react';
 import { usePolling } from '../../../../shared/lib/usePolling';
 import { useClipboard } from '../../../../shared/lib/useClipboard';
 import { useSubmission } from '../../../../shared/lib/useSubmission';
@@ -12,7 +12,7 @@ import { ModuleHeader } from '../../../../shared/ui/ModuleHeader';
 import { ModulePage } from '../../../../shared/ui/ModulePage';
 import { SectionLabel } from '../../../../shared/ui/SectionLabel';
 import { cn } from '../../../../shared/lib/cn';
-import { PermissionGate } from '../../../auth';
+import { PermissionGate, useAuth } from '../../../auth';
 import {
     createModelToken,
     listModelTokens,
@@ -23,18 +23,39 @@ import { CARD, CELL, CELL_MUTED, TABLE_HEAD, TABLE_ROW, maskedKeyHint } from './
 
 // User-facing "API keys" page: self-manage model access tokens (`lens-mk-...`).
 // The plaintext token is shown exactly once, right after create/reset.
-export function ApiKeysPage({ onToggleMobileNav }) {
+export function ApiKeysPage({ onToggleMobileNav, initialAction = '' }) {
+    const auth = useAuth();
+    const isAuthDisabled = auth?.principal?.userId === 'system';
+    const canManageTokens = auth?.can ? auth.can('model-service:token:manage') : true;
     const [tokens, setTokens] = useState([]);
-    const [loading, setLoading] = useState(true);
+    const [loading, setLoading] = useState(!isAuthDisabled && canManageTokens);
     const [error, setError] = useState('');
     const [createOpen, setCreateOpen] = useState(false);
     const [tokenName, setTokenName] = useState('default');
     const [revealed, setRevealed] = useState(null); // { token, id }
     const [pendingRevoke, setPendingRevoke] = useState(null);
     const loadedOnceRef = useRef(false);
+    const handledInitialAction = useRef(false);
     const { copied, copy } = useClipboard();
 
+    useEffect(() => {
+        if (initialAction !== 'create') {
+            handledInitialAction.current = false;
+            return;
+        }
+        if (!handledInitialAction.current && canManageTokens && !isAuthDisabled) {
+            handledInitialAction.current = true;
+            setCreateOpen(true);
+        }
+    }, [initialAction, canManageTokens, isAuthDisabled]);
+
     const load = useCallback(async ({ quiet = false } = {}) => {
+        if (isAuthDisabled || !canManageTokens) {
+            setTokens([]);
+            setError('');
+            setLoading(false);
+            return;
+        }
         if (!quiet && loadedOnceRef.current) setLoading(true);
         try {
             const tokenItems = await listModelTokens();
@@ -46,12 +67,12 @@ export function ApiKeysPage({ onToggleMobileNav }) {
             loadedOnceRef.current = true;
             setLoading(false);
         }
-    }, []);
+    }, [canManageTokens, isAuthDisabled]);
 
     useEffect(() => {
         load();
     }, [load]);
-    usePolling(() => load({ quiet: true }));
+    usePolling(() => load({ quiet: true }), { enabled: !isAuthDisabled && canManageTokens });
 
     const createSubmission = useSubmission('Failed to create token');
     const regenerateSubmission = useSubmission('Failed to reset token');
@@ -103,7 +124,19 @@ export function ApiKeysPage({ onToggleMobileNav }) {
                     </p>
                 )}
 
-                <PermissionGate permission="model-service:token:manage">
+                {isAuthDisabled ? (
+                    <div
+                        role="status"
+                        className="flex items-start gap-2.5 rounded-lg border border-sky-500/30 bg-sky-500/10 p-4 text-xs text-sky-900 dark:text-sky-200"
+                    >
+                        <Info size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
+                        <span>
+                            Personal API keys require user authentication (<code className="font-mono">PRISM_AUTH_MODE=local</code>).
+                            Key management is unavailable while authentication is disabled.
+                        </span>
+                    </div>
+                ) : (
+                    <PermissionGate permission="model-service:token:manage">
                     <section className={cn(CARD, 'api-keys-card p-6')}>
                         <div className="flex flex-wrap items-center justify-between gap-2">
                             <SectionLabel className="text-[#037ffc]">{`API keys (${tokens.length})`}</SectionLabel>
@@ -165,7 +198,8 @@ export function ApiKeysPage({ onToggleMobileNav }) {
                             </AsyncState>
                         </div>
                     </section>
-                </PermissionGate>
+                    </PermissionGate>
+                )}
             </div>
 
             <Modal

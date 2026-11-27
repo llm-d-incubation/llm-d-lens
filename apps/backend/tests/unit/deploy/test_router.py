@@ -513,7 +513,381 @@ def test_get_execution_pods_returns_pods(monkeypatch):
     assert res["pods"][0]["name"] == "pod-1"
     assert res["pods"][0]["phase"] == "Running"
     assert res["pods"][0]["ready"] is True
+    assert res["pods"][0]["deleting"] is False
+    assert res["pods"][0]["status_reason"] == "Running"
     assert res["pods"][0]["pod_ip"] == "10.244.0.5"
+
+
+@pytest.mark.parametrize(
+    ("pod_item", "expected_reason"),
+    [
+        pytest.param(
+            {
+                "metadata": {"name": "pod-init-done-creating"},
+                "spec": {"initContainers": [{"name": "init-cfg"}]},
+                "status": {
+                    "phase": "Pending",
+                    "initContainerStatuses": [
+                        {"name": "init-cfg", "state": {"terminated": {"exitCode": 0, "reason": "Completed"}}}
+                    ],
+                    "containerStatuses": [
+                        {"name": "vllm", "ready": False, "state": {"waiting": {"reason": "ContainerCreating"}}}
+                    ],
+                },
+            },
+            "ContainerCreating",
+            id="finished-init-main-container-creating",
+        ),
+        pytest.param(
+            {
+                "metadata": {"name": "pod-init-done-running-not-ready"},
+                "spec": {"initContainers": [{"name": "init-cfg"}]},
+                "status": {
+                    "phase": "Running",
+                    "initContainerStatuses": [
+                        {"name": "init-cfg", "state": {"terminated": {"exitCode": 0, "reason": "Completed"}}}
+                    ],
+                    "containerStatuses": [{"name": "vllm", "ready": False, "state": {"running": {}}}],
+                },
+            },
+            "Running",
+            id="finished-init-main-running-not-ready",
+        ),
+        pytest.param(
+            {
+                "metadata": {"name": "pod-init-done-running-ready"},
+                "spec": {"initContainers": [{"name": "init-cfg"}]},
+                "status": {
+                    "phase": "Running",
+                    "initContainerStatuses": [
+                        {"name": "init-cfg", "state": {"terminated": {"exitCode": 0, "reason": "Completed"}}}
+                    ],
+                    "containerStatuses": [{"name": "vllm", "ready": True, "state": {"running": {}}}],
+                },
+            },
+            "Running",
+            id="finished-init-main-running-ready",
+        ),
+        pytest.param(
+            {
+                "metadata": {"name": "pod-init-running-first"},
+                "spec": {"initContainers": [{"name": "init-1"}]},
+                "status": {
+                    "phase": "Pending",
+                    "initContainerStatuses": [{"name": "init-1", "state": {"running": {}}}],
+                },
+            },
+            "Init:0/1",
+            id="init-actively-running-single",
+        ),
+        pytest.param(
+            {
+                "metadata": {"name": "pod-init-running-second"},
+                "spec": {"initContainers": [{"name": "init-1"}, {"name": "init-2"}]},
+                "status": {
+                    "phase": "Pending",
+                    "initContainerStatuses": [
+                        {"name": "init-1", "state": {"terminated": {"exitCode": 0, "reason": "Completed"}}},
+                        {"name": "init-2", "state": {"running": {}}},
+                    ],
+                },
+            },
+            "Init:1/2",
+            id="init-first-finished-second-running",
+        ),
+        pytest.param(
+            {
+                "metadata": {"name": "pod-init-pod-initializing"},
+                "spec": {"initContainers": [{"name": "init-1"}]},
+                "status": {
+                    "phase": "Pending",
+                    "initContainerStatuses": [{"name": "init-1", "state": {"waiting": {"reason": "PodInitializing"}}}],
+                },
+            },
+            "Init:0/1",
+            id="init-waiting-pod-initializing",
+        ),
+        pytest.param(
+            {
+                "metadata": {"name": "pod-init-image-pull-backoff"},
+                "spec": {"initContainers": [{"name": "init-1"}]},
+                "status": {
+                    "phase": "Pending",
+                    "initContainerStatuses": [{"name": "init-1", "state": {"waiting": {"reason": "ImagePullBackOff"}}}],
+                },
+            },
+            "Init:ImagePullBackOff",
+            id="init-waiting-image-pull-backoff",
+        ),
+        pytest.param(
+            {
+                "metadata": {"name": "pod-init-crash-loop"},
+                "spec": {"initContainers": [{"name": "init-1"}]},
+                "status": {
+                    "phase": "Pending",
+                    "initContainerStatuses": [{"name": "init-1", "state": {"waiting": {"reason": "CrashLoopBackOff"}}}],
+                },
+            },
+            "Init:CrashLoopBackOff",
+            id="init-waiting-crash-loop-backoff",
+        ),
+        pytest.param(
+            {
+                "metadata": {"name": "pod-init-terminated-error"},
+                "spec": {"initContainers": [{"name": "init-1"}]},
+                "status": {
+                    "phase": "Failed",
+                    "initContainerStatuses": [
+                        {"name": "init-1", "state": {"terminated": {"exitCode": 1, "reason": "Error"}}}
+                    ],
+                },
+            },
+            "Init:Error",
+            id="init-terminated-error",
+        ),
+        pytest.param(
+            {
+                "metadata": {"name": "pod-init-terminated-oom"},
+                "spec": {"initContainers": [{"name": "init-1"}]},
+                "status": {
+                    "phase": "Failed",
+                    "initContainerStatuses": [
+                        {"name": "init-1", "state": {"terminated": {"exitCode": 137, "reason": "OOMKilled"}}}
+                    ],
+                },
+            },
+            "Init:OOMKilled",
+            id="init-terminated-oomkilled",
+        ),
+        pytest.param(
+            {
+                "metadata": {"name": "pod-init-terminated-exitcode"},
+                "spec": {"initContainers": [{"name": "init-1"}]},
+                "status": {
+                    "phase": "Failed",
+                    "initContainerStatuses": [{"name": "init-1", "state": {"terminated": {"exitCode": 137}}}],
+                },
+            },
+            "Init:ExitCode:137",
+            id="init-terminated-no-reason-exitcode",
+        ),
+        pytest.param(
+            {
+                "metadata": {"name": "pod-init-terminated-signal"},
+                "spec": {"initContainers": [{"name": "init-1"}]},
+                "status": {
+                    "phase": "Failed",
+                    "initContainerStatuses": [
+                        {"name": "init-1", "state": {"terminated": {"exitCode": 137, "signal": 9}}}
+                    ],
+                },
+            },
+            "Init:Signal:9",
+            id="init-terminated-signal",
+        ),
+        pytest.param(
+            {
+                "metadata": {"name": "pod-sidecar-started"},
+                "spec": {"initContainers": [{"name": "istio-proxy", "restartPolicy": "Always"}]},
+                "status": {
+                    "phase": "Running",
+                    "initContainerStatuses": [{"name": "istio-proxy", "started": True, "state": {"running": {}}}],
+                    "containerStatuses": [{"name": "vllm", "ready": True, "state": {"running": {}}}],
+                },
+            },
+            "Running",
+            id="native-sidecar-init-started-main-running",
+        ),
+        pytest.param(
+            {
+                "metadata": {"name": "pod-sidecar-not-started"},
+                "spec": {"initContainers": [{"name": "istio-proxy", "restartPolicy": "Always"}]},
+                "status": {
+                    "phase": "Pending",
+                    "initContainerStatuses": [{"name": "istio-proxy", "started": False, "state": {"running": {}}}],
+                },
+            },
+            "Init:0/1",
+            id="native-sidecar-init-not-started",
+        ),
+        pytest.param(
+            {
+                "metadata": {"name": "calibration-job-pod"},
+                "spec": {},
+                "status": {
+                    "phase": "Succeeded",
+                    "containerStatuses": [
+                        {
+                            "name": "calibrate",
+                            "ready": False,
+                            "state": {"terminated": {"exitCode": 0, "reason": "Completed"}},
+                        }
+                    ],
+                },
+            },
+            "Completed",
+            id="job-pod-succeeded-completed",
+        ),
+        pytest.param(
+            {
+                "metadata": {"name": "pod-deleting", "deletionTimestamp": "2026-09-06T00:05:00Z"},
+                "spec": {},
+                "status": {
+                    "phase": "Running",
+                    "containerStatuses": [{"name": "vllm", "ready": True, "state": {"running": {}}}],
+                },
+            },
+            "Terminating",
+            id="deleting-pod-terminating",
+        ),
+        pytest.param(
+            {
+                "metadata": {"name": "pod-deleting-nodelost", "deletionTimestamp": "2026-09-06T00:05:00Z"},
+                "spec": {},
+                "status": {"phase": "Running", "reason": "NodeLost"},
+            },
+            "Unknown",
+            id="deleting-nodelost-unknown",
+        ),
+        pytest.param(
+            {
+                "metadata": {"name": "pod-multi-running-and-crashloop"},
+                "spec": {},
+                "status": {
+                    "phase": "Running",
+                    "containerStatuses": [
+                        {"name": "sidecar", "ready": True, "state": {"running": {}}},
+                        {"name": "vllm", "ready": False, "state": {"waiting": {"reason": "CrashLoopBackOff"}}},
+                    ],
+                },
+            },
+            "CrashLoopBackOff",
+            id="multi-container-running-and-crashloop",
+        ),
+        pytest.param(
+            {
+                "metadata": {"name": "pod-multi-oom-and-running"},
+                "spec": {},
+                "status": {
+                    "phase": "Running",
+                    "containerStatuses": [
+                        {"name": "sidecar", "ready": True, "state": {"running": {}}},
+                        {
+                            "name": "vllm",
+                            "ready": False,
+                            "state": {"terminated": {"exitCode": 137, "reason": "OOMKilled"}},
+                        },
+                    ],
+                },
+            },
+            "OOMKilled",
+            id="multi-container-running-and-oomkilled",
+        ),
+        pytest.param(
+            {
+                "metadata": {"name": "pod-multi-running-unready-and-completed"},
+                "spec": {},
+                "status": {
+                    "phase": "Running",
+                    "containerStatuses": [
+                        {
+                            "name": "helper",
+                            "ready": False,
+                            "state": {"terminated": {"exitCode": 0, "reason": "Completed"}},
+                        },
+                        {"name": "vllm", "ready": False, "state": {"running": {}}},
+                    ],
+                },
+            },
+            "Running",
+            id="multi-container-running-not-ready-beats-completed",
+        ),
+    ],
+)
+def test_derive_pod_status_reason(pod_item, expected_reason):
+    assert router._derive_pod_status_reason(pod_item) == expected_reason
+
+
+def test_get_execution_pods_init_container_and_deleting(monkeypatch):
+    mock_context = SimpleNamespace(
+        execution_id="exec-init",
+        namespace="prism-exec-init",
+        cluster_id="cluster-1",
+        cluster_session_id=None,
+    )
+    monkeypatch.setattr(router, "find_execution_context", lambda _id: mock_context)
+
+    k8s_pods_json = json.dumps(
+        {
+            "items": [
+                {
+                    "metadata": {
+                        "name": "decode-0",
+                        "namespace": "prism-exec-init",
+                        "creationTimestamp": "2026-09-06T00:00:00Z",
+                    },
+                    "spec": {"nodeName": "worker-1", "initContainers": [{"name": "init-model"}]},
+                    "status": {
+                        "phase": "Running",
+                        "podIP": "10.244.0.9",
+                        "conditions": [{"type": "Ready", "status": "False"}],
+                        "initContainerStatuses": [
+                            {
+                                "name": "init-model",
+                                "restartCount": 0,
+                                "state": {"terminated": {"exitCode": 0, "reason": "Completed"}},
+                            }
+                        ],
+                        "containerStatuses": [
+                            {
+                                "name": "vllm",
+                                "image": "vllm:latest",
+                                "ready": False,
+                                "restartCount": 0,
+                                "state": {"running": {}},
+                            }
+                        ],
+                    },
+                },
+                {
+                    "metadata": {
+                        "name": "decode-1",
+                        "namespace": "prism-exec-init",
+                        "creationTimestamp": "2026-09-06T00:00:00Z",
+                        "deletionTimestamp": "2026-09-06T00:05:00Z",
+                    },
+                    "spec": {"nodeName": "worker-2"},
+                    "status": {
+                        "phase": "Running",
+                        "conditions": [{"type": "Ready", "status": "False"}],
+                        "containerStatuses": [
+                            {
+                                "name": "vllm",
+                                "image": "vllm:latest",
+                                "ready": False,
+                                "restartCount": 0,
+                                "state": {"running": {}},
+                            }
+                        ],
+                    },
+                },
+            ]
+        }
+    )
+
+    async def mock_run_kubectl(cmd, cluster_id, timeout):
+        return SimpleNamespace(returncode=0, stdout=k8s_pods_json, stderr="")
+
+    import llm_d_lens.infrastructure.kubernetes as k8s
+
+    monkeypatch.setattr(k8s, "run_kubectl", mock_run_kubectl)
+
+    res = asyncio.run(router.get_execution_pods("exec-init"))
+    assert len(res["pods"]) == 2
+    assert res["pods"][0]["status_reason"] == "Running"
+    assert res["pods"][0]["deleting"] is False
+    assert res["pods"][1]["status_reason"] == "Terminating"
+    assert res["pods"][1]["deleting"] is True
 
 
 def test_get_execution_pod_logs_returns_logs(monkeypatch):
@@ -1811,6 +2185,7 @@ async def test_get_execution_pods_403_phase1_cleanup_and_prometheus_fallback(mon
             "labels": {"app": "vllm"},
             "phase": "Running",
             "ready": False,
+            "deleting": False,
             "pod_ip": "10.0.0.8",
             "node_name": "node-2",
             "restarts": 0,

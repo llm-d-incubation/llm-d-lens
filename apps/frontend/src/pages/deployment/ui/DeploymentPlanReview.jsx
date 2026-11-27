@@ -30,6 +30,18 @@ const runtimeFields = [
     ['max_num_batched_tokens', 'Maximum batched tokens', 256, 131072, 1],
 ];
 
+function collectPreflightScopeNotes(...sources) {
+    const notes = new Set();
+    for (const source of sources) {
+        if (!Array.isArray(source)) continue;
+        for (const item of source) {
+            const note = typeof item === 'string' ? item.trim() : '';
+            if (note) notes.add(note);
+        }
+    }
+    return [...notes];
+}
+
 export function DeploymentPlanReview({ content = '', candidate, model, mode = 'manual', decisions = [], onEdit, onEditingChange, onRequirementsChange, onCheck, onBenchmark, onWorkload, requirements, disabled = false, validation, revision = 1, maxAccelerators, runtime, resourceEstimate, evidence, rationale }) {
     const [view, setView] = useState('2d'), [selected, setSelected] = useState('');
     const [editing, setEditing] = useState(false), [replicas, setReplicas] = useState(''), [tp, setTp] = useState('');
@@ -129,6 +141,7 @@ export function DeploymentPlanReview({ content = '', candidate, model, mode = 'm
         finally { setApplying(false); }
     };
     const editable = onEdit && node?.tier === 1 && node.role !== 'encode' && (!content || node.containers?.some(container => container.name === 'modelserver'));
+    const preflightNotes = collectPreflightScopeNotes(validation?.unmodeled, validation?.hardware?.unmodeled);
     return <Panel title="Deployment plan" actions={<Badge tone={validation?.status === 'resources_checked' ? 'success' : 'neutral'}>{validation?.status === 'resources_checked' ? 'Configuration checked' : 'Checks pending'}</Badge>} className="min-w-0 shadow-none">
         <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0"><h3 className="text-lg font-semibold">{candidateLabel(candidate)}</h3><p className="mt-1 text-sm text-theme-muted">{resourceEstimate?.accelerators ?? currentResources ?? 'Unknown'} accelerators{resourceEstimate?.available_accelerators != null ? ` / ${resourceEstimate.available_accelerators} available` : ''} / {enabled.length} enabled optimizations</p></div>
@@ -176,6 +189,7 @@ export function DeploymentPlanReview({ content = '', candidate, model, mode = 'm
                 </div>)}
             </div>
             {validation?.warnings?.length > 0 && <details><summary className="cursor-pointer text-sm"><Badge tone="warning">{validation.warnings.length} warnings</Badge></summary><ul className="mt-2 space-y-2 text-sm">{validation.warnings.map(warning => <li key={warning}>{warning}</li>)}</ul></details>}
+            {preflightNotes.length > 0 && <details><summary className="cursor-pointer text-sm"><Badge tone="neutral">Preflight scope notes ({preflightNotes.length})</Badge></summary><ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-theme-muted">{preflightNotes.map(note => <li key={note}>{note}</li>)}</ul></details>}
             <details><summary className="cursor-pointer text-xs text-theme-muted">Technical evidence / revision {revision}</summary>
                 <div className="mt-3 grid gap-4 text-xs md:grid-cols-2">
                     <div><h4 className="font-medium">Recorded checks</h4><ul className="mt-2 space-y-2 text-theme-muted">{validation?.checks?.length ? validation.checks.map(check => <li key={check}>{check}</li>) : <li>No checks recorded.</li>}</ul></div>

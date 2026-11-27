@@ -667,3 +667,115 @@ def test_get_client_returns_a_client_for_a_saved_provider(monkeypatch, tmp_path)
 
     assert isinstance(client, OpenAICompatibleClient)
     assert client.model == "gpt-4o-mini"
+
+
+@pytest.mark.asyncio
+async def test_openai_client_returns_partial_markdown_on_final_length_truncation_without_schema(monkeypatch):
+    fake_client = _Client(
+        [
+            _Response(body={"choices": [{"finish_reason": "length", "message": {"content": "## Partial 1"}}]}),
+            _Response(
+                body={"choices": [{"finish_reason": "length", "message": {"content": "## Partial 1\n## Part 2"}}]}
+            ),
+        ]
+    )
+    monkeypatch.setattr("llm_d_lens.ai_providers.client.httpx.AsyncClient", lambda **_kwargs: fake_client)
+
+    client = OpenAICompatibleClient(base_url="https://api.openai.com/", model="deepseek-reasoner")
+    content = await client.complete(system_prompt="sys", user_content="user", max_tokens=4096)
+
+    assert content == "## Partial 1\n## Part 2"
+    assert [req["json"]["max_tokens"] for req in fake_client.requests] == [4096, 8192]
+
+
+@pytest.mark.asyncio
+async def test_openai_client_falls_back_to_prior_partial_markdown_when_larger_max_tokens_hits_400(monkeypatch):
+    fake_client = _Client(
+        [
+            _Response(body={"choices": [{"finish_reason": "length", "message": {"content": "## Valid Markdown"}}]}),
+            _Response(400, {"error": {"message": "Invalid max_tokens: must be <= 8192"}}),
+        ]
+    )
+    monkeypatch.setattr("llm_d_lens.ai_providers.client.httpx.AsyncClient", lambda **_kwargs: fake_client)
+
+    client = OpenAICompatibleClient(base_url="https://api.deepseek.com/", model="deepseek-reasoner")
+    content = await client.complete(system_prompt="sys", user_content="user", max_tokens=8192)
+
+    assert content == "## Valid Markdown"
+    assert [req["json"]["max_tokens"] for req in fake_client.requests] == [8192, 16384]
+
+
+@pytest.mark.asyncio
+async def test_openai_client_caps_max_tokens_down_on_400_without_prior_partial_content(monkeypatch):
+    fake_client = _Client(
+        [
+            _Response(400, {"error": {"message": "max_tokens exceeds 8192"}}),
+            _Response(400, {"error": {"message": "max_tokens exceeds 4096"}}),
+            _Response(body={"choices": [{"finish_reason": "stop", "message": {"content": "## Recovered"}}]}),
+        ]
+    )
+    monkeypatch.setattr("llm_d_lens.ai_providers.client.httpx.AsyncClient", lambda **_kwargs: fake_client)
+
+    client = OpenAICompatibleClient(base_url="https://api.openai.com/", model="gpt-4o-mini")
+    content = await client.complete(system_prompt="sys", user_content="user", max_tokens=16384)
+
+    assert content == "## Recovered"
+    assert [req["json"]["max_tokens"] for req in fake_client.requests] == [16384, 8192, 4096]
+
+
+@pytest.mark.asyncio
+async def test_openai_client_strictly_raises_on_length_truncation_when_json_schema_is_set(monkeypatch):
+    fake_client = _Client(
+        [
+            _Response(body={"choices": [{"finish_reason": "length", "message": {"content": '{"ok":'}}]}),
+            _Response(body={"choices": [{"finish_reason": "length", "message": {"content": '{"ok":'}}]}),
+            _Response(body={"choices": [{"finish_reason": "length", "message": {"content": '{"ok":'}}]}),
+            _Response(body={"choices": [{"finish_reason": "length", "message": {"content": '{"ok":'}}]}),
+        ]
+    )
+    monkeypatch.setattr("llm_d_lens.ai_providers.client.httpx.AsyncClient", lambda **_kwargs: fake_client)
+
+    client = OpenAICompatibleClient(
+        base_url="https://api.deepseek.com/",
+        model="deepseek-chat",
+        structured_output_mode="json_object",
+    )
+    with pytest.raises(AIProviderClientError, match="truncated"):
+        await client.complete(
+            system_prompt="sys",
+            user_content="user",
+            json_schema={"type": "object", "properties": {"ok": {"type": "boolean"}}},
+            max_tokens=8192,
+        )
+
+
+@pytest.mark.asyncio
+async def test_openai_client_raises_on_length_truncation_with_empty_content(monkeypatch):
+    fake_client = _Client(
+        [
+            _Response(body={"choices": [{"finish_reason": "length", "message": {"content": "   "}}]}),
+            _Response(body={"choices": [{"finish_reason": "length", "message": {"content": ""}}]}),
+        ]
+    )
+    monkeypatch.setattr("llm_d_lens.ai_providers.client.httpx.AsyncClient", lambda **_kwargs: fake_client)
+
+    client = OpenAICompatibleClient(base_url="https://api.openai.com/", model="deepseek-reasoner")
+    with pytest.raises(AIProviderClientError, match="truncated"):
+        await client.complete(system_prompt="sys", user_content="user", max_tokens=8192)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_client_returns_partial_text_on_max_tokens_and_caps_400_down(monkeypatch):
+    fake_client = _Client(
+        [
+            _Response(400, {"error": {"message": "max_tokens exceeds model limit 8192"}}),
+            _Response(body={"stop_reason": "max_tokens", "content": [{"type": "text", "text": "## Partial text"}]}),
+        ]
+    )
+    monkeypatch.setattr("llm_d_lens.ai_providers.client.httpx.AsyncClient", lambda **_kwargs: fake_client)
+
+    client = AnthropicCompatibleClient(base_url="https://api.anthropic.com/", model="claude-3-5-sonnet")
+    content = await client.complete(system_prompt="sys", user_content="user", max_tokens=16384)
+
+    assert content == "## Partial text"
+    assert [req["json"]["max_tokens"] for req in fake_client.requests] == [16384, 8192]

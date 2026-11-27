@@ -92,7 +92,7 @@ List Simulation backends Lens knows about and whether each backend is available 
           "display_name": "AIPerf",
           "api_version": 1,
           "available": true,
-          "version": "0.12.0",
+          "version": "0.14.0",
           "unavailable_reason": null,
           "scenarios": [
             {
@@ -115,14 +115,24 @@ List Simulation backends Lens knows about and whether each backend is available 
             "supports_request_count": false,
             "supports_request_rate": false,
             "supports_streaming": true,
+            "supports_concurrency": true,
             "supports_per_request_results": true,
             "supports_cancellation": true,
             "supports_trace_range": true,
             "scale_factor_trace_formats": ["baseten_trace"],
             "trace_format_capabilities": {
-              "mooncake_trace": {"supports_trace_range": true, "supports_scale_factor": false}
+              "mooncake_trace": {
+                "supports_trace_range": true,
+                "supports_scale_factor": false,
+                "supports_fixed_schedule": true,
+                "supports_concurrency": true
+              }
             },
-            "advanced_options": [],
+            "advanced_options": [
+              {"name": "random_seed", "label": "Random seed", "minimum": 0, "default": 666},
+              {"name": "trajectory_start_min_ratio", "label": "Trajectory start min ratio", "minimum": 0.0, "maximum": 1.0, "default": 0.25},
+              {"name": "trajectory_start_max_ratio", "label": "Trajectory start max ratio", "minimum": 0.0, "maximum": 1.0, "default": 0.75}
+            ],
             "trace_formats": [
               "mooncake_trace",
               "bailian_trace",
@@ -158,7 +168,8 @@ Probe a model endpoint and discover which models it reports. The optional `api_k
 
     Request body: `ModelDiscoveryRequest`
     - `endpoint_url` (`string`, required)
-    - `api_key` (`string`, optional, maximum 4096 characters; used only for this request)
+    - `api_key` (`string`, optional, maximum 4096 characters; used only for this request; mutually exclusive with `model_access_token_id` — supplying both returns HTTP 422; retained for CLI and direct API backward compatibility)
+    - `model_access_token_id` (`string`, optional; ID of an active, non-expired Model Access Token owned by the caller — requires an authenticated caller, mints a short-lived delegated token for this probe, and is mutually exclusive with `api_key`)
 
     ```json
     {
@@ -215,7 +226,7 @@ List the simulation scenario catalog Lens exposes, such as chat, API-calling, an
           "name": "chat",
           "display_name": "Chat",
           "description": "Conversational and general assistant traffic.",
-          "supported_backends": ["aiperf", "trace-replayer"]
+          "supported_backends": ["aiperf"]
         },
         {
           "name": "coding",
@@ -267,7 +278,7 @@ List registered trace datasets and the backends that can replay each one.
           "license": "Apache-2.0",
           "sha256": "f0c15fb14b60d0afca8b1f7c1ff29378f3df54318e6d112b47ad3b2a2f5881ef",
           "source_repository": "https://github.com/kvcache-ai/Mooncake.git",
-          "supported_backends": ["aiperf", "trace-replayer"]
+          "supported_backends": ["aiperf"]
         }
       ]
     }
@@ -398,7 +409,7 @@ List Simulation tasks with optional filters for status, scenario, backend, model
     **`GET /api/simulation/tasks`**
 
     Request: no body.
-    - Query parameters: `status`, `scenario`, `search`, `backend`, `model`, `dataset`, `trace_format`, `endpoint`, `created_after`, `created_before`, `offset`, `limit`.
+    - Query parameters: `status`, `scenario`, `search` (also matches task `hardware`), `backend`, `model`, `hardware` (case-insensitive filter by detected accelerator model or hardware profile), `dataset`, `trace_format`, `endpoint`, `created_after`, `created_before`, `offset`, `limit`.
 
     Response:
 
@@ -423,8 +434,8 @@ List Simulation tasks with optional filters for status, scenario, backend, model
           "endpoint_url": "http://127.0.0.1:38000/v1",
           "model_name": "Qwen/Qwen3-8B",
           "simulation": {
-            "backend": "trace-replayer",
-            "backend_options": {},
+            "backend": "aiperf",
+            "backend_options": {"random_seed": 666},
             "duration_seconds": 60.0,
             "num_requests": null,
             "stream": true,
@@ -451,6 +462,7 @@ List Simulation tasks with optional filters for status, scenario, backend, model
           "artifacts_incomplete": false,
           "backend_version_inferred": false,
           "backend_version": null,
+          "hardware": null,
           "configuration_ids": ["config-1"],
           "progress_percent": 42.5,
           "progress_message": "Simulation running",
@@ -480,8 +492,9 @@ List Simulation tasks with optional filters for status, scenario, backend, model
         "cancelled": 0
       },
       "facets": {
-        "backends": ["trace-replayer"],
+        "backends": ["aiperf"],
         "models": ["Qwen/Qwen3-8B"],
+        "hardware": [],
         "datasets": ["mooncake-arxiv"],
         "trace_formats": ["mooncake_trace"],
         "endpoints": ["http://127.0.0.1:38000/v1"]
@@ -527,17 +540,24 @@ Create a Simulation task that replays a trace dataset against a target model end
     - `model_service_group_id` (`string`, optional) — target a published, continuously health-probed
       Model Service instead of a raw deployment execution. When set, the backend resolves it to the
       group's active member and published name and forces `endpoint_mode` to `"deployment"`,
-      overriding any supplied `endpoint_deployment_execution_id`/`model_name`. Requires `api_key`.
-    - `api_key` (`string`, optional) — model access token; required when `model_service_group_id` is set.
+      overriding any supplied `endpoint_deployment_execution_id`/`model_name`. Requires `model_access_token_id` or `api_key`.
+    - `model_access_token_id` (`string`, optional) — ID of an active, non-expired Model Access Token owned by the caller. Requires an authenticated caller, mints a fresh delegated run token at execution time (raw secrets are never persisted), and is mutually exclusive with `api_key` (supplying both returns HTTP 422).
+    - `api_key` (`string`, optional) — raw model access token; mutually exclusive with `model_access_token_id` and retained for CLI and direct API backward compatibility. Either `model_access_token_id` or `api_key` is required when `model_service_group_id` is set.
     - `endpoint_url`, `model_name`, `trace_dataset`, `trace_path`
-    - `duration_seconds`, `scale_factor`, `trace_start_seconds`, `trace_end_seconds`, `trace_timeout_seconds`, `fixed_schedule`, `stream`, `backend_options`
+    - `duration_seconds`, `scale_factor`, `trace_start_seconds`, `trace_end_seconds`, `trace_timeout_seconds`, `stream` (`stream: true` is required for AIPerf)
+    - `fixed_schedule` (`boolean`, optional, default `true`): for the AIPerf backend, `true` replays using trace timestamps (Fixed Schedule), while `false` switches to Concurrency Slots via `--concurrency`. File trace formats (`mooncake_trace`, `bailian_trace`, `baseten_trace`, `burst_gpt_trace`) support both (`supports_fixed_schedule: true`, `supports_concurrency: true`); `weka_public_dataset` always uses concurrency mode (`supports_fixed_schedule: false`, `supports_concurrency: true`).
+    - `backend` (`string`, optional, default `"aiperf"`): sole supported execution backend. Supplying `"trace-replayer"` on create is rejected with HTTP 422, while historical `"trace-replayer"` rows remain readable and deletable.
+    - `backend_options` (`object`, optional): supports `random_seed` (integer `>= 0`, default `666`, passed to AIPerf via `--random-seed`), `concurrency` (positive integer `>= 1`, default `1` when `fixed_schedule: false` and omitted, passed as `--concurrency` across all AIPerf trace formats), `trajectory_start_min_ratio` and `trajectory_start_max_ratio` (optional floats in `[0.0, 1.0]` with `min <= max`, accepted only for `inferencex-agentx-mvp`-compatible workloads and omitted when unset or cleared), plus optional `warmup_seconds >= 0`, `e2e_slo >= 0`, and `collect_server_telemetry` boolean.
+    - `grace_period_seconds` (`number`, optional, default `30.0`, range `0.0`–`3600.0` seconds) — post-send drain grace period for in-flight requests to complete after `duration_seconds` elapses.
+
+    AIPerf always passes `--use-server-token-count`, `--slice-duration 1.0`, and `--streaming`. On `inferencex-agentx-mvp`-compatible workloads (compatible Weka subagent public datasets and `mooncake_trace` in Concurrency Slots mode), it also passes `--scenario inferencex-agentx-mvp`, plus `--unsafe-override` when `duration_seconds < 900` or when using local `mooncake_trace`.
 
     ```json
     {
       "name": "Trace simulation",
       "description": "Replay a chat trace against a ready deployment",
       "scenario": "chat",
-      "backend": "trace-replayer",
+      "backend": "aiperf",
       "endpoint_mode": "deployment",
       "cluster_session_id": "123e4567-e89b-12d3-a456-426614174000",
       "endpoint_namespace": "prism-sim",
@@ -551,6 +571,7 @@ Create a Simulation task that replays a trace dataset against a target model end
       "trace_dataset": "mooncake-arxiv",
       "trace_path": "/home/prism/.local/share/prism/data/datasets/mooncake_trace.jsonl",
       "duration_seconds": 60,
+      "grace_period_seconds": 30.0,
       "scale_factor": 1,
       "trace_start_seconds": 0,
       "trace_end_seconds": null,
@@ -570,7 +591,7 @@ Create a Simulation task that replays a trace dataset against a target model end
     {
       "name": "Trace simulation",
       "scenario": "chat",
-      "backend": "trace-replayer",
+      "backend": "aiperf",
       "endpoint_mode": "deployment",
       "model_service_group_id": "01998e6b-4b2e-7c7e-8c6d-8e2a3f0c9b11",
       "api_key": "lens-mk-…",
@@ -605,8 +626,8 @@ Create a Simulation task that replays a trace dataset against a target model end
         "endpoint_url": "http://127.0.0.1:38000/v1",
         "model_name": "Qwen/Qwen3-8B",
         "simulation": {
-          "backend": "trace-replayer",
-          "backend_options": {},
+          "backend": "aiperf",
+          "backend_options": {"random_seed": 666},
           "duration_seconds": 60.0,
           "num_requests": null,
           "stream": true,
@@ -662,7 +683,7 @@ async def main() -> None:
     task = await create_task(
         SimulationTaskCreateRequest(
             scenario="chat",
-            backend="trace-replayer",
+            backend="aiperf",
             endpoint_mode="deployment",
             endpoint_deployment_execution_id="00000000-0000-4000-8000-000000000001",
             endpoint_url="http://127.0.0.1:38000/v1",
@@ -678,7 +699,7 @@ async def main() -> None:
     task = await create_task(
         SimulationTaskCreateRequest(
             scenario="chat",
-            backend="trace-replayer",
+            backend="aiperf",
             endpoint_mode="deployment",
             model_service_group_id="01998e6b-4b2e-7c7e-8c6d-8e2a3f0c9b11",
             api_key="lens-mk-…",
@@ -733,8 +754,8 @@ make an unpublished result available.
       "endpoint_url": "http://127.0.0.1:38000/v1",
       "model_name": "Qwen/Qwen3-8B",
       "simulation": {
-        "backend": "trace-replayer",
-        "backend_options": {},
+        "backend": "aiperf",
+        "backend_options": {"random_seed": 666},
         "duration_seconds": 60.0,
         "num_requests": null,
         "stream": true,
@@ -764,10 +785,10 @@ make an unpublished result available.
       "configuration_ids": ["config-1"],
       "progress_percent": 100.0,
       "progress_message": "Simulation completed",
-      "logs": ["Starting trace-replayer", "Simulation completed"],
+      "logs": ["Starting aiperf", "Simulation completed"],
       "result": {
-        "run_id": "trace-replayer-1",
-        "backend": "trace-replayer",
+        "run_id": "aiperf-1",
+        "backend": "aiperf",
         "backend_version": "0.2.0",
         "summary": {
           "throughput_tps": 1180.4,
@@ -830,18 +851,87 @@ asyncio.run(main())
   </TabItem>
 </Tabs>
 
+### Get live telemetry for a running simulation task
+
+Poll a lightweight `O(1)` in-memory snapshot for a running simulation task, including phase, replay fidelity, 6 KPIs, sliding-window charts, hysteresis alerts, and `target_deployments` for `Live Monitoring`. Intentionally excluded from the MCP tool catalog (`intentionalSkips`).
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/simulation/tasks/{task_id}/live-telemetry`**
+
+    Request: no body.
+    - Path parameter: `task_id` (`string`, required)
+    - Permissions: `simulation:task:read` + `require_cluster_access`
+
+    Response: `200 OK` with live telemetry snapshot (`live_phase`, `fidelity`, `kpis`, `series`, `live_alerts`, `target_deployments`). Returns `409 Conflict` when the task is already in a terminal state (`completed`, `failed`, or `cancelled`).
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_lens.simulation.service import get_live_telemetry
+
+
+async def main() -> None:
+    snapshot = await get_live_telemetry("1a2b3c4d")
+    print(snapshot["live_phase"])
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### Get post-run telemetry for a simulation task
+
+Retrieve persisted post-run telemetry, forensics verdict, and section-filtered diagnostic data for a simulation task. Exposed to Lens Assistant MCP as `get_simulation_telemetry`.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`GET /api/simulation/tasks/{task_id}/telemetry`**
+
+    Request: no body.
+    - Path parameter: `task_id` (`string`, required)
+    - Query parameters:
+      - `section` (`string`, default `"all"`): one of `overview`, `bottlenecks`, `serving`, `requests`, `system`, `all`
+      - `warmup_seconds` (`float`, optional): override the warmup window in seconds for on-the-fly Steady-State vs Full Run recalculation
+    - Permissions: `simulation:task:read` + `require_cluster_access`
+
+    Response: `200 OK` with persisted `forensics`, `summary`, `client_series` (including schema v5 `client_series.slot_lanes` for slot-packed **Sessions over Time** swimlanes), `server_telemetry` (including `accelerator_summary` and `hardware_profiles[].models` / `hardware_profiles[].allocated_accelerators` when hardware telemetry is collected), and `sessions_summary` (scoped to `section`).
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_lens.simulation.service import get_post_run_telemetry
+
+
+async def main() -> None:
+    data = await get_post_run_telemetry("1a2b3c4d", section="overview")
+    print(data["forensics"]["verdict"])
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
 ### Download a simulation artifact
 
-Download a saved simulation artifact by task id and artifact kind as a file attachment.
+Download a saved or on-demand generated simulation artifact by task id and artifact kind as a file attachment. Enforces `simulation:task:read` and `require_cluster_access`.
 
 <Tabs>
   <TabItem value="rest-api" label="REST API">
     **`GET /api/simulation/tasks/{task_id}/artifacts/{kind}`**
 
     Request: no body.
-    - Path parameters: `task_id` (`string`, required), `kind` (`string`, required)
+    - Path parameters:
+      - `task_id` (`string`, required)
+      - `kind` (`string`, required): `report_html`, `report_bundle`, `forensics`, `server_telemetry`, `client_series`, `sessions_summary`, `summary`, `summary_csv`, `run_manifest`, `per_request`, `stdout`, or `stderr`
 
-    Response: file attachment streamed from the saved artifact path. No JSON body is returned. The task's `result.artifacts` list tells you which `kind` values are available.
+    Response: file attachment streamed from the saved artifact path (or generated on demand and cached for `report_html` and `report_bundle`). No JSON body is returned. The task's `result.artifacts` list tells you which `kind` values are available.
   </TabItem>
   <TabItem value="python-api" label="Python API">
 
@@ -871,7 +961,8 @@ Get requests from a Simulation task that returned a specific HTTP status code.
 
     Request: no body.
     - Path parameter: `task_id` (`string`, required)
-    - Query parameters: `status_code` (`string`, required; use `unknown` for missing status), `offset` (`integer`, default `0`), `limit` (`integer`, default `100`, max `500`)
+    - Query parameters: `status_code` (`string`, optional, default `"all"`; supports `"all"`, `"4xx"`, `"5xx"`, `"timeout"`, `"transport"`, `"unknown"`, or `"100"`..`"599"`), `sort` (`string`, default `"request_number"`; supports `"newest"` or `"request_number"`), `offset` (`integer`, default `0`), `limit` (`integer`, default `100`, max `500`)
+    - Behavior: Reads `LiveTelemetryCollector`'s in-memory error index in `O(1)` while running (merging `requests.jsonl` failures and `stdout.log` transport errors) and returns `counts_by_code` alongside paginated `issues`.
 
     Response:
 
@@ -972,6 +1063,11 @@ Queue a rerun of a previous Simulation task, optionally rebinding it to a fresh 
     - `model_service_group_id` (`string`, optional) — re-bind to a published, health-probed Model Service
       instead of a raw deployment execution; resolved the same way as on task creation and preferred
       over `endpoint_deployment_execution_id` when both are supplied.
+    - `model_access_token_id` (`string`, optional) — ID of an active, non-expired Model Access Token owned by the caller (never inherited from another user's task). Mutually exclusive with `api_key` (HTTP 422 if both are supplied).
+    - `api_key` (`string`, optional) — raw model access token; mutually exclusive with `model_access_token_id` and retained for CLI and direct API backward compatibility.
+    - `grace_period_seconds` (`number`, optional, range `0.0`–`3600.0` seconds) — override the post-send drain grace period for in-flight requests.
+
+    `SimulationTask` responses include `model_access_token_id` (`string | null`) when a saved token ID is associated with the task; raw token secrets are never returned. Rerunning a historical `"trace-replayer"` task returns HTTP 400 (create a new `aiperf` task instead).
 
     ```json
     {
@@ -1007,8 +1103,8 @@ Queue a rerun of a previous Simulation task, optionally rebinding it to a fresh 
         "endpoint_url": "http://127.0.0.1:39000/v1",
         "model_name": "Qwen/Qwen3-8B",
         "simulation": {
-          "backend": "trace-replayer",
-          "backend_options": {},
+          "backend": "aiperf",
+          "backend_options": {"random_seed": 666},
           "duration_seconds": 60.0,
           "num_requests": null,
           "stream": true,
@@ -1114,6 +1210,73 @@ from llm_d_lens.simulation.service import delete_task
 
 async def main() -> None:
     await delete_task("1a2b3c4d")
+
+
+asyncio.run(main())
+```
+  </TabItem>
+</Tabs>
+
+### Analyze a simulation task with AI
+
+Run AI-powered bottleneck diagnosis and tuning recommendations on a Simulation task using a configured External AI Provider (`ai_providers`), grounded in redacted post-run telemetry, client KPIs, automated forensics, and server/system metrics. Supports single-turn initial diagnosis and multi-turn follow-up questions.
+
+- **Auth / Permission**: Requires `simulation:task:read` and cluster access for the task's cluster. Excluded from the MCP tool catalog (`intentionalSkips`) because Lens Assistant already performs AI reasoning.
+- **Security / Redaction**: Task secrets (`api_key`, URL credentials) are redacted before prompt construction, and provider API keys are never returned or exposed in errors.
+
+<Tabs>
+  <TabItem value="rest-api" label="REST API">
+    **`POST /api/simulation/tasks/{task_id}/ai-analysis`**
+
+    - Path parameter: `task_id` (`string`, required)
+
+    Request body (`application/json`, all fields optional):
+
+    | Field | Type | Description |
+    | --- | --- | --- |
+    | `provider_id` | `string \| null` | External AI Provider ID; defaults to the first configured provider. |
+    | `model` | `string \| null` | Optional model override; defaults to the provider's configured model. |
+    | `question` | `string \| null` | Optional focus prompt or follow-up question (max 4000 characters). |
+    | `messages` | `array<{ role: "user" \| "assistant", content: string }>` | Prior conversation turns for multi-turn follow-up (max 20 items). |
+
+    Response (`200 OK`):
+
+    | Field | Type | Description |
+    | --- | --- | --- |
+    | `task_id` | `string` | Simulation task ID. |
+    | `provider_id` | `string` | ID of the External AI Provider used. |
+    | `provider_name` | `string` | Display name of the External AI Provider. |
+    | `model` | `string` | Model name used for the analysis. |
+    | `analysis` | `string` | Markdown-formatted diagnosis and tuning recommendations. |
+    | `generated_at` | `string` | ISO 8601 UTC timestamp when the analysis was generated. |
+    | `telemetry_scope` | `string` | Telemetry scope included in the prompt (`"full_telemetry"`, `"server_and_client"`, `"client_only"`, `"server_only"`, or `"task_summary_only"`). |
+
+    Error codes:
+    - `400`: Invalid simulation configuration.
+    - `422`: Schema validation error (for example, `question` exceeds 4000 characters, `messages` exceeds 20 items, or unexpected extra fields).
+    - `403`: Missing `simulation:task:read` permission or cluster access.
+    - `404`: Simulation task or External AI Provider not found.
+    - `409`: No External AI Provider configured.
+    - `502`: Upstream External AI Provider error (returns sanitized `application/problem+json` details with `code: "ai_analysis_upstream_error"`).
+    - `504`: External AI Provider request timed out.
+  </TabItem>
+  <TabItem value="python-api" label="Python API">
+
+```python
+import asyncio
+
+from llm_d_lens.simulation.models import SimulationAIAnalysisRequest
+from llm_d_lens.simulation.service import analyze_task_with_ai
+
+
+async def main() -> None:
+    result = await analyze_task_with_ai(
+        "1a2b3c4d",
+        request=SimulationAIAnalysisRequest(
+            question="Analyze TTFT bottlenecks and recommend vLLM and llm-d tuning parameters.",
+        ),
+    )
+    print(result.model, result.analysis)
 
 
 asyncio.run(main())

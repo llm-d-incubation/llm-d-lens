@@ -25,6 +25,62 @@ function apiError(payload, fallback) {
 export async function requestJson(url, options) {
     return sharedRequestJson(url, options, {
         fallback: null,
-        errorFactory: (payload, response) => new Error(apiError(payload, `${response.status} ${response.statusText}`)),
+        errorFactory: (payload, response) => {
+            const error = new Error(apiError(payload, `${response.status} ${response.statusText}`));
+            error.status = response.status;
+            return error;
+        },
+    });
+}
+
+export async function getLiveTelemetry(taskId, options = {}) {
+    return requestJson(`/api/v1/simulation/tasks/${encodeURIComponent(taskId)}/live-telemetry`, options);
+}
+
+export async function getTaskTelemetry(taskId, { section = 'all', warmupSeconds } = {}, options = {}) {
+    const query = new URLSearchParams();
+    if (section) query.set('section', section);
+    if (warmupSeconds !== undefined && warmupSeconds !== null && warmupSeconds !== '') {
+        query.set('warmup_seconds', String(warmupSeconds));
+    }
+    const qs = query.toString();
+    return requestJson(`/api/v1/simulation/tasks/${encodeURIComponent(taskId)}/telemetry${qs ? `?${qs}` : ''}`, options);
+}
+
+export async function getResponseCodeIssues(
+    taskId,
+    { statusCode = 'all', offset = 0, limit = 100, sort = 'newest' } = {},
+    options = {},
+) {
+    const resolvedCode = statusCode === null || statusCode === undefined || statusCode === ''
+        ? 'all'
+        : String(statusCode);
+    const query = new URLSearchParams({
+        status_code: resolvedCode,
+        offset: String(Math.max(0, Number(offset) || 0)),
+        limit: String(Math.max(1, Number(limit) || 100)),
+        sort: String(sort || 'newest'),
+    });
+    return requestJson(`/api/v1/simulation/tasks/${encodeURIComponent(taskId)}/response-code-issues?${query.toString()}`, options);
+}
+
+export async function getMultipleTaskTelemetry(taskIds, options = {}) {
+    const ids = Array.isArray(taskIds) ? taskIds.filter(Boolean) : [];
+    return Promise.all(ids.map((taskId) => getTaskTelemetry(taskId, { section: 'all' }, options)));
+}
+
+export async function listAIProviders(options = {}) {
+    const payload = await requestJson('/api/v1/ai-providers', options);
+    return Array.isArray(payload?.items) ? payload.items : [];
+}
+
+export async function analyzeSimulationTaskWithAI(taskId, payload = {}, options = {}) {
+    const headers = new Headers(options.headers);
+    if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
+    return requestJson(`/api/v1/simulation/tasks/${encodeURIComponent(taskId)}/ai-analysis`, {
+        ...options,
+        method: 'POST',
+        headers,
+        body: JSON.stringify(payload),
     });
 }

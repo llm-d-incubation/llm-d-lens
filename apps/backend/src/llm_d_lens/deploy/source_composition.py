@@ -1165,6 +1165,27 @@ def resource_references(parsed: list[dict]) -> list[dict]:
     return list(external.values())
 
 
+def _all_dra_claims_verified(
+    parsed: list[dict],
+    device_class_to_profile: Mapping[str, str],
+    dra_profiles: set[str],
+) -> bool:
+    """Return True when every DRA claim request across workload pods maps to a verified profile."""
+    for workload in workload_roles(parsed):
+        namespace = workload["document"].get("metadata", {}).get("namespace", "default")
+        pods = [workload["pod"]]
+        leader = workload["spec"].get("leaderWorkerTemplate", {}).get("leaderTemplate")
+        if leader:
+            pods.append(leader.get("spec", {}))
+        for pod in pods:
+            for claim in pod_claim_templates(parsed, pod, namespace):
+                for request in claim["spec"]["spec"]["devices"]["requests"]:
+                    dc_name = request["exactly"].get("deviceClassName", "")
+                    if device_class_to_profile.get(dc_name) not in dra_profiles:
+                        return False
+    return True
+
+
 async def check_target(request, body: dict, parsed: list[dict]) -> dict:
     demand, warnings = accelerator_demand(parsed)
     intent = body.get("deploymentIntent") or {}
@@ -1186,6 +1207,7 @@ async def check_target(request, body: dict, parsed: list[dict]) -> dict:
         prometheus_inventory_nodes_and_pods,
     )
 
+    forbidden_device_classes: list[str] = []
     for ref in resource_references(parsed):
         args = ["get", ref["kind"], ref["name"]]
         if ref["namespace"] is not None:
@@ -1200,7 +1222,10 @@ async def check_target(request, body: dict, parsed: list[dict]) -> dict:
                 raise GuideError("Cluster kubeconfig is unauthorized (401).", 401)
             location = f" in {ref['namespace']}" if ref["namespace"] is not None else ""
             if is_forbidden_result(result):
-                warnings.append(f"Could not verify external {ref['kind']}/{ref['name']}{location} (403 Forbidden).")
+                if ref["kind"] == "DeviceClass" and ref["namespace"] is None:
+                    forbidden_device_classes.append(ref["name"])
+                else:
+                    warnings.append(f"Could not verify external {ref['kind']}/{ref['name']}{location} (403 Forbidden).")
                 continue
             raise GuideError(f"Required {ref['kind']}/{ref['name']} is unavailable{location}.")
     available = defaultdict(float)
@@ -1217,12 +1242,12 @@ async def check_target(request, body: dict, parsed: list[dict]) -> dict:
             except ClusterInventoryForbiddenError as error:
                 raise GuideError("Could not verify current cluster device availability.", 403) from error
             inventory_source = "prometheus"
-            warnings.append("Node capacity derived from Prometheus metrics (cluster-wide Kubernetes read restricted).")
         else:
             raise GuideError("Could not verify current cluster device availability.", 502)
     else:
         node_items = json.loads(nodes.stdout).get("items", [])
         pod_items = json.loads(pods.stdout).get("items", [])
+    unmodeled: list[str] = []
     constrained = any(
         workload["kind"] == "DisaggregatedSet"
         or workload["pod"].get("nodeSelector")
@@ -1238,7 +1263,13 @@ async def check_target(request, body: dict, parsed: list[dict]) -> dict:
             raise GuideError(
                 "Placement validation failed: " + "; ".join(item["message"] for item in placement["errors"])
             )
-        warnings.extend(placement["unmodeled"])
+        for item in placement.get("warnings") or []:
+            message = item.get("message") if isinstance(item, dict) else str(item)
+            if message:
+                warnings.append(str(message))
+        unmodeled.extend(placement.get("unmodeled") or [])
+    if inventory_source == "prometheus" and not any("prometheus" in note.lower() for note in unmodeled):
+        unmodeled.append("Node capacity derived from Prometheus metrics (cluster-wide Kubernetes read restricted).")
     for node in node_items:
         if node.get("spec", {}).get("unschedulable") or not any(
             condition.get("type") == "Ready" and condition.get("status") == "True"
@@ -1253,13 +1284,23 @@ async def check_target(request, body: dict, parsed: list[dict]) -> dict:
             for key, value in pod_demand(pod.get("spec", {})).items():
                 available[key] -= value
     dra_profiles = {key.removeprefix("dra:") for key in demand if key.startswith("dra:")}
-    if dra_profiles:
+    overview: dict | None = None
+    if dra_profiles or forbidden_device_classes:
         from llm_d_lens.cluster import registry
         from llm_d_lens.cluster.service import build_overview
 
-        overview = await build_overview(registry.require_cluster(session.server_id))
-        hardware = overview.get("hardware") or {}
-        detected = {item["id"] for item in hardware.get("accelerators", []) if item.get("gpuCount", 0) > 0}
+        if dra_profiles:
+            overview = await build_overview(registry.require_cluster(session.server_id))
+        else:
+            try:
+                overview = await build_overview(registry.require_cluster(session.server_id))
+            except Exception:
+                logger.warning("Failed to fetch cluster overview for DeviceClass verification", exc_info=True)
+                overview = None
+    hardware = (overview or {}).get("hardware") or {}
+    detected = {item["id"] for item in hardware.get("accelerators", []) if (item.get("gpuCount") or 0) > 0}
+    dra_verified = False
+    if dra_profiles:
         if len(dra_profiles) != 1 or detected != dra_profiles:
             raise GuideError("DRA availability requires an unambiguous matching cluster hardware profile.")
         profile_id = next(iter(dra_profiles))
@@ -1270,10 +1311,31 @@ async def check_target(request, body: dict, parsed: list[dict]) -> dict:
             value for key, value in demand.items() if (owner := resolve_by_resource(key)) and owner.id == profile_id
         )
         available[f"dra:{profile_id}"] = max(0, free - shared)
+        dra_verified = True
+    device_class_to_profile = (
+        {device_class: profile.id for profile in all_profiles() for device_class in profile.device_classes}
+        if dra_verified or forbidden_device_classes
+        else {}
+    )
+    if forbidden_device_classes:
+        for dc_name in forbidden_device_classes:
+            profile_id = device_class_to_profile.get(dc_name)
+            if profile_id and profile_id in detected:
+                continue
+            warnings.append(f"Could not verify external DeviceClass/{dc_name} (403 Forbidden).")
+    if dra_verified and _all_dra_claims_verified(parsed, device_class_to_profile, dra_profiles):
+        unmodeled = [item for item in unmodeled if item != "DRA allocation"]
+    unmodeled = list(dict.fromkeys(unmodeled))
     for key, count in demand.items():
         if count > available[key]:
             raise GuideError(f"{key}: requires {count:g}; only {max(0, available[key]):g} currently available.")
-    return {"demand": demand, "available": dict(available), "warnings": warnings, "level": "device-count"}
+    return {
+        "demand": demand,
+        "available": dict(available),
+        "warnings": warnings,
+        "unmodeled": unmodeled,
+        "level": "device-count",
+    }
 
 
 async def render_router(catalog: dict, body: dict) -> list[dict]:
@@ -1672,6 +1734,7 @@ async def compose(request, body: dict, shared: dict | None = None) -> dict:
     validation = {
         "errors": [],
         "warnings": hardware["warnings"],
+        "unmodeled": list(hardware.get("unmodeled") or []),
         "level": "rendered",
         "clusterValidated": False,
         "hardware": hardware,

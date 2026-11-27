@@ -20,9 +20,12 @@ import { Panel } from '../../../../shared/ui';
 import { formatNumber } from '../../model/presentation';
 import { Area, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
-export function LatencyMetricTimeline({ title, metric, data, color }) {
+export function LatencyMetricTimeline({ title, metric, data, color, help, helpFormula }) {
+    const panelHelp = help ?? `Plots ${metric} average and P95 latency (ms, right axis) alongside request arrival rate (req/s, left axis) over elapsed replay time. Rising latency with steady or climbing arrivals signals queuing or saturation.`;
+    const defaultFormula = 'Arrival_Rate = ΔArrivals / Δt;  Mean = (1 / N_bin) Σ Latency_i;  P95 = Quantile_0.95(Window)';
+    const panelFormula = helpFormula ?? (help === undefined ? defaultFormula : undefined);
     return (
-        <Panel title={title}>
+        <Panel title={title} help={panelHelp} helpFormula={panelFormula}>
             {data.length > 0 ? (
                 <>
                     <ChartLegend entries={[
@@ -33,10 +36,10 @@ export function LatencyMetricTimeline({ title, metric, data, color }) {
                     <div className="h-64 w-full">
                         <ResponsiveContainer width="100%" height="100%">
                             <ComposedChart data={data} margin={{ top: 8, right: 16, left: 0, bottom: 4 }}>
-                                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                                <XAxis dataKey="time_seconds" type="number" domain={['dataMin', 'dataMax']} tickFormatter={(value) => `${formatNumber(value)}s`} tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" />
-                                <YAxis yAxisId="pressure" width={52} tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" label={{ value: 'req/s', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 10 }} />
-                                <YAxis yAxisId="metric" orientation="right" width={56} tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" label={{ value: 'ms', angle: 90, position: 'insideRight', fill: '#64748b', fontSize: 10 }} />
+                                <CartesianGrid strokeDasharray="3 3" stroke="var(--border-color)" vertical={false} />
+                                <XAxis dataKey="time_seconds" type="number" domain={['dataMin', 'dataMax']} tickFormatter={(value) => `${formatNumber(value)}s`} tick={{ fill: 'var(--text-muted)', fontSize: 10 }} stroke="var(--border-color)" />
+                                <YAxis yAxisId="pressure" width={52} tick={{ fill: 'var(--text-muted)', fontSize: 10 }} stroke="var(--border-color)" label={{ value: 'req/s', angle: -90, position: 'insideLeft', fill: 'var(--text-muted)', fontSize: 10 }} />
+                                <YAxis yAxisId="metric" orientation="right" width={56} tick={{ fill: 'var(--text-muted)', fontSize: 10 }} stroke="var(--border-color)" label={{ value: 'ms', angle: 90, position: 'insideRight', fill: 'var(--text-muted)', fontSize: 10 }} />
                                 <Tooltip content={<SimulationTooltip />} />
                                 <Area yAxisId="pressure" type="monotone" dataKey="request_arrival_rps" name="Request arrival rate" stroke={CHART_SERIES[0]} strokeWidth={2} fill={CHART_SERIES[0]} fillOpacity={0.14} dot={false} isAnimationActive={false} />
                                 <Area yAxisId="metric" type="monotone" dataKey="average_latency_ms" name={`Average ${metric}`} stroke={color} strokeWidth={2} fill={color} fillOpacity={0.14} connectNulls dot={false} isAnimationActive={false} />

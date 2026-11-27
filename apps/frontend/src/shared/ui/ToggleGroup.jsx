@@ -19,11 +19,12 @@ import { cn } from '../lib/cn';
 // Segmented control for metric/mode selectors (e.g. TTFT | TPOT | E2E).
 // options: [{ value, label, disabled? }]
 export function ToggleGroup({ options, value, onChange, size = 'sm', fullWidth = false, className, activeClassName, showSelectionIndicator = false }) {
+    const hasCustomActiveStyle = Boolean(activeClassName && /\b(?:dark:)?(?:bg|text)-/.test(activeClassName));
     return (
         <div
             role="group"
             className={cn(
-                'inline-flex items-center rounded-lg border border-theme-border bg-slate-100 dark:bg-slate-900 p-0.5 gap-0.5',
+                'lens-toggle-group inline-flex items-center rounded-lg border border-theme-border bg-slate-100 dark:bg-slate-900 p-0.5 gap-0.5',
                 fullWidth && 'flex w-full',
                 className
             )}
@@ -36,9 +37,10 @@ export function ToggleGroup({ options, value, onChange, size = 'sm', fullWidth =
                         type="button"
                         disabled={opt.disabled}
                         aria-pressed={isActive}
+                        data-custom-active={isActive && hasCustomActiveStyle ? 'true' : undefined}
                         onClick={() => onChange(opt.value)}
                         className={cn(
-                            'rounded-md font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/50',
+                            'lens-toggle-option rounded-md font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/50',
                             size === 'xs' ? 'px-2 py-0.5 text-[10px]' : 'px-3 py-1 text-xs',
                             fullWidth && 'flex-1',
                             showSelectionIndicator && 'inline-flex items-center justify-center gap-2',

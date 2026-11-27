@@ -1,44 +1,1557 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-    Area,
-    CartesianGrid,
-    ComposedChart,
-    Line,
-    ResponsiveContainer,
-    Tooltip,
-    XAxis,
-    YAxis,
-} from 'recharts';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
     Activity,
     AlertTriangle,
     ArrowLeft,
-    ChevronLeft,
-    ChevronRight,
-    Clock3,
+    Check,
+    ChevronDown,
+    Copy,
     Download,
     FileJson,
-    Gauge,
-    Info,
+    FileText,
+    GitCompareArrows,
     RefreshCw,
+    Search,
+    Send,
+    Sparkles,
     Square,
     Trash2,
 } from 'lucide-react';
-import { Button, EmptyState, Modal, Panel, Spinner, StatusChip } from '../../../shared/ui';
+import {
+    Badge,
+    Button,
+    Checkbox,
+    EmptyState,
+    HelpTooltip,
+    Input,
+    Label,
+    Panel,
+    RefreshButton,
+    Select,
+    SideDrawer,
+    Spinner,
+    StatusChip,
+    Textarea,
+    ToggleGroup,
+} from '../../../shared/ui';
 import { PageHeading } from '../../../shared/ui/PageHeader';
 import { confirmDelete } from '../../../shared/ui/confirmDelete';
+import { stageAssistantDraft } from '../../../shared/lib/assistantHandoff';
+import { cn } from '../../../shared/lib/cn';
 import { downloadFile } from '../../../shared/lib/download';
 import { formatTimestamp } from '../../../shared/lib/formatTimestamp';
+import { useClipboard } from '../../../shared/lib/useClipboard';
+import { usePolling } from '../../../shared/lib/usePolling';
+import { useAuth } from '../../auth';
 import { getDeploymentExecutions } from '../../optimization';
-import { RESPONSE_CODE_ISSUE_PAGE_SIZE, RUNNING_STATUSES, STOPPABLE_STATUSES, TERMINAL_STATUSES, arrayFrom, backendOptionLabel, backendOptionValue, displayName, findNamedSection, formatCount, formatDuration, formatMilliseconds, formatNumber, numberAt, responseStatusGuidance, scenarioDisplayName, taskBackend, taskDataset, taskStatusChip, unwrapTask } from '../model/presentation';
-import { requestJson } from '../model/client';
-import { ConfigurationGroup } from './Simulation/ConfigurationGroup';
-import { DetailCard } from './Simulation/DetailCard';
+import {
+    RUNNING_STATUSES,
+    STOPPABLE_STATUSES,
+    arrayFrom,
+    backendOptionLabel,
+    backendOptionValue,
+    deriveLegacyTelemetryFromTask,
+    displayName,
+    formatBytes,
+    formatCount,
+    formatDuration,
+    formatNumber,
+    numberAt,
+    scenarioDisplayName,
+    taskBackend,
+    taskDataset,
+    taskStatusChip,
+    unwrapTask,
+} from '../model/presentation';
+import {
+    analyzeSimulationTaskWithAI,
+    getLiveTelemetry,
+    getTaskTelemetry,
+    listAIProviders,
+    requestJson,
+} from '../model/client';
+import { BottlenecksTab } from './Simulation/BottlenecksTab';
+import { ConfigurationGroup, formatTaskPacing } from './Simulation/ConfigurationGroup';
+import { HardwareTab, sanitizeEndpointUrl } from './Simulation/HardwareTab';
 import { JsonBlock } from './Simulation/JsonBlock';
-import { LatencyHeatmap } from './Simulation/LatencyHeatmap';
-import { LatencyMetricTimeline } from './Simulation/LatencyMetricTimeline';
-import { MetricBars } from './Simulation/MetricBars';
-import { StatisticsPanel } from './Simulation/StatisticsPanel';
+import {
+    ErrorInspectorModal,
+    LiveMonitorPanel,
+    classifyLogLines,
+    isLogErrorOrWarning,
+    stripAnsi,
+} from './Simulation/LiveMonitorPanel';
+import { OverviewTab } from './Simulation/OverviewTab';
+import { RequestsTab } from './Simulation/RequestsTab';
+import { ServingTab } from './Simulation/ServingTab';
+import { SystemTab } from './Simulation/SystemTab';
+import { WorkloadTab } from './Simulation/WorkloadTab';
+
+const POST_RUN_TABS = [
+    { key: 'overview', label: 'Overview' },
+    { key: 'workload', label: 'Workload' },
+    { key: 'bottlenecks', label: 'Bottlenecks' },
+    { key: 'serving', label: 'Serving' },
+    { key: 'requests', label: 'Requests' },
+    { key: 'system', label: 'System' },
+    { key: 'hardware', label: 'Hardware' },
+    { key: 'logs', label: 'Logs & Configuration' },
+];
+
+const STANDARD_ARTIFACT_KINDS = [
+    {
+        kind: 'report_html',
+        label: 'Offline HTML Report',
+        mediaType: 'text/html',
+        help: 'Self-contained interactive HTML report with embedded charts, forensics verdict, and KPI summaries for offline sharing.',
+    },
+    {
+        kind: 'report_bundle',
+        label: 'Reproducible Bundle (.tar.gz)',
+        mediaType: 'application/gzip',
+        help: 'Compressed archive bundling the run manifest, normalized summaries, time series, and HTML report for reproducibility.',
+    },
+    {
+        kind: 'forensics',
+        label: 'Forensics Analysis (JSON)',
+        mediaType: 'application/json',
+        help: 'Machine-readable bottleneck verdict, root-cause evidence, and SLO attainment analysis derived from client and server telemetry.',
+    },
+    {
+        kind: 'summary_csv',
+        label: 'Summary Metrics (CSV)',
+        mediaType: 'text/csv',
+        help: 'Tabular CSV export of headline throughput, latency percentiles, error rate, and power/energy metrics for spreadsheets.',
+    },
+    {
+        kind: 'summary',
+        label: 'Normalized Summary (JSON)',
+        mediaType: 'application/json',
+        help: 'Canonical JSON summary of steady-state and full-run KPIs normalized across simulation backends.',
+    },
+    {
+        kind: 'client_series',
+        label: 'Client Time Series (JSON)',
+        mediaType: 'application/json',
+        help: 'Bucketed client-side throughput, TTFT/TPOT percentiles, and schedule drift over elapsed replay time.',
+    },
+    {
+        kind: 'server_telemetry',
+        label: 'Server Telemetry (JSON)',
+        mediaType: 'application/json',
+        help: 'Prometheus-scraped serving engine queues, KV cache usage, Inference Gateway and EPP metrics, and accelerator power/utilization series.',
+    },
+    {
+        kind: 'sessions_summary',
+        label: 'Sessions Summary (JSON)',
+        mediaType: 'application/json',
+        help: 'Per-session turn counts, prefix-cache reuse, and session-level latency breakdowns for multi-turn traces.',
+    },
+    {
+        kind: 'run_manifest',
+        label: 'Run Manifest (YAML)',
+        mediaType: 'application/yaml',
+        help: 'Redacted YAML specification recording exact target, dataset digest, backend version, and replay parameters.',
+    },
+    {
+        kind: 'per_request',
+        label: 'Per-Request Records',
+        mediaType: 'application/x-ndjson',
+        help: 'Newline-delimited JSON (NDJSON) trace of individual request timestamps, token counts, latencies, and error statuses.',
+    },
+    {
+        kind: 'stdout',
+        label: 'Runner Stdout Log',
+        mediaType: 'text/plain',
+        help: 'Raw standard output captured from the benchmark runner process during execution.',
+    },
+    {
+        kind: 'stderr',
+        label: 'Runner Stderr Log',
+        mediaType: 'text/plain',
+        help: 'Raw standard error stream from the benchmark runner process, useful for diagnosing crashes or HTTP failures.',
+    },
+];
+
+const BACKEND_OPTION_HELP = {
+    warmup_seconds: {
+        text: 'Initial replay seconds excluded from steady-state KPIs while caches and queues warm up.',
+        formula: 'Profiling_Window = [Warmup_s, Run_Duration_s + Grace_Period_s]',
+    },
+    random_seed: 'Deterministic PRNG seed (integer ≥ 0, default 666) controlling prompt synthesis or sampling repeatability.',
+    num_profile_runs: 'Number of consecutive profiling iterations executed for this simulation task.',
+    profile_run_cooldown_seconds: {
+        text: 'Pause in seconds between repeated profiling runs so server queues drain.',
+        formula: 'Total_Elapsed_s ≈ num_runs × Duration_s + (num_runs − 1) × Cooldown_s',
+    },
+    concurrency: {
+        text: 'Maximum number of simultaneous in-flight session/request slots maintained by the benchmark runner (--concurrency).',
+        formula: 'Active_InFlight_Slots ≤ Concurrency',
+    },
+    max_context_length: {
+        text: 'Upper token-length cap enforced on replayed prompt plus output tokens.',
+        formula: 'Prompt_Tokens + Output_Tokens ≤ Max_Context_Length',
+    },
+    trace_idle_gap_cap_seconds: {
+        text: 'Maximum idle gap (s) preserved between trace bursts before clamping inter-arrival waits.',
+        formula: 'Effective_Idle_Gap_s = min(Source_Δt_s, Idle_Gap_Cap_s)',
+    },
+    trajectory_start_min_ratio: {
+        text: 'Minimum normalized progress ratio [0, 1] along each source agentic trajectory where replay sessions may begin (--trajectory-start-min-ratio).',
+        formula: '0 ≤ Trajectory_Start_Min_Ratio ≤ Trajectory_Start_Max_Ratio ≤ 1',
+    },
+    trajectory_start_max_ratio: {
+        text: 'Maximum normalized progress ratio [0, 1] along each source agentic trajectory where replay sessions may begin (--trajectory-start-max-ratio).',
+        formula: '0 ≤ Trajectory_Start_Min_Ratio ≤ Trajectory_Start_Max_Ratio ≤ 1',
+    },
+    collect_server_telemetry: 'Whether Prometheus serving engine and accelerator hardware metrics were collected during the run.',
+    e2e_slo: {
+        text: 'End-to-end request latency Service Level Objective threshold in seconds.',
+        formula: 'Pass iff Request_E2E_ms ≤ E2E_SLO_s × 1000',
+    },
+};
+
+function backendOptionHelp(key) {
+    return BACKEND_OPTION_HELP[key] || `Backend-specific execution parameter (${displayName(key)}) configured for this simulation run.`;
+}
+
+function nonEmptyHardwareText(value) {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed || null;
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function resolveTaskHardware(task, effectiveTelemetry = null) {
+    const direct = nonEmptyHardwareText(task?.hardware);
+    if (direct) return direct;
+
+    const serverTelemetry = effectiveTelemetry?.server_telemetry;
+    const summary = nonEmptyHardwareText(serverTelemetry?.accelerator_summary);
+    if (summary) return summary;
+
+    const profiles = Array.isArray(serverTelemetry?.hardware_profiles)
+        ? serverTelemetry.hardware_profiles
+        : [];
+    for (const profile of profiles) {
+        const models = Array.isArray(profile?.models) ? profile.models : [];
+        for (const model of models) {
+            const resolvedModel = nonEmptyHardwareText(model);
+            if (resolvedModel) return resolvedModel;
+        }
+    }
+
+    const profileName = nonEmptyHardwareText(profiles[0]?.display_name);
+    if (profileName) return profileName;
+
+    const manifestProfileName = nonEmptyHardwareText(
+        effectiveTelemetry?.run_manifest?.hardware_profile?.display_name,
+    );
+    if (manifestProfileName) return manifestProfileName;
+
+    return 'External / Not reported';
+}
+
+export function LogsAndConfigTab({
+    task,
+    telemetry,
+    artifacts,
+    downloadingArtifact,
+    artifactDownloadError,
+    onDownloadArtifact,
+    artifactsHubRef,
+}) {
+    const [logQuery, setLogQuery] = useState('');
+    const [errorsOnly, setErrorsOnly] = useState(false);
+    const { copiedValue, copy } = useClipboard(1500);
+
+    const resultPayload = task?.result || task?.results || task?.output || null;
+    const result = Array.isArray(resultPayload) ? resultPayload[0] || null : resultPayload;
+    const backendMetrics = result?.backend_metrics || result?.backendMetrics || {};
+    const backendOptions = task?.simulation?.backend_options || task?.backend_options || task?.config_snapshot?.backend_options || {};
+    const backendOptionEntries = Object.entries(backendOptions).filter(
+        ([key, value]) => !['ttft_slo', 'tpot_slo', 'error_rate_slo'].includes(key)
+            && value !== null
+            && value !== undefined
+            && value !== '',
+    );
+    const ttftSloMs = numberAt(backendOptions, ['ttft_slo']);
+    const tpotSloMs = numberAt(backendOptions, ['tpot_slo']);
+    const e2eSloS = numberAt(backendOptions, ['e2e_slo']);
+    const errorRateSlo = numberAt(backendOptions, ['error_rate_slo']);
+    const runManifest = telemetry?.run_manifest || null;
+    const taskHardware = resolveTaskHardware(task, telemetry);
+    const taskPacing = formatTaskPacing(task, telemetry);
+    const warmupSeconds = numberAt(backendOptions, ['warmup_seconds'])
+        ?? numberAt(runManifest || {}, ['replay.warmup_seconds', 'warmup_seconds'])
+        ?? 0;
+    const randomSeed = numberAt(runManifest || {}, ['replay.backend_options.random_seed', 'backend_options.random_seed'])
+        ?? numberAt(backendOptions, ['random_seed']);
+    const trajectoryStartMinRatio = numberAt(runManifest || {}, ['replay.backend_options.trajectory_start_min_ratio', 'backend_options.trajectory_start_min_ratio'])
+        ?? numberAt(backendOptions, ['trajectory_start_min_ratio']);
+    const trajectoryStartMaxRatio = numberAt(runManifest || {}, ['replay.backend_options.trajectory_start_max_ratio', 'backend_options.trajectory_start_max_ratio'])
+        ?? numberAt(backendOptions, ['trajectory_start_max_ratio']);
+    const trace = task?.prompt?.trace || {};
+    const replayStartSeconds = numberAt(trace, ['start_seconds']) ?? 0;
+    const configuredReplayEndSeconds = numberAt(trace, ['end_seconds']);
+    const replayDurationSeconds = numberAt(task?.simulation || {}, ['duration_seconds'])
+        ?? numberAt(runManifest || {}, ['replay.duration_seconds', 'simulation.duration_seconds', 'duration_seconds']);
+    const gracePeriodSeconds = numberAt(runManifest || {}, ['replay.grace_period_seconds', 'simulation.grace_period_seconds', 'grace_period_seconds'])
+        ?? numberAt(task?.simulation || {}, ['grace_period_seconds'])
+        ?? numberAt(task || {}, ['grace_period_seconds']);
+    const replayScaleFactor = numberAt(trace, ['synthesis_speedup_ratio'])
+        ?? numberAt(task || {}, ['scale_factor'])
+        ?? numberAt(runManifest || {}, ['replay.scale_factor', 'dataset.scale_factor', 'scale_factor'])
+        ?? 1;
+    const replayEndSeconds = configuredReplayEndSeconds
+        ?? (replayDurationSeconds !== null ? replayStartSeconds + replayDurationSeconds * replayScaleFactor : null);
+
+    const rawLogs = useMemo(() => {
+        const taskLogLines = Array.isArray(task?.logs) ? task.logs : [];
+        const runnerLogs = Array.isArray(telemetry?.runner_logs) ? telemetry.runner_logs : [];
+        return [...taskLogLines, ...runnerLogs].map((line) => (
+            stripAnsi(typeof line === 'string' ? line : JSON.stringify(line))
+        ));
+    }, [task?.logs, telemetry?.runner_logs]);
+
+    const classifiedLogs = useMemo(() => classifyLogLines(rawLogs), [rawLogs]);
+
+    const filteredLogs = useMemo(() => {
+        const needle = logQuery.trim().toLowerCase();
+        return classifiedLogs.filter((entry) => {
+            if (errorsOnly && !isLogErrorOrWarning(entry.severity)) return false;
+            if (needle && !entry.text.toLowerCase().includes(needle)) return false;
+            return true;
+        });
+    }, [classifiedLogs, errorsOnly, logQuery]);
+
+    const allLogsText = useMemo(
+        () => filteredLogs.map((entry) => entry.text).join('\n'),
+        [filteredLogs],
+    );
+
+    const artifactRows = useMemo(() => {
+        const byKind = new Map();
+        (Array.isArray(artifacts) ? artifacts : []).forEach((artifact) => {
+            if (artifact?.kind) byKind.set(artifact.kind, artifact);
+        });
+        const merged = STANDARD_ARTIFACT_KINDS.map((entry) => {
+            const existing = byKind.get(entry.kind);
+            if (existing) byKind.delete(entry.kind);
+            return {
+                kind: entry.kind,
+                label: entry.label,
+                help: entry.help,
+                media_type: existing?.media_type || entry.mediaType,
+                size_bytes: existing?.size_bytes ?? null,
+                sha256: existing?.sha256 || existing?.digest || null,
+                integrity: existing?.integrity || (existing ? 'verified' : 'on-demand'),
+                name: existing?.name || null,
+            };
+        });
+        byKind.forEach((extra, kind) => {
+            merged.push({
+                kind,
+                label: displayName(kind),
+                help: `Run artifact (${displayName(kind)}) recorded or generated for this simulation task.`,
+                media_type: extra.media_type || 'application/octet-stream',
+                size_bytes: extra.size_bytes ?? null,
+                sha256: extra.sha256 || extra.digest || null,
+                integrity: extra.integrity || 'verified',
+                name: extra.name || null,
+            });
+        });
+        return merged;
+    }, [artifacts]);
+
+    return (
+        <div className="space-y-5">
+            <Panel
+                title="Run Manifest & Configuration"
+                help="Authoritative target, dataset, timing, SLO, and backend settings captured for this simulation run."
+            >
+                {runManifest && typeof runManifest === 'object' ? (
+                    <div className="space-y-4">
+                        <div className="grid gap-4 xl:grid-cols-2">
+                            <ConfigurationGroup
+                                title="Target & Topology"
+                                help="Inference endpoint, served model, and cluster topology targeted by the replay."
+                                items={[
+                                    ['Endpoint mode', runManifest.target?.endpoint_mode || displayName(task?.endpoint_mode), 'Whether requests targeted a cluster-managed Model Service or an external HTTP(S) URL.'],
+                                    ['Endpoint', sanitizeEndpointUrl(runManifest.target?.sanitized_endpoint_url) || sanitizeEndpointUrl(task?.endpoint_url), 'Sanitized inference base URL that received benchmark traffic.'],
+                                    ['Model', runManifest.target?.model_name || task?.model_name, 'Model identifier passed in completion/chat API requests.'],
+                                    ['Hardware', taskHardware, 'Accelerator model or hardware profile detected on the target serving nodes or cluster during the run.'],
+                                    ['Cluster / Namespace', [runManifest.target?.cluster_name, runManifest.target?.namespace].filter(Boolean).join(' / ') || null, 'Kubernetes cluster and namespace hosting the target deployment.'],
+                                    ['Topology mode', runManifest.target?.topology_mode ? displayName(runManifest.target.topology_mode) : null, 'Serving architecture (Aggregated unified workers vs. P/D Disaggregation (Prefill and Decode pools)).'],
+                                ]}
+                            />
+                            <ConfigurationGroup
+                                title="Dataset & Replay Parameters"
+                                help="Benchmark backend, workload dataset digest, replay timing windows, and clock sync mode."
+                                items={[
+                                    ['Backend', `${runManifest.backend || taskBackend(task)} ${runManifest.backend_version || task?.backend_version || ''}`.trim(), 'Load generator tool and version used to execute the replay.'],
+                                    ['Dataset', runManifest.dataset?.name || taskDataset(task), 'Trace or prompt corpus replayed against the inference endpoint.'],
+                                    ['Pacing', taskPacing.label, 'Replay pacing mode: Fixed Schedule replays source trace timestamps, while Concurrency (N) maintains N simultaneous in-flight session/request slots.', 'Fixed Schedule: t_target = t_trace / Scale_Factor | Concurrency: Active_Slots ≤ N'],
+                                    ['Session Concurrency', taskPacing.concurrency != null ? String(taskPacing.concurrency) : null, 'Maximum simultaneous in-flight session/request slots maintained by the benchmark runner (--concurrency).', 'Active_InFlight_Slots ≤ Concurrency'],
+                                    ['Dataset SHA-256', runManifest.dataset?.sha256 ? String(runManifest.dataset.sha256).slice(0, 16) : null, 'Truncated SHA-256 content digest verifying exact trace input reproducibility.'],
+                                    ['Duration', replayDurationSeconds !== null ? `${replayDurationSeconds} s` : null, 'Active request dispatch duration (seconds) excluding the post-send grace drain window.', 'Replay_Duration_s = Selected_Trace_Span_s / Scale_Factor'],
+                                    ['Grace period', gracePeriodSeconds !== null ? `${gracePeriodSeconds} s` : null, 'Post-send drain window (seconds) allowing in-flight requests to complete after duration ends.', 'Effective_Window_s = Run_Duration_s + Grace_Period_s'],
+                                    ['Warmup window', `${warmupSeconds} s`, 'Initial seconds excluded from steady-state profiling KPIs so caches and queues stabilize.', 'Profiling_Window = [Warmup_s, Run_Duration_s + Grace_Period_s]'],
+                                    ['Random seed', randomSeed !== null ? String(randomSeed) : null, BACKEND_OPTION_HELP.random_seed],
+                                    ['Trajectory start min ratio', trajectoryStartMinRatio !== null ? String(trajectoryStartMinRatio) : null, BACKEND_OPTION_HELP.trajectory_start_min_ratio.text, BACKEND_OPTION_HELP.trajectory_start_min_ratio.formula],
+                                    ['Trajectory start max ratio', trajectoryStartMaxRatio !== null ? String(trajectoryStartMaxRatio) : null, BACKEND_OPTION_HELP.trajectory_start_max_ratio.text, BACKEND_OPTION_HELP.trajectory_start_max_ratio.formula],
+                                    ['Clock alignment', runManifest.clock?.alignment_mode || null, 'Method used to align client timestamps with server-side Prometheus scrape windows.'],
+                                ]}
+                            />
+                        </div>
+                        <details>
+                            <summary className="cursor-pointer text-xs font-semibold text-theme-muted hover:text-theme-text">
+                                View redacted run-manifest.yaml structure
+                            </summary>
+                            <div className="mt-2">
+                                <JsonBlock value={runManifest} />
+                            </div>
+                        </details>
+                    </div>
+                ) : (
+                    <div className="grid gap-4 xl:grid-cols-2">
+                        <ConfigurationGroup
+                            title="Endpoint"
+                            help="Target inference endpoint, model identifier, and response streaming mode."
+                            items={[
+                                ['Endpoint mode', task?.endpoint_mode ? displayName(task.endpoint_mode) : 'External', 'Whether requests targeted a cluster-managed Model Service or an external HTTP(S) URL.'],
+                                ...(String(task?.endpoint_mode).toLowerCase() === 'deployment'
+                                    ? [
+                                        ['Cluster', task?.endpoint_cluster_name, 'Kubernetes cluster hosting the target model deployment.'],
+                                        ['Deployment', task?.endpoint_deployment_name, 'Deployment or Model Service name receiving benchmark traffic.'],
+                                    ]
+                                    : []),
+                                ['Endpoint', sanitizeEndpointUrl(task?.endpoint_url), 'Inference endpoint URL that received benchmark requests.'],
+                                ['Model', task?.model_name, 'Served model name sent in each inference request payload.'],
+                                ['Hardware', taskHardware, 'Accelerator model or hardware profile detected on the target serving nodes or cluster during the run.'],
+                                ['Streaming', task?.simulation?.stream === undefined ? null : task.simulation.stream ? 'Enabled' : 'Disabled', 'Whether SSE token streaming was enabled; required to measure TTFT and TPOT accurately.'],
+                            ]}
+                        />
+                        <ConfigurationGroup
+                            title="Replay Workload"
+                            help="Scenario, trace dataset, source time slice, timing windows, and rate scaling."
+                            items={[
+                                ['Scenario', scenarioDisplayName(task?.scenario), 'Workload category (Chat, Tool & API Use, or Code Generation) used to filter compatible traces.'],
+                                ['Dataset', taskDataset(task), 'Trace dataset or corpus replayed during this simulation run.'],
+                                ['Trace format', trace.format || task?.trace_format, 'Input trace schema (for example, BailianTrace or Mooncake) parsed by the backend.'],
+                                ['Pacing', taskPacing.label, 'Replay pacing mode: Fixed Schedule replays source trace timestamps, while Concurrency (N) maintains N simultaneous in-flight session/request slots.', 'Fixed Schedule: t_target = t_trace / Scale_Factor | Concurrency: Active_Slots ≤ N'],
+                                ['Session Concurrency', taskPacing.concurrency != null ? String(taskPacing.concurrency) : null, 'Maximum simultaneous in-flight session/request slots maintained by the benchmark runner (--concurrency).', 'Active_InFlight_Slots ≤ Concurrency'],
+                                ['Replay range', replayEndSeconds !== null ? `${formatNumber(replayStartSeconds)}–${formatNumber(replayEndSeconds)} source seconds` : null, 'Start and end timestamps (in source trace seconds) sliced from the trace file.', 'Selected_Span_s = Replay_End − Replay_Start'],
+                                ['Duration', replayDurationSeconds !== null ? `${replayDurationSeconds} s` : null, 'Configured active replay duration before the grace drain window.', 'Replay_Duration_s = Selected_Trace_Span_s / Scale_Factor'],
+                                ['Grace period', gracePeriodSeconds !== null ? `${gracePeriodSeconds} s` : null, 'Extra seconds after replay duration ends for in-flight requests to complete.', 'Effective_Window_s = Run_Duration_s + Grace_Period_s'],
+                                ['Warmup window', `${warmupSeconds} s`, 'Initial seconds excluded from steady-state profiling KPIs.', 'Profiling_Window = [Warmup_s, Run_Duration_s + Grace_Period_s]'],
+                                ['Scale factor', replayScaleFactor, 'Time-compression multiplier applied to trace inter-arrival intervals (>1x increases arrival rate).', 'Arrival_Interval = Base_Trace_Δt / Scale_Factor'],
+                            ]}
+                        />
+                        <ConfigurationGroup
+                            title="SLO Targets"
+                            help="Configured Service Level Objective thresholds used to evaluate goodput and SLO attainment."
+                            items={[
+                                ['TTFT SLO', ttftSloMs === null ? 'Not set' : `${formatNumber(ttftSloMs * 1000)} ms`, 'Maximum acceptable Time to First Token latency (ms) before a request misses its SLO.', 'Pass iff Request_TTFT_ms ≤ TTFT_SLO_ms'],
+                                ['TPOT SLO', tpotSloMs === null ? 'Not set' : `${formatNumber(tpotSloMs * 1000)} ms`, 'Maximum acceptable Time per Output Token (ms) during decode streaming.', 'Pass iff Request_TPOT_ms ≤ TPOT_SLO_ms'],
+                                ['E2E SLO', e2eSloS === null ? 'Not set' : `${formatNumber(e2eSloS)} s`, 'Maximum acceptable end-to-end request completion latency (seconds).', 'Pass iff Request_E2E_ms ≤ E2E_SLO_s × 1000'],
+                                ['Error rate SLO', errorRateSlo === null ? 'Not set' : `${formatNumber(errorRateSlo)}%`, 'Maximum acceptable percentage of failed requests across the run.', 'Error_Rate (%) = (Failed / Total) × 100 ≤ Error_Rate_SLO'],
+                            ]}
+                        />
+                        {backendOptionEntries.length > 0 && (
+                            <ConfigurationGroup
+                                title="Backend Options"
+                                help="Backend-specific concurrency, threading, and execution tuning options for this run."
+                                items={backendOptionEntries.map(([key, value]) => [
+                                    backendOptionLabel(key),
+                                    backendOptionValue(key, value),
+                                    backendOptionHelp(key),
+                                ])}
+                            />
+                        )}
+                    </div>
+                )}
+            </Panel>
+
+            <Panel
+                title="Task & Runner Logs"
+                help="Combined task lifecycle events and runner stdout/stderr log lines. Filter by keyword or restrict to warnings and HTTP/runtime errors."
+                actions={(
+                    <div className="flex items-center gap-2">
+                        <Badge tone="neutral" size="xs">{formatCount(filteredLogs.length)} lines</Badge>
+                        {allLogsText && (
+                            <Button variant="ghost" size="xs" onClick={() => void copy(allLogsText)}>
+                                {copiedValue === allLogsText ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+                                {copiedValue === allLogsText ? 'Copied' : 'Copy'}
+                            </Button>
+                        )}
+                    </div>
+                )}
+            >
+                <div className="space-y-3">
+                    <div className="flex flex-wrap items-center gap-3">
+                        <div className="min-w-[200px] flex-1">
+                            <Input
+                                icon={Search}
+                                value={logQuery}
+                                onChange={(event) => setLogQuery(event.target.value)}
+                                placeholder="Search logs..."
+                                aria-label="Search logs"
+                                className="h-8 text-xs"
+                            />
+                        </div>
+                        <Checkbox
+                            checked={errorsOnly}
+                            onChange={(event) => setErrorsOnly(event.target.checked)}
+                            label="Errors & warnings only"
+                        />
+                    </div>
+                    {filteredLogs.length > 0 ? (
+                        <div className="max-h-80 overflow-auto rounded-lg border border-theme-border bg-theme-bg p-3 font-mono text-[11px] leading-relaxed text-theme-text">
+                            {filteredLogs.map((entry, index) => (
+                                <div
+                                    key={`${index}-${entry.text.slice(0, 24)}`}
+                                    className={cn(
+                                        'whitespace-pre-wrap break-words py-0.5',
+                                        entry.severity === 'error' && 'text-red-600 dark:text-red-300',
+                                        entry.severity === 'warning' && 'text-amber-700 dark:text-amber-300',
+                                    )}
+                                >
+                                    {entry.text}
+                                </div>
+                            ))}
+                        </div>
+                    ) : (
+                        <p className="py-8 text-center text-xs text-theme-muted">
+                            {rawLogs.length ? 'No log lines match the search filter.' : 'No task log entries were recorded.'}
+                        </p>
+                    )}
+                </div>
+            </Panel>
+
+            <div ref={artifactsHubRef}>
+                <Panel
+                    title="Artifacts Download Hub"
+                    help="Downloadable reports, normalized telemetry bundles, per-request traces, and runner logs with SHA-256 integrity status."
+                >
+                    {artifactDownloadError && (
+                        <div role="alert" className="mb-3 flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-700 dark:text-red-300">
+                            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                            <span>{artifactDownloadError}</span>
+                        </div>
+                    )}
+                    <ul className="grid gap-2.5 md:grid-cols-2">
+                        {artifactRows.map((artifact) => (
+                            <li
+                                key={artifact.kind}
+                                className="flex items-center justify-between gap-3 rounded-xl border border-theme-border bg-theme-bg/60 p-3"
+                            >
+                                <div className="min-w-0">
+                                    <div className="flex flex-wrap items-center gap-1.5 text-xs font-semibold text-theme-text">
+                                        <FileJson className="h-3.5 w-3.5 shrink-0 text-sky-500" />
+                                        <span className="truncate">{artifact.label}</span>
+                                        {artifact.help && (
+                                            <HelpTooltip label={`${artifact.label} help`} align="start" iconSize={12}>
+                                                {artifact.help}
+                                            </HelpTooltip>
+                                        )}
+                                        <Badge tone={artifact.integrity === 'verified' ? 'success' : 'neutral'} size="xxs">
+                                            {artifact.integrity}
+                                        </Badge>
+                                        <HelpTooltip label={`${artifact.label} integrity help`} align="start" iconSize={11}>
+                                            {artifact.integrity === 'verified'
+                                                ? 'Persisted artifact on disk with verified digest/size metadata.'
+                                                : 'Generated dynamically on demand when downloaded.'}
+                                        </HelpTooltip>
+                                    </div>
+                                    <div className="mt-1 flex flex-wrap items-center gap-2 font-mono text-[10px] text-theme-muted">
+                                        <span>{artifact.media_type}</span>
+                                        {artifact.size_bytes !== null && <span>· {formatBytes(artifact.size_bytes)}</span>}
+                                        {artifact.sha256 && <span>· sha256:{String(artifact.sha256).slice(0, 12)}</span>}
+                                    </div>
+                                </div>
+                                <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={() => onDownloadArtifact(artifact)}
+                                    disabled={downloadingArtifact === artifact.kind}
+                                    isLoading={downloadingArtifact === artifact.kind}
+                                >
+                                    <Download className="h-3.5 w-3.5" />
+                                    Download
+                                </Button>
+                            </li>
+                        ))}
+                    </ul>
+                    <div className="mt-4 space-y-2 border-t border-theme-border pt-4">
+                        <details>
+                            <summary className="cursor-pointer text-xs font-semibold text-theme-muted hover:text-theme-text">
+                                Raw backend metrics
+                            </summary>
+                            <div className="mt-3"><JsonBlock value={backendMetrics} /></div>
+                        </details>
+                        <details>
+                            <summary className="cursor-pointer text-xs font-semibold text-theme-muted hover:text-theme-text">
+                                Raw normalized result
+                            </summary>
+                            <div className="mt-3"><JsonBlock value={result} /></div>
+                        </details>
+                    </div>
+                </Panel>
+            </div>
+        </div>
+    );
+}
+
+const ASK_AI_QUICK_PROMPTS = [
+    'Identify primary bottleneck & vLLM / llm-d tuning parameters',
+    'Analyze KV cache, prefix reuse & offload efficiency',
+    'Diagnose bottlenecks and propose an end-to-end tuning plan',
+];
+
+export const ASK_AI_STORAGE_KEY = 'lens.simulation.askAi.v1';
+export const ASK_AI_MAX_SAVED_TASKS = 30;
+
+function getAskAiStorage(storage) {
+    if (storage !== undefined) return storage;
+    if (typeof window === 'undefined') return null;
+    try {
+        return window.localStorage || null;
+    } catch {
+        return null;
+    }
+}
+
+function normalizeAskAiMessage(message) {
+    if (!message || typeof message !== 'object') return null;
+    if (message.role !== 'user' && message.role !== 'assistant') return null;
+    if (typeof message.content !== 'string' || message.content.length === 0) return null;
+    if (message.role === 'user') {
+        return { role: 'user', content: message.content };
+    }
+    return {
+        role: 'assistant',
+        content: message.content,
+        providerName: typeof message.providerName === 'string' ? message.providerName : '',
+        model: typeof message.model === 'string' ? message.model : '',
+        generatedAt: typeof message.generatedAt === 'string' ? message.generatedAt : '',
+        telemetryScope: typeof message.telemetryScope === 'string' ? message.telemetryScope : '',
+    };
+}
+
+function getLatestAssistantTimestamp(messages) {
+    if (!Array.isArray(messages)) return '';
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const msg = messages[i];
+        if (msg?.role === 'assistant' && typeof msg.generatedAt === 'string' && msg.generatedAt.trim()) {
+            return msg.generatedAt;
+        }
+    }
+    return '';
+}
+
+function normalizeAskAiEntry(entry) {
+    if (!entry || typeof entry !== 'object' || !Array.isArray(entry.messages)) return null;
+    const messages = entry.messages.map(normalizeAskAiMessage).filter(Boolean);
+    if (messages.length === 0) return null;
+    const updatedAt = typeof entry.updatedAt === 'string' && entry.updatedAt.trim()
+        ? entry.updatedAt
+        : getLatestAssistantTimestamp(messages);
+    return {
+        messages,
+        providerId: typeof entry.providerId === 'string' ? entry.providerId : '',
+        model: typeof entry.model === 'string' ? entry.model : '',
+        updatedAt,
+    };
+}
+
+function readAskAiStore(targetStorage) {
+    if (!targetStorage || typeof targetStorage.getItem !== 'function') return {};
+    try {
+        const raw = targetStorage.getItem(ASK_AI_STORAGE_KEY);
+        if (!raw || typeof raw !== 'string') return {};
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+        const cleaned = {};
+        for (const [key, value] of Object.entries(parsed)) {
+            if (!key) continue;
+            const normalized = normalizeAskAiEntry(value);
+            if (normalized) cleaned[key] = normalized;
+        }
+        return cleaned;
+    } catch {
+        return {};
+    }
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function loadSavedAskAiAnalysis(taskId, storage) {
+    const key = String(taskId || '').trim();
+    if (!key) return null;
+    const targetStorage = getAskAiStorage(storage);
+    if (!targetStorage) return null;
+    const store = readAskAiStore(targetStorage);
+    return store[key] || null;
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function saveAskAiAnalysis(taskId, entry, storage) {
+    const key = String(taskId || '').trim();
+    if (!key) return null;
+    const targetStorage = getAskAiStorage(storage);
+    if (!targetStorage || typeof targetStorage.setItem !== 'function') return null;
+
+    const normalized = normalizeAskAiEntry({
+        ...entry,
+        updatedAt: typeof entry?.updatedAt === 'string' && entry.updatedAt.trim()
+            ? entry.updatedAt
+            : new Date().toISOString(),
+    });
+    if (!normalized) return null;
+
+    const store = readAskAiStore(targetStorage);
+    if (Object.prototype.hasOwnProperty.call(store, key)) {
+        delete store[key];
+    }
+    store[key] = normalized;
+
+    const ranked = Object.entries(store).map(([entryKey, value], index) => {
+        const parsedTime = Date.parse(value.updatedAt || '');
+        return {
+            key: entryKey,
+            value,
+            time: Number.isFinite(parsedTime) ? parsedTime : 0,
+            index,
+        };
+    });
+    ranked.sort((a, b) => (a.time !== b.time ? a.time - b.time : a.index - b.index));
+
+    let trimmed = ranked.slice(-ASK_AI_MAX_SAVED_TASKS).map((item) => [item.key, item.value]);
+    while (trimmed.length > 0) {
+        try {
+            targetStorage.setItem(ASK_AI_STORAGE_KEY, JSON.stringify(Object.fromEntries(trimmed)));
+            return normalized;
+        } catch {
+            if (trimmed.length <= 1) return null;
+            trimmed = trimmed.slice(1);
+        }
+    }
+    return null;
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function clearSavedAskAiAnalysis(taskId, storage) {
+    const key = String(taskId || '').trim();
+    if (!key) return false;
+    const targetStorage = getAskAiStorage(storage);
+    if (!targetStorage || typeof targetStorage.getItem !== 'function') return false;
+    try {
+        const raw = targetStorage.getItem(ASK_AI_STORAGE_KEY);
+        if (!raw) return true;
+        const store = readAskAiStore(targetStorage);
+        if (!Object.prototype.hasOwnProperty.call(store, key)) return true;
+        delete store[key];
+        if (Object.keys(store).length === 0 && typeof targetStorage.removeItem === 'function') {
+            targetStorage.removeItem(ASK_AI_STORAGE_KEY);
+            return true;
+        }
+        if (typeof targetStorage.setItem === 'function') {
+            targetStorage.setItem(ASK_AI_STORAGE_KEY, JSON.stringify(store));
+            return true;
+        }
+        return false;
+    } catch {
+        return false;
+    }
+}
+
+const MAX_HANDOFF_PROMPT_CHARS = 3900;
+
+function buildAssistantHandoffPrompt({ task, taskId, analysisContent }) {
+    const modelName = task?.model_name || 'unknown';
+    const scenarioName = scenarioDisplayName(task?.scenario) || 'unknown';
+    const header = [
+        `Analyze simulation task ${taskId}:`,
+        `- Model: ${modelName}`,
+        `- Scenario: ${scenarioName}`,
+        `- Backend: ${displayName(taskBackend(task))}`,
+        `- Dataset: ${taskDataset(task)}`,
+    ].join('\n');
+    const summary = String(analysisContent || '').trim();
+    const footer = '\n\nPlease help inspect the simulation telemetry further and propose next tuning steps.';
+    if (!summary) return `${header}${footer}`.slice(0, MAX_HANDOFF_PROMPT_CHARS);
+    const prefix = '\n\nLatest AI bottleneck analysis:\n';
+    const maxSummaryChars = Math.max(0, MAX_HANDOFF_PROMPT_CHARS - header.length - prefix.length - footer.length);
+    const clippedSummary = summary.length > maxSummaryChars
+        ? `${summary.slice(0, Math.max(0, maxSummaryChars - 3))}...`
+        : summary;
+    return `${header}${prefix}${clippedSummary}${footer}`.slice(0, MAX_HANDOFF_PROMPT_CHARS);
+}
+
+function resolveAskAiProviderSelection(items, preferredProviderId, preferredModel) {
+    if (!Array.isArray(items) || items.length === 0) {
+        return { providerId: '', model: '' };
+    }
+    if (preferredProviderId) {
+        const matched = items.find((provider) => provider.id === preferredProviderId);
+        if (matched) {
+            return {
+                providerId: matched.id,
+                model: preferredModel || matched.model || '',
+            };
+        }
+    }
+    const fallback = items[0];
+    return {
+        providerId: fallback.id,
+        model: fallback.model || '',
+    };
+}
+
+export function AskAiModal({ isOpen, onClose, task, taskId, onNavigate }) {
+    const auth = useAuth();
+    const canConfigureProviders = auth?.canView ? auth.canView('ai-providers') : true;
+    const canOpenAssistant = auth?.canView ? auth.canView('playground') : true;
+
+    const initialSavedRef = useRef(undefined);
+    if (initialSavedRef.current === undefined) {
+        initialSavedRef.current = isOpen && taskId ? loadSavedAskAiAnalysis(taskId) : null;
+    }
+    const initialSaved = initialSavedRef.current;
+
+    const [aiProviders, setAiProviders] = useState([]);
+    const [providersLoading, setProvidersLoading] = useState(false);
+    const [providersReady, setProvidersReady] = useState(false);
+    const [providersRestricted, setProvidersRestricted] = useState(false);
+    const [providersError, setProvidersError] = useState('');
+    const [selectedProviderId, setSelectedProviderId] = useState(() => initialSaved?.providerId || '');
+    const [modelOverride, setModelOverride] = useState(() => initialSaved?.model || '');
+    const [messages, setMessages] = useState(() => initialSaved?.messages || []);
+    const [savedUpdatedAt, setSavedUpdatedAt] = useState(
+        () => (initialSaved ? (initialSaved.updatedAt || getLatestAssistantTimestamp(initialSaved.messages) || '') : ''),
+    );
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
+    const [question, setQuestion] = useState('');
+    const [syncedTaskKey, setSyncedTaskKey] = useState(() => (isOpen ? String(taskId || '') : ''));
+    const { copiedValue, copy } = useClipboard(1500);
+
+    const providersAbortRef = useRef(null);
+    const analysisAbortRef = useRef(null);
+    const analysisRequestIdRef = useRef(0);
+    const autoTriggeredTaskRef = useRef(initialSaved?.messages?.length ? taskId : '');
+    const aiProvidersRef = useRef(aiProviders);
+    const providersReadyRef = useRef(providersReady);
+    const providersRestrictedRef = useRef(providersRestricted);
+    const modelOverrideRef = useRef(modelOverride);
+    const messagesRef = useRef(messages);
+    const savedSelectionRef = useRef({
+        providerId: initialSaved?.providerId || '',
+        model: initialSaved?.model || '',
+    });
+    const messagesEndRef = useRef(null);
+
+    useEffect(() => {
+        modelOverrideRef.current = modelOverride;
+    }, [modelOverride]);
+
+    useEffect(() => {
+        messagesRef.current = messages;
+    }, [messages]);
+
+    useEffect(() => {
+        analysisAbortRef.current?.abort();
+        analysisRequestIdRef.current += 1;
+        setLoading(false);
+        setError('');
+        setQuestion('');
+
+        if (!isOpen) {
+            providersReadyRef.current = false;
+            providersRestrictedRef.current = false;
+            setProvidersReady(false);
+            setProvidersRestricted(false);
+            setSyncedTaskKey('');
+            if (!taskId) {
+                setMessages([]);
+                messagesRef.current = [];
+                setSavedUpdatedAt('');
+                savedSelectionRef.current = { providerId: '', model: '' };
+                setSelectedProviderId('');
+                setModelOverride('');
+                autoTriggeredTaskRef.current = '';
+            }
+            return undefined;
+        }
+
+        const saved = taskId ? loadSavedAskAiAnalysis(taskId) : null;
+        if (saved && saved.messages.length > 0) {
+            const latestAt = getLatestAssistantTimestamp(saved.messages);
+            setMessages(saved.messages);
+            messagesRef.current = saved.messages;
+            setSavedUpdatedAt(saved.updatedAt || latestAt || '');
+            savedSelectionRef.current = {
+                providerId: saved.providerId || '',
+                model: saved.model || '',
+            };
+            autoTriggeredTaskRef.current = taskId;
+        } else {
+            setMessages([]);
+            messagesRef.current = [];
+            setSavedUpdatedAt('');
+            savedSelectionRef.current = { providerId: '', model: '' };
+            autoTriggeredTaskRef.current = '';
+        }
+
+        if (providersReadyRef.current) {
+            if (providersRestrictedRef.current) {
+                setSelectedProviderId('');
+                setModelOverride(savedSelectionRef.current.model || '');
+            } else {
+                const resolved = resolveAskAiProviderSelection(
+                    aiProvidersRef.current,
+                    savedSelectionRef.current.providerId,
+                    savedSelectionRef.current.model,
+                );
+                setSelectedProviderId(resolved.providerId);
+                setModelOverride(resolved.model);
+            }
+        } else {
+            setSelectedProviderId(savedSelectionRef.current.providerId);
+            setModelOverride(savedSelectionRef.current.model);
+        }
+        setSyncedTaskKey(String(taskId || ''));
+        return undefined;
+    }, [isOpen, taskId]);
+
+    useEffect(() => () => {
+        providersAbortRef.current?.abort();
+        analysisAbortRef.current?.abort();
+    }, []);
+
+    const loadProviders = useCallback(async () => {
+        providersAbortRef.current?.abort();
+        const controller = new AbortController();
+        providersAbortRef.current = controller;
+        const { signal } = controller;
+
+        providersReadyRef.current = false;
+        providersRestrictedRef.current = false;
+        setProvidersLoading(true);
+        setProvidersReady(false);
+        setProvidersRestricted(false);
+        setProvidersError('');
+        try {
+            const items = await listAIProviders({ signal });
+            if (signal.aborted || providersAbortRef.current !== controller) return;
+            aiProvidersRef.current = items;
+            providersRestrictedRef.current = false;
+            providersReadyRef.current = true;
+            setAiProviders(items);
+            const resolved = resolveAskAiProviderSelection(
+                items,
+                savedSelectionRef.current.providerId,
+                savedSelectionRef.current.model,
+            );
+            setSelectedProviderId(resolved.providerId);
+            setModelOverride(resolved.model);
+            setProvidersReady(true);
+        } catch (nextError) {
+            if (signal.aborted || nextError?.name === 'AbortError' || providersAbortRef.current !== controller) return;
+            if (nextError?.status === 403) {
+                aiProvidersRef.current = [];
+                providersRestrictedRef.current = true;
+                providersReadyRef.current = true;
+                setAiProviders([]);
+                setSelectedProviderId('');
+                setModelOverride(savedSelectionRef.current.model || '');
+                setProvidersError('');
+                setProvidersRestricted(true);
+                setProvidersReady(true);
+                return;
+            }
+            providersReadyRef.current = true;
+            setProvidersError(nextError?.message || 'Unable to load External AI Providers.');
+            setProvidersReady(true);
+        } finally {
+            if (!signal.aborted && providersAbortRef.current === controller) {
+                setProvidersLoading(false);
+            }
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!isOpen) return undefined;
+        void loadProviders();
+        return () => {
+            providersAbortRef.current?.abort();
+        };
+    }, [isOpen, loadProviders]);
+
+    const selectedProvider = useMemo(
+        () => aiProviders.find((provider) => provider.id === selectedProviderId) || aiProviders[0] || null,
+        [aiProviders, selectedProviderId],
+    );
+    const canAnalyze = Boolean(selectedProvider?.id || (providersRestricted && !providersError));
+    const selectedProviderType = selectedProvider?.providerType || selectedProvider?.provider_type || '';
+    const latestAssistantMessage = useMemo(() => {
+        for (let i = messages.length - 1; i >= 0; i -= 1) {
+            if (messages[i]?.role === 'assistant') return messages[i];
+        }
+        return null;
+    }, [messages]);
+
+    useEffect(() => {
+        if (!isOpen || messages.length === 0) return;
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, [isOpen, messages.length]);
+
+    const runAnalysis = useCallback(async ({
+        questionText = '',
+        mode = 'append',
+        priorMessages = messagesRef.current,
+        clearQuestionInput = false,
+        signal: externalSignal,
+    } = {}) => {
+        const targetTaskId = taskId;
+        if (!targetTaskId || (!selectedProvider?.id && !providersRestricted)) return false;
+        analysisAbortRef.current?.abort();
+        const controller = new AbortController();
+        if (externalSignal) {
+            if (externalSignal.aborted) {
+                controller.abort();
+            } else {
+                externalSignal.addEventListener('abort', () => controller.abort(), { once: true });
+            }
+        }
+        analysisAbortRef.current = controller;
+        const requestId = ++analysisRequestIdRef.current;
+
+        const trimmedQuestion = String(questionText || '').trim();
+        const providerIdSnapshot = selectedProvider?.id || '';
+        const modelToUse = (modelOverrideRef.current || selectedProvider?.model || '').trim();
+        const formattedHistory = priorMessages
+            .filter((msg) => msg && (msg.role === 'user' || msg.role === 'assistant') && typeof msg.content === 'string')
+            .slice(-20)
+            .map(({ role, content }) => ({ role, content: content.slice(0, 12000) }));
+
+        const requestBody = {
+            provider_id: providerIdSnapshot || null,
+            ...(modelToUse ? { model: modelToUse } : {}),
+            ...(trimmedQuestion ? { question: trimmedQuestion } : {}),
+            ...(formattedHistory.length > 0 ? { messages: formattedHistory } : {}),
+        };
+
+        setLoading(true);
+        setError('');
+        try {
+            const payload = await analyzeSimulationTaskWithAI(targetTaskId, requestBody, { signal: controller.signal });
+            if (controller.signal.aborted || requestId !== analysisRequestIdRef.current) return false;
+            const assistantMessage = {
+                role: 'assistant',
+                content: String(payload?.analysis || '').trim() || 'No analysis returned by the provider.',
+                providerName: payload?.provider_name || payload?.providerName || selectedProvider?.name || 'Default External Provider',
+                model: payload?.model || modelToUse || selectedProvider?.model || '',
+                generatedAt: payload?.generated_at || payload?.generatedAt || '',
+                telemetryScope: payload?.telemetry_scope || payload?.telemetryScope || '',
+            };
+            let nextMessages;
+            if (mode === 'replace-initial') {
+                nextMessages = [assistantMessage];
+            } else if (mode === 'replace-last-answer') {
+                const current = messagesRef.current;
+                let lastUserIdx = -1;
+                for (let i = current.length - 1; i >= 0; i -= 1) {
+                    if (current[i]?.role === 'user') {
+                        lastUserIdx = i;
+                        break;
+                    }
+                }
+                nextMessages = lastUserIdx >= 0
+                    ? [...current.slice(0, lastUserIdx + 1), assistantMessage]
+                    : [assistantMessage];
+            } else {
+                const current = messagesRef.current;
+                nextMessages = trimmedQuestion
+                    ? [...current, { role: 'user', content: trimmedQuestion }, assistantMessage]
+                    : [...current, assistantMessage];
+            }
+            messagesRef.current = nextMessages;
+            setMessages(nextMessages);
+
+            const persistedAt = new Date().toISOString();
+            saveAskAiAnalysis(targetTaskId, {
+                messages: nextMessages,
+                providerId: providerIdSnapshot,
+                model: assistantMessage.model || modelToUse,
+                updatedAt: persistedAt,
+            });
+            setSavedUpdatedAt(persistedAt);
+            savedSelectionRef.current = {
+                providerId: providerIdSnapshot,
+                model: assistantMessage.model || modelToUse,
+            };
+
+            if (clearQuestionInput) setQuestion('');
+            return true;
+        } catch (nextError) {
+            if (controller.signal.aborted || nextError?.name === 'AbortError' || requestId !== analysisRequestIdRef.current) {
+                return false;
+            }
+            setError(nextError?.message || 'Unable to analyze simulation task with AI.');
+            return true;
+        } finally {
+            if (!controller.signal.aborted && requestId === analysisRequestIdRef.current) {
+                setLoading(false);
+            }
+        }
+    }, [providersRestricted, selectedProvider, taskId]);
+
+    useEffect(() => {
+        if (!isOpen || !providersReady || providersLoading || providersError) return undefined;
+        if (!canAnalyze || !taskId || syncedTaskKey !== String(taskId || '')) return undefined;
+        if (messages.length > 0 || error || autoTriggeredTaskRef.current === taskId) return undefined;
+
+        const controller = new AbortController();
+        autoTriggeredTaskRef.current = taskId;
+        let finished = false;
+        void runAnalysis({
+            questionText: '',
+            mode: 'replace-initial',
+            priorMessages: [],
+            signal: controller.signal,
+        }).then((didFinish) => {
+            finished = Boolean(didFinish);
+        });
+
+        return () => {
+            controller.abort();
+            if (!finished && autoTriggeredTaskRef.current === taskId) {
+                autoTriggeredTaskRef.current = '';
+            }
+        };
+    }, [canAnalyze, error, isOpen, messages.length, providersError, providersLoading, providersReady, runAnalysis, syncedTaskKey, taskId]);
+
+    const handleProviderChange = useCallback((event) => {
+        const nextId = event.target.value;
+        setSelectedProviderId(nextId);
+        const nextProvider = aiProviders.find((provider) => provider.id === nextId) || null;
+        const nextModel = nextProvider?.model || '';
+        setModelOverride(nextModel);
+        savedSelectionRef.current = { providerId: '', model: '' };
+    }, [aiProviders]);
+
+    const handleReanalyze = useCallback(() => {
+        if (loading || !canAnalyze) return;
+        autoTriggeredTaskRef.current = taskId;
+        void runAnalysis({
+            questionText: '',
+            mode: 'replace-initial',
+            priorMessages: [],
+        });
+    }, [canAnalyze, loading, runAnalysis, taskId]);
+
+    const handleClearAnalysis = useCallback(() => {
+        analysisAbortRef.current?.abort();
+        analysisRequestIdRef.current += 1;
+        autoTriggeredTaskRef.current = taskId || '__cleared__';
+        clearSavedAskAiAnalysis(taskId);
+        messagesRef.current = [];
+        setMessages([]);
+        setSavedUpdatedAt('');
+        savedSelectionRef.current = { providerId: '', model: '' };
+        setError('');
+        setQuestion('');
+        setLoading(false);
+    }, [taskId]);
+
+    const handleSendFollowUp = useCallback(() => {
+        const trimmed = question.trim();
+        if (!trimmed || loading || !canAnalyze) return;
+        autoTriggeredTaskRef.current = taskId;
+        void runAnalysis({
+            questionText: trimmed,
+            mode: 'append',
+            priorMessages: messagesRef.current,
+            clearQuestionInput: true,
+        });
+    }, [canAnalyze, loading, question, runAnalysis, taskId]);
+
+    const handleContinueInAssistant = useCallback(() => {
+        if (!onNavigate) return;
+        try {
+            const prompt = buildAssistantHandoffPrompt({
+                task,
+                taskId,
+                analysisContent: latestAssistantMessage?.content || '',
+            });
+            stageAssistantDraft({
+                prompt,
+                providerId: selectedProvider?.id || null,
+            });
+            onClose?.();
+            onNavigate('playground');
+        } catch (nextError) {
+            setError(nextError?.message || 'Unable to stage handoff to Lens Assistant.');
+        }
+    }, [latestAssistantMessage?.content, onClose, onNavigate, selectedProvider?.id, task, taskId]);
+
+    const latestContent = latestAssistantMessage?.content || '';
+    const isLatestCopied = Boolean(latestContent && copiedValue === latestContent);
+    const hasMessages = messages.length > 0;
+    const displayAnalyzedAt = savedUpdatedAt || latestAssistantMessage?.generatedAt || '';
+    const showComposerFooter = Boolean(aiProviders.length > 0 || providersRestricted || hasMessages);
+
+    return (
+        <SideDrawer
+            isOpen={isOpen}
+            onClose={onClose}
+            widthClassName="sm:w-[580px] lg:w-[660px] sm:max-w-[92vw]"
+            closeLabel="Close Ask AI drawer"
+            icon={<Sparkles className="h-4 w-4 text-emerald-500" aria-hidden="true" />}
+            title="Ask AI — Bottleneck Diagnosis & Tuning"
+            subtitle={`Task ${taskId}${task?.model_name ? ` · ${task.model_name}` : ''}`}
+            headerMeta={hasMessages && displayAnalyzedAt ? (
+                <div className="flex flex-wrap items-center gap-1.5">
+                    <Badge tone="neutral" size="xs">
+                        {`Last analyzed · ${formatTimestamp(displayAnalyzedAt)}`}
+                    </Badge>
+                </div>
+            ) : null}
+            bodyClassName="flex flex-col overflow-hidden p-0"
+            footer={showComposerFooter ? (
+                <div className="space-y-2.5">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-[11px] font-medium text-theme-muted">Quick prompts:</span>
+                        {ASK_AI_QUICK_PROMPTS.map((chip) => (
+                            <Button
+                                key={chip}
+                                variant="outline"
+                                size="xs"
+                                disabled={!canAnalyze || loading}
+                                onClick={() => {
+                                    autoTriggeredTaskRef.current = taskId;
+                                    void runAnalysis({
+                                        questionText: chip,
+                                        mode: 'append',
+                                        priorMessages: messagesRef.current,
+                                    });
+                                }}
+                            >
+                                {chip}
+                            </Button>
+                        ))}
+                    </div>
+                    <div className="flex items-end gap-2">
+                        <Textarea
+                            aria-label="Follow-up question"
+                            rows={2}
+                            maxLength={4000}
+                            value={question}
+                            onChange={(event) => setQuestion(event.target.value)}
+                            onKeyDown={(event) => {
+                                if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                                    event.preventDefault();
+                                    handleSendFollowUp();
+                                }
+                            }}
+                            placeholder="Ask a follow-up question about this run..."
+                            disabled={loading || !canAnalyze}
+                            className="min-h-[56px] flex-1 resize-y font-sans text-xs"
+                        />
+                        <Button
+                            variant="primary"
+                            size="sm"
+                            onClick={handleSendFollowUp}
+                            disabled={!question.trim() || loading || !canAnalyze}
+                            isLoading={loading}
+                        >
+                            <Send className="h-3.5 w-3.5" />
+                            Send
+                        </Button>
+                    </div>
+                    <p className="text-[11px] text-theme-muted">
+                        Press <kbd className="rounded border border-theme-border px-1 py-0.5 font-mono text-[10px]">Ctrl</kbd>+<kbd className="rounded border border-theme-border px-1 py-0.5 font-mono text-[10px]">Enter</kbd> (or <kbd className="rounded border border-theme-border px-1 py-0.5 font-mono text-[10px]">Cmd</kbd>+<kbd className="rounded border border-theme-border px-1 py-0.5 font-mono text-[10px]">Enter</kbd>) to send. Endpoint secrets and API keys are redacted before sending context.
+                    </p>
+                </div>
+            ) : null}
+        >
+            {!hasMessages && !providersError && (!providersReady || providersLoading) && aiProviders.length === 0 && !providersRestricted ? (
+                <div className="min-h-0 flex-1 overflow-y-auto p-6">
+                    <div className="flex items-center justify-center gap-2.5 py-12 text-sm text-theme-muted">
+                        <Spinner />
+                        <span>Loading External AI Providers…</span>
+                    </div>
+                </div>
+            ) : !hasMessages && providersError ? (
+                <div className="min-h-0 flex-1 overflow-y-auto p-6">
+                    <div role="alert" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-xs text-red-700 dark:text-red-300">
+                        <span className="flex items-center gap-2">
+                            <AlertTriangle className="h-4 w-4 shrink-0" />
+                            <span>{providersError}</span>
+                        </span>
+                        <Button variant="ghost" size="xs" onClick={() => void loadProviders()}>
+                            Retry
+                        </Button>
+                    </div>
+                </div>
+            ) : !hasMessages && providersReady && !providersLoading && !providersError && !providersRestricted && aiProviders.length === 0 ? (
+                <div className="min-h-0 flex-1 overflow-y-auto p-6">
+                    <EmptyState
+                        icon={<Sparkles className="h-6 w-6" />}
+                        title="No External AI Provider configured"
+                        message="Add an OpenAI-compatible or Anthropic provider in External Providers to analyze simulation bottlenecks and tuning flags."
+                        action={onNavigate && canConfigureProviders ? (
+                            <Button
+                                variant="primary"
+                                size="sm"
+                                onClick={() => {
+                                    onClose?.();
+                                    onNavigate('ai-providers');
+                                }}
+                            >
+                                Configure External Providers
+                            </Button>
+                        ) : null}
+                    />
+                </div>
+            ) : (
+                <>
+                    <div className="shrink-0 space-y-3 border-b border-theme-border bg-theme-bg/60 px-6 py-4">
+                        {providersError ? (
+                            <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-700 dark:text-red-300">
+                                <span className="flex items-center gap-2">
+                                    <AlertTriangle className="h-4 w-4 shrink-0" />
+                                    <span>{providersError}</span>
+                                </span>
+                                <Button variant="ghost" size="xs" onClick={() => void loadProviders()}>
+                                    Retry
+                                </Button>
+                            </div>
+                        ) : providersRestricted ? (
+                            <div className="space-y-3">
+                                <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+                                    Provider listing is restricted for your role, so analysis will use the backend&apos;s default configured External Provider.
+                                </p>
+                                <div>
+                                    <Label
+                                        htmlFor="ask-ai-model-input"
+                                        help="Optional model override. Leave blank to use the backend default External Provider's configured model."
+                                    >
+                                        Model Override
+                                    </Label>
+                                    <Input
+                                        id="ask-ai-model-input"
+                                        value={modelOverride}
+                                        onChange={(event) => setModelOverride(event.target.value)}
+                                        placeholder="Optional model override (uses provider default)"
+                                        disabled={loading}
+                                    />
+                                </div>
+                            </div>
+                        ) : aiProviders.length > 0 ? (
+                            <div className="grid gap-3 sm:grid-cols-2">
+                                <div>
+                                    <Label htmlFor="ask-ai-provider-select">External Provider</Label>
+                                    <Select
+                                        id="ask-ai-provider-select"
+                                        value={selectedProvider?.id || ''}
+                                        onChange={handleProviderChange}
+                                        disabled={loading}
+                                    >
+                                        {aiProviders.map((provider) => (
+                                            <option key={provider.id} value={provider.id}>
+                                                {`${provider.name || provider.id} — ${provider.model || 'default'}`}
+                                            </option>
+                                        ))}
+                                    </Select>
+                                </div>
+                                <div>
+                                    <Label
+                                        htmlFor="ask-ai-model-input"
+                                        help="Pre-populated with the selected provider's configured model. Override to test another model supported by the same provider."
+                                    >
+                                        Model Override
+                                    </Label>
+                                    <Input
+                                        id="ask-ai-model-input"
+                                        value={modelOverride}
+                                        onChange={(event) => setModelOverride(event.target.value)}
+                                        placeholder={selectedProvider?.model || 'Provider default model'}
+                                        disabled={loading}
+                                    />
+                                </div>
+                            </div>
+                        ) : providersLoading ? (
+                            <div className="flex items-center gap-2 text-xs text-theme-muted">
+                                <Spinner size="sm" />
+                                <span>Loading External AI Providers…</span>
+                            </div>
+                        ) : (
+                            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-theme-border bg-theme-card px-3 py-2 text-xs text-theme-muted">
+                                <span>No External AI Provider configured.</span>
+                                {onNavigate && canConfigureProviders ? (
+                                    <Button
+                                        variant="outline"
+                                        size="xs"
+                                        onClick={() => {
+                                            onClose?.();
+                                            onNavigate('ai-providers');
+                                        }}
+                                    >
+                                        Configure External Providers
+                                    </Button>
+                                ) : null}
+                            </div>
+                        )}
+
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                                {selectedProviderType && (
+                                    <Badge tone="info" size="sm">{selectedProviderType}</Badge>
+                                )}
+                                {providersRestricted && (
+                                    <Badge tone="neutral" size="sm">Default Provider</Badge>
+                                )}
+                                {latestAssistantMessage?.telemetryScope && (
+                                    <Badge tone="brand" size="sm">
+                                        {`Scope: ${latestAssistantMessage.telemetryScope}`}
+                                    </Badge>
+                                )}
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <Button
+                                    variant={hasMessages ? 'secondary' : 'primary'}
+                                    size="sm"
+                                    onClick={handleReanalyze}
+                                    disabled={!canAnalyze || loading}
+                                    isLoading={loading}
+                                >
+                                    {hasMessages
+                                        ? <RefreshCw className="h-3.5 w-3.5" />
+                                        : <Sparkles className="h-3.5 w-3.5" />}
+                                    {hasMessages ? 'Re-analyze' : 'Analyze Bottlenecks & Solutions'}
+                                </Button>
+                                <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={() => void copy(latestContent)}
+                                    disabled={!latestContent}
+                                >
+                                    {isLatestCopied
+                                        ? <Check className="h-3.5 w-3.5 text-emerald-500" />
+                                        : <Copy className="h-3.5 w-3.5" />}
+                                    {isLatestCopied ? 'Copied' : 'Copy Analysis'}
+                                </Button>
+                                {onNavigate && canOpenAssistant && (
+                                    <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={handleContinueInAssistant}
+                                        disabled={loading && !latestAssistantMessage}
+                                    >
+                                        <Sparkles className="h-3.5 w-3.5" />
+                                        Continue in Lens Assistant
+                                    </Button>
+                                )}
+                                {hasMessages && (
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={handleClearAnalysis}
+                                        disabled={loading}
+                                    >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                        Clear
+                                    </Button>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-6 py-4">
+                        {error && (
+                            <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-xs text-red-700 dark:text-red-300">
+                                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                                <span>{error}</span>
+                            </div>
+                        )}
+
+                        {!hasMessages && loading ? (
+                            <div className="flex items-center justify-center gap-2.5 py-12 text-xs text-theme-muted">
+                                <Spinner size="sm" />
+                                <span>Analyzing telemetry, automated forensics, and serving metrics…</span>
+                            </div>
+                        ) : !hasMessages ? (
+                            <p className="py-12 text-center text-xs text-theme-muted">
+                                Click <strong>Analyze Bottlenecks &amp; Solutions</strong> or choose a quick prompt below to diagnose this simulation run.
+                            </p>
+                        ) : (
+                            messages.map((msg, index) => (
+                                msg.role === 'user' ? (
+                                    <div
+                                        key={`user-${index}`}
+                                        className="ml-auto max-w-[85%] rounded-xl border border-sky-500/30 bg-sky-500/10 px-3.5 py-2.5 text-xs text-theme-text"
+                                    >
+                                        <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-sky-700 dark:text-sky-300">
+                                            Question
+                                        </div>
+                                        <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                                    </div>
+                                ) : (
+                                    <article
+                                        key={`assistant-${index}`}
+                                        className="rounded-xl border border-theme-border bg-theme-bg/40 p-4 text-sm text-theme-text"
+                                    >
+                                        <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2 border-b border-theme-border pb-2 text-[11px] text-theme-muted">
+                                            <div className="flex flex-wrap items-center gap-1.5">
+                                                <Sparkles className="h-3.5 w-3.5 text-emerald-500" aria-hidden="true" />
+                                                <span className="font-semibold text-theme-text">
+                                                    {msg.providerName || 'AI Analysis'}
+                                                </span>
+                                                {msg.model && <Badge tone="neutral" size="xs">{msg.model}</Badge>}
+                                                {msg.telemetryScope && (
+                                                    <Badge tone="brand" size="xs">{msg.telemetryScope}</Badge>
+                                                )}
+                                            </div>
+                                            {msg.generatedAt && <span>{formatTimestamp(msg.generatedAt)}</span>}
+                                        </div>
+                                        <div className="markdown-body text-sm leading-relaxed text-theme-text">
+                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content || ''}</ReactMarkdown>
+                                        </div>
+                                    </article>
+                                )
+                            ))
+                        )}
+                        {hasMessages && loading && (
+                            <div className="flex items-center gap-2 rounded-lg border border-theme-border bg-theme-bg/40 px-3 py-2 text-xs text-theme-muted">
+                                <Spinner size="sm" />
+                                <span>Generating response…</span>
+                            </div>
+                        )}
+                        <div ref={messagesEndRef} />
+                    </div>
+                </>
+            )}
+        </SideDrawer>
+    );
+}
 
 export default function SimulationTaskDetails({ onNavigate }) {
     const params = new URLSearchParams(window.location.search);
@@ -49,7 +1562,15 @@ export default function SimulationTaskDetails({ onNavigate }) {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const [actionError, setActionError] = useState('');
-    const [detailTab, setDetailTab] = useState('summary');
+    const [liveTelemetry, setLiveTelemetry] = useState(null);
+    const [liveError, setLiveError] = useState('');
+    const [telemetry, setTelemetry] = useState(null);
+    const [telemetryLoading, setTelemetryLoading] = useState(false);
+    const [telemetryNotice, setTelemetryNotice] = useState('');
+    const [postTab, setPostTab] = useState('overview');
+    const [pendingScrollAnchor, setPendingScrollAnchor] = useState(null);
+    const [systemInitialNode, setSystemInitialNode] = useState(undefined);
+    const [analysisWindow, setAnalysisWindow] = useState('profiling');
     const [durationClockMs, setDurationClockMs] = useState(Date.now);
     const [stopping, setStopping] = useState(false);
     const [stoppingTaskId, setStoppingTaskId] = useState('');
@@ -57,26 +1578,41 @@ export default function SimulationTaskDetails({ onNavigate }) {
     const [deletingTaskId, setDeletingTaskId] = useState('');
     const [downloadingArtifact, setDownloadingArtifact] = useState('');
     const [artifactDownloadError, setArtifactDownloadError] = useState('');
-    const [selectedResponseCode, setSelectedResponseCode] = useState(undefined);
-    const [responseCodeIssues, setResponseCodeIssues] = useState([]);
-    const [responseCodeIssueTotal, setResponseCodeIssueTotal] = useState(0);
-    const [responseCodeIssuePage, setResponseCodeIssuePage] = useState(0);
-    const [responseCodeIssuesLoading, setResponseCodeIssuesLoading] = useState(false);
-    const [responseCodeIssuesError, setResponseCodeIssuesError] = useState('');
-    const taskLogRef = useRef(null);
+    const [downloadsMenuOpen, setDownloadsMenuOpen] = useState(false);
+    const [errorInspectorFilter, setErrorInspectorFilter] = useState(null);
+    const [askAiOpen, setAskAiOpen] = useState(false);
+
+    const downloadsMenuRef = useRef(null);
+    const artifactsHubRef = useRef(null);
+    const taskRef = useRef(task);
+    useEffect(() => {
+        taskRef.current = task;
+    }, [task]);
+
+    const handleSelectTab = useCallback((tab, anchor = null, options = null) => {
+        setPostTab(tab);
+        setPendingScrollAnchor(anchor || null);
+        setSystemInitialNode(tab === 'system' ? (options?.node || undefined) : undefined);
+    }, []);
+
+    useEffect(() => {
+        if (!pendingScrollAnchor) return undefined;
+        if (typeof document === 'undefined' || typeof window === 'undefined') {
+            setPendingScrollAnchor(null);
+            return undefined;
+        }
+        const rafId = window.requestAnimationFrame(() => {
+            document.getElementById(pendingScrollAnchor)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            setPendingScrollAnchor(null);
+        });
+        return () => window.cancelAnimationFrame?.(rafId);
+    }, [postTab, pendingScrollAnchor]);
 
     const taskId = task?.id || task?.task_id || routeTaskId;
     const taskStatus = String(task?.status || '').toLowerCase();
+    const isRunning = RUNNING_STATUSES.has(taskStatus);
+    const hasTask = Boolean(task);
     const taskStartedAt = task?.started_at;
-    const taskLogs = useMemo(() => (Array.isArray(task?.logs) ? task.logs : []), [task?.logs]);
-
-    const closeResponseCodeIssues = useCallback(() => {
-        setSelectedResponseCode(undefined);
-        setResponseCodeIssues([]);
-        setResponseCodeIssueTotal(0);
-        setResponseCodeIssuePage(0);
-        setResponseCodeIssuesError('');
-    }, []);
 
     const loadBackends = useCallback(async () => {
         try {
@@ -109,80 +1645,97 @@ export default function SimulationTaskDetails({ onNavigate }) {
         }
     }, [routeTaskId]);
 
+    const loadLiveTelemetry = useCallback(async () => {
+        if (!routeTaskId) return;
+        try {
+            const snapshot = await getLiveTelemetry(routeTaskId);
+            setLiveTelemetry(snapshot);
+            setLiveError('');
+        } catch (nextError) {
+            if (nextError?.status === 409 || String(nextError?.message || '').includes('409')) {
+                void loadTaskDetails({ quiet: true });
+                return;
+            }
+            setLiveError(nextError.message);
+        }
+    }, [loadTaskDetails, routeTaskId]);
+
     useEffect(() => {
         setTask(null);
-        setDetailTab('summary');
+        setLiveTelemetry(null);
+        setLiveError('');
+        setTelemetry(null);
+        setTelemetryNotice('');
+        setPostTab('overview');
+        setSystemInitialNode(undefined);
+        setAnalysisWindow('profiling');
         setActionError('');
         setArtifactDownloadError('');
-        closeResponseCodeIssues();
+        setErrorInspectorFilter(null);
+        setAskAiOpen(false);
         void loadTaskDetails();
-    }, [closeResponseCodeIssues, loadTaskDetails, routeTaskId]);
+    }, [loadTaskDetails, routeTaskId]);
 
     useEffect(() => {
         void loadBackends();
     }, [loadBackends]);
 
     useEffect(() => {
-        if (!taskStartedAt || !RUNNING_STATUSES.has(taskStatus)) return undefined;
+        if (!taskStartedAt || !isRunning) return undefined;
         setDurationClockMs(Date.now());
         const interval = window.setInterval(() => setDurationClockMs(Date.now()), 1000);
         return () => window.clearInterval(interval);
-    }, [taskStartedAt, taskStatus]);
+    }, [isRunning, taskStartedAt]);
+
+    usePolling(
+        () => loadLiveTelemetry(),
+        { intervalMs: 2000, enabled: Boolean(routeTaskId && isRunning), immediate: true },
+    );
+
+    usePolling(
+        () => loadTaskDetails({ quiet: true }),
+        { intervalMs: 3000, enabled: Boolean(routeTaskId && isRunning) },
+    );
 
     useEffect(() => {
-        if (taskStatus !== 'running' || detailTab !== 'errors' || !taskLogs.length) return undefined;
-        const frame = window.requestAnimationFrame(() => {
-            if (taskLogRef.current) {
-                taskLogRef.current.scrollTop = taskLogRef.current.scrollHeight;
-            }
-        });
-        return () => window.cancelAnimationFrame(frame);
-    }, [detailTab, taskLogs, taskStatus]);
+        if (!taskId || isRunning || !hasTask) return undefined;
+        const controller = new AbortController();
+        setTelemetryLoading(true);
+        setTelemetryNotice('');
+        getTaskTelemetry(taskId, { section: 'all' }, { signal: controller.signal })
+            .then((payload) => {
+                if (!controller.signal.aborted) {
+                    setTelemetry(payload);
+                    setTelemetryNotice('');
+                }
+            })
+            .catch((nextError) => {
+                if (!controller.signal.aborted) {
+                    setTelemetry(deriveLegacyTelemetryFromTask(taskRef.current));
+                    setTelemetryNotice(`Loaded fallback client summary (${nextError.message}).`);
+                }
+            })
+            .finally(() => {
+                if (!controller.signal.aborted) setTelemetryLoading(false);
+            });
+        return () => controller.abort();
+    }, [hasTask, isRunning, taskId, taskStatus]);
 
     useEffect(() => {
-        if (taskStatus === 'running' && ['latency', 'throughput'].includes(detailTab)) {
-            setDetailTab('summary');
-        }
-    }, [detailTab, taskStatus]);
-
-    useEffect(() => {
-        if (!RUNNING_STATUSES.has(taskStatus)) return undefined;
-        let active = true;
-        let timeout;
-        const poll = async () => {
-            if (!active) return;
-            await loadTaskDetails({ quiet: true });
-            if (active) timeout = window.setTimeout(poll, 1000);
+        if (!downloadsMenuOpen) return undefined;
+        const onPointerDown = (event) => {
+            if (!downloadsMenuRef.current?.contains(event.target)) setDownloadsMenuOpen(false);
         };
-        void poll();
+        const onKeyDown = (event) => {
+            if (event.key === 'Escape') setDownloadsMenuOpen(false);
+        };
+        document.addEventListener('pointerdown', onPointerDown);
+        document.addEventListener('keydown', onKeyDown);
         return () => {
-            active = false;
-            if (timeout) window.clearTimeout(timeout);
+            document.removeEventListener('pointerdown', onPointerDown);
+            document.removeEventListener('keydown', onKeyDown);
         };
-    }, [loadTaskDetails, taskStatus]);
-
-    const openResponseCodeIssues = useCallback(async (statusCode, page = 0) => {
-        if (!taskId) return;
-        setSelectedResponseCode(statusCode);
-        setResponseCodeIssuePage(page);
-        setResponseCodeIssues([]);
-        if (page === 0) setResponseCodeIssueTotal(0);
-        setResponseCodeIssuesError('');
-        setResponseCodeIssuesLoading(true);
-        try {
-            const encodedCode = statusCode === null ? 'unknown' : String(statusCode);
-            const offset = page * RESPONSE_CODE_ISSUE_PAGE_SIZE;
-            const payload = await requestJson(
-                `/api/v1/simulation/tasks/${encodeURIComponent(taskId)}/response-code-issues?status_code=${encodeURIComponent(encodedCode)}&offset=${offset}&limit=${RESPONSE_CODE_ISSUE_PAGE_SIZE}`
-            );
-            setResponseCodeIssues(Array.isArray(payload?.issues) ? payload.issues : []);
-            setResponseCodeIssueTotal(Number(payload?.total ?? 0));
-        } catch (nextError) {
-            setResponseCodeIssuesError(`Unable to load request issues: ${nextError.message}`);
-        } finally {
-            setResponseCodeIssuesLoading(false);
-        }
-    }, [taskId]);
+    }, [downloadsMenuOpen]);
 
     const downloadArtifact = useCallback(async (artifact) => {
         if (!taskId || !artifact?.kind) return;
@@ -191,14 +1744,14 @@ export default function SimulationTaskDetails({ onNavigate }) {
         try {
             await downloadFile(
                 `/api/v1/simulation/tasks/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(artifact.kind)}`,
-                { fallbackName: artifact.name || artifact.kind },
+                { fallbackName: artifact.name || `${taskBackend(task)}-${artifact.kind}-${taskId}` },
             );
         } catch (nextError) {
             setArtifactDownloadError(nextError.message);
         } finally {
             setDownloadingArtifact('');
         }
-    }, [taskId]);
+    }, [task, taskId]);
 
     const stopTask = useCallback(async () => {
         if (!taskId || !task) return;
@@ -209,11 +1762,11 @@ export default function SimulationTaskDetails({ onNavigate }) {
             const payload = await requestJson(`/api/v1/simulation/tasks/${encodeURIComponent(taskId)}/stop`, {
                 method: 'POST',
             });
-            setTask((current) => current ? {
+            setTask((current) => (current ? {
                 ...current,
                 status: payload?.status || 'cancelling',
                 progress_message: 'Cancellation requested',
-            } : current);
+            } : current));
         } catch (nextError) {
             setActionError(`Unable to stop simulation: ${nextError.message}`);
         } finally {
@@ -249,8 +1802,11 @@ export default function SimulationTaskDetails({ onNavigate }) {
         };
     }, [task]);
 
+    const normalizedTaskBackend = String(taskBackend(task) || '').trim().toLowerCase();
+    const isLegacyTraceReplayer = normalizedTaskBackend === 'trace-replayer' || normalizedTaskBackend === 'trace_replayer';
+
     const rerunSimulationTask = useCallback(async () => {
-        if (!task || !taskId || RUNNING_STATUSES.has(taskStatus)) return;
+        if (!task || !taskId || isRunning || isLegacyTraceReplayer) return;
         setRerunningTaskId(taskId);
         setActionError('');
         try {
@@ -269,11 +1825,11 @@ export default function SimulationTaskDetails({ onNavigate }) {
         } finally {
             setRerunningTaskId('');
         }
-    }, [onNavigate, resolveLegacyRerunBody, task, taskId, taskStatus]);
+    }, [isLegacyTraceReplayer, isRunning, onNavigate, resolveLegacyRerunBody, task, taskId]);
 
     const deleteSimulationTask = useCallback(async () => {
         if (!task || !taskId) return;
-        if (RUNNING_STATUSES.has(taskStatus)) {
+        if (isRunning) {
             setActionError('Stop this task before deleting it.');
             return;
         }
@@ -283,175 +1839,179 @@ export default function SimulationTaskDetails({ onNavigate }) {
         setActionError('');
         try {
             await requestJson(`/api/v1/simulation/tasks/${encodeURIComponent(taskId)}`, { method: 'DELETE' });
+            if (typeof window !== 'undefined') {
+                const nextUrl = new URL(window.location.href);
+                const rawCompare = nextUrl.searchParams.get('compare');
+                if (rawCompare) {
+                    const remaining = rawCompare
+                        .split(',')
+                        .map((item) => item.trim())
+                        .filter((item) => item && item !== taskId);
+                    if (remaining.length > 0) nextUrl.searchParams.set('compare', remaining.join(','));
+                    else nextUrl.searchParams.delete('compare');
+                    window.history.replaceState({}, '', `${nextUrl.pathname}${nextUrl.search}${nextUrl.hash}`);
+                }
+            }
             onNavigate('optimization-simulate');
         } catch (nextError) {
             setActionError(`Unable to delete simulation task: ${nextError.message}`);
         } finally {
             setDeletingTaskId('');
         }
-    }, [onNavigate, task, taskId, taskStatus]);
+    }, [isRunning, onNavigate, task, taskId]);
+
+    const navigateToCompare = useCallback(() => {
+        if (!taskId) return;
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.set('compare', taskId);
+        window.history.replaceState({}, '', nextUrl.toString());
+        onNavigate?.('optimization-simulate');
+    }, [onNavigate, taskId]);
 
     const resultPayload = task?.result || task?.results || task?.output || null;
     const result = Array.isArray(resultPayload) ? resultPayload[0] || null : resultPayload;
-    const summary = result?.summary || task?.live_summary || task?.summary || {};
     const artifacts = result?.artifacts || task?.artifacts || [];
-    const backendMetrics = result?.backend_metrics || result?.backendMetrics || {};
-    const timing = result?.timing || summary?.timing || backendMetrics?.timing
-        || findNamedSection(backendMetrics, /timing|schedule/i);
-    const drift = result?.drift || summary?.drift || backendMetrics?.drift || backendMetrics?.schedule_drift
-        || findNamedSection(backendMetrics, /drift/i);
-    const progress = Math.max(0, Math.min(100, Number(task?.progress_percent ?? task?.progress ?? 0)));
-    const totalRequests = numberAt(summary, ['total_requests', 'requests_total', 'request_count']);
-    const successfulRequests = numberAt(summary, ['successful_requests', 'requests_success', 'success_count']);
-    const failedRequests = numberAt(summary, ['failed_requests', 'requests_failed', 'error_count']);
-    const requestRate = numberAt(summary, ['request_throughput.avg', 'throughput_rps', 'requests_per_second']);
-    const tokenRate = numberAt(summary, ['output_token_throughput.avg', 'throughput_tps', 'tokens_per_second']);
-    const inputTokenRate = numberAt(summary, ['input_throughput_tps', 'input_token_throughput.avg']);
-    const totalTokenRate = numberAt(summary, ['total_throughput_tps', 'total_token_throughput.avg']);
-    const effectiveConcurrency = numberAt(summary, ['effective_concurrency']);
-    const totalInputTokens = numberAt(summary, ['total_input_tokens', 'input_tokens_total']);
-    const totalOutputTokens = numberAt(summary, ['total_output_tokens', 'output_tokens_total']);
-    const nonStreamingAiperf = taskBackend(task) === 'aiperf' && task?.simulation?.stream === false;
-    const resultWarnings = Array.isArray(result?.warnings) ? [...result.warnings] : [];
-    if (nonStreamingAiperf && !resultWarnings.some((warning) => warning.includes('non-streaming'))) {
-        resultWarnings.push('TTFT and TPOT metrics are unavailable because this task used non-streaming responses. Enable Stream responses to collect them.');
-    }
-    const liveCompletionTotals = Array.isArray(summary?.completion_timeline)
-        ? summary.completion_timeline.reduce((totals, point) => ({
-            successful: totals.successful + Number(point.successful_requests || 0),
-            failed: totals.failed + Number(point.failed_requests || 0),
-        }), { successful: 0, failed: 0 })
-        : null;
-    const liveCompletedRequests = liveCompletionTotals
-        ? liveCompletionTotals.successful + liveCompletionTotals.failed
-        : 0;
-    const displayedTotalRequests = totalRequests ?? (liveCompletedRequests > 0 ? liveCompletedRequests : null);
-    const displayedFailedRequests = failedRequests
-        ?? (liveCompletionTotals && liveCompletedRequests > 0 ? liveCompletionTotals.failed : null);
-    const successRate = numberAt(summary, ['success_rate'])
-        ?? (totalRequests !== null && totalRequests > 0 && successfulRequests !== null
-            ? successfulRequests / totalRequests * 100
-            : liveCompletedRequests > 0
-                ? liveCompletionTotals.successful / liveCompletedRequests * 100
-                : null);
-    const errorRate = displayedTotalRequests > 0 && displayedFailedRequests !== null
-        ? displayedFailedRequests / displayedTotalRequests * 100
-        : successRate === null ? null : Math.max(0, 100 - successRate);
-    const ttft = nonStreamingAiperf ? {} : summary?.ttft || summary?.time_to_first_token || {};
-    const tpot = nonStreamingAiperf ? {} : summary?.tpot || summary?.inter_token_latency || {};
-    const latencyDistribution = summary?.latency || summary?.request_latency || {};
-    const driftDistribution = summary?.drift || summary?.schedule_drift
-        || (drift && Object.values(drift)[0] && typeof Object.values(drift)[0] === 'object' ? Object.values(drift)[0] : drift)
-        || {};
-    const ttftMean = numberAt(ttft, ['mean_ms', 'avg_ms', 'mean', 'avg']);
-    const tpotMean = numberAt(tpot, ['mean_ms', 'avg_ms', 'mean', 'avg']);
-    const averageInputTokens = successfulRequests > 0 && totalInputTokens !== null ? totalInputTokens / successfulRequests : null;
-    const averageOutputTokens = successfulRequests > 0 && totalOutputTokens !== null ? totalOutputTokens / successfulRequests : null;
-    const totalTokens = totalInputTokens !== null || totalOutputTokens !== null
-        ? (totalInputTokens || 0) + (totalOutputTokens || 0)
-        : null;
     const backendVersion = result?.backend_version || task?.backend_version
         || backends.find((item) => (item.name || item.id || item.value) === taskBackend(task))?.version;
-    const backendOptions = task?.simulation?.backend_options || task?.backend_options || {};
-    const backendOptionEntries = Object.entries(backendOptions).filter(
-        ([key]) => !['ttft_slo', 'tpot_slo', 'error_rate_slo'].includes(key)
-    );
-    const ttftSloSeconds = numberAt(backendOptions, ['ttft_slo']);
-    const tpotSloSeconds = numberAt(backendOptions, ['tpot_slo']);
-    const errorRateSlo = numberAt(backendOptions, ['error_rate_slo']);
-    const ttftSloMs = ttftSloSeconds === null ? null : ttftSloSeconds * 1000;
-    const tpotSloMs = tpotSloSeconds === null ? null : tpotSloSeconds * 1000;
-    const ttftAccent = ttftMean === null || ttftSloMs === null
-        ? 'text-slate-100'
-        : ttftMean > ttftSloMs ? 'text-rose-300' : 'text-emerald-300';
-    const tpotAccent = tpotMean === null || tpotSloMs === null
-        ? 'text-slate-100'
-        : tpotMean > tpotSloMs ? 'text-rose-300' : 'text-emerald-300';
-    const errorRateAccent = errorRate === null
-        ? 'text-slate-100'
-        : errorRateSlo === null
-            ? errorRate > 0 ? 'text-rose-300' : 'text-emerald-300'
-            : errorRate > errorRateSlo ? 'text-rose-300' : 'text-emerald-300';
-    const totalErrorsAccent = displayedFailedRequests === null
-        ? 'text-slate-100'
-        : displayedFailedRequests > 0 ? 'text-rose-300' : 'text-emerald-300';
-    const trace = task?.prompt?.trace || {};
-    const replayStartSeconds = numberAt(trace, ['start_seconds']) ?? 0;
-    const configuredReplayEndSeconds = numberAt(trace, ['end_seconds']);
-    const replayDurationSeconds = numberAt(task?.simulation || {}, ['duration_seconds']);
-    const replayScaleFactor = numberAt(trace, ['synthesis_speedup_ratio']) ?? numberAt(task || {}, ['scale_factor']) ?? 1;
-    const replayEndSeconds = configuredReplayEndSeconds
-        ?? (replayDurationSeconds !== null
-            ? replayStartSeconds + replayDurationSeconds * replayScaleFactor
-            : null);
-    const tokenizer = task?.prompt?.dataset?.tokenizer ?? task?.tokenizer;
     const statusForChip = taskStatusChip(taskStatus);
-    const completionTimeline = useMemo(() => (
-        Array.isArray(summary?.completion_timeline)
-            ? summary.completion_timeline.map((point) => ({ ...point, time_seconds: point.end_seconds }))
-            : []
-    ), [summary?.completion_timeline]);
-    const latencyTimeline = useMemo(() => (
-        Array.isArray(summary?.latency_timeline)
-            ? summary.latency_timeline.map((point) => ({ ...point, time_seconds: point.end_seconds }))
-            : []
-    ), [summary?.latency_timeline]);
-    const ttftTimeline = useMemo(() => (
-        Array.isArray(summary?.ttft_timeline)
-            ? summary.ttft_timeline.map((point) => ({ ...point, time_seconds: point.end_seconds }))
-            : []
-    ), [summary?.ttft_timeline]);
-    const tpotTimeline = useMemo(() => (
-        Array.isArray(summary?.tpot_timeline)
-            ? summary.tpot_timeline.map((point) => ({ ...point, time_seconds: point.end_seconds }))
-            : []
-    ), [summary?.tpot_timeline]);
-    const ttftHeatmap = summary?.ttft_heatmap;
-    const tpotHeatmap = summary?.tpot_heatmap;
-    const throughputTimeline = useMemo(() => (
-        Array.isArray(summary?.throughput_timeline)
-            ? summary.throughput_timeline.map((point) => ({ ...point, time_seconds: point.end_seconds }))
-            : []
-    ), [summary?.throughput_timeline]);
-    const goodputTimeline = useMemo(() => (
-        Array.isArray(summary?.goodput_timeline)
-            ? summary.goodput_timeline.map((point) => ({ ...point, time_seconds: point.end_seconds }))
-            : []
-    ), [summary?.goodput_timeline]);
-    const errorTimeline = useMemo(() => (
-        Array.isArray(summary?.error_timeline)
-            ? summary.error_timeline.map((point) => ({ ...point, time_seconds: point.end_seconds }))
-            : []
-    ), [summary?.error_timeline]);
-    const statusCodeBreakdown = Array.isArray(summary?.status_code_breakdown)
-        ? summary.status_code_breakdown
-        : [];
+    const effectiveTelemetry = useMemo(
+        () => telemetry || (task ? deriveLegacyTelemetryFromTask(task) : null),
+        [task, telemetry],
+    );
+    const taskHardware = useMemo(
+        () => resolveTaskHardware(task, effectiveTelemetry),
+        [effectiveTelemetry, task],
+    );
+    const taskPacing = useMemo(
+        () => formatTaskPacing(task, effectiveTelemetry),
+        [effectiveTelemetry, task],
+    );
+    const profilingFallbackToFull = Boolean(
+        effectiveTelemetry?.client_series?.windows?.profiling?.fallback_to_full
+        || (effectiveTelemetry?.client_series && Number(effectiveTelemetry.client_series.warmup_seconds || 0) <= 0),
+    );
+    const resultWarnings = Array.isArray(result?.warnings) ? result.warnings : [];
 
     return (
-        <section className="simulation-details-page mx-auto flex w-full min-w-0 max-w-[1560px] flex-col gap-4 px-4 py-6 text-slate-100 sm:px-6 lg:px-12 lg:py-10">
+        <section className="simulation-details-page flex w-full min-w-0 max-w-none flex-col gap-4 px-4 py-6 text-theme-text sm:px-6 lg:px-8 lg:py-10">
             <PageHeading title={task?.name || routeTaskId || 'Simulation task details'} subtitle={task?.description || 'Simulation'} />
-            <header className="grid gap-4 border-b border-slate-800/70 pb-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+            <header className="grid gap-4 border-b border-theme-border pb-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
                 <div className="flex min-w-0 flex-1 items-start gap-3">
-                    <button title="Back to simulations" onClick={() => onNavigate('optimization-simulate')} className="simulation-back-button inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-700 bg-slate-900 text-slate-300 hover:border-cyan-500 hover:text-cyan-200"><ArrowLeft className="h-4 w-4" /></button>
+                    <Button
+                        variant="outline"
+                        size="icon"
+                        title="Back to simulations"
+                        aria-label="Back to simulations"
+                        onClick={() => onNavigate('optimization-simulate')}
+                        className="simulation-back-button"
+                    >
+                        <ArrowLeft className="h-4 w-4" />
+                    </Button>
                     <div className="min-w-0">
                         {task && (
                             <>
-                                <div className="flex flex-wrap items-center gap-3 text-xs">
-                                    <StatusChip status={statusForChip} label={displayName(taskStatus)} pulse={taskStatus === 'running'} />
+                                <div className="flex flex-wrap items-center gap-2 text-xs">
+                                    <span className="inline-flex items-center gap-1">
+                                        <StatusChip status={statusForChip} label={displayName(taskStatus)} pulse={taskStatus === 'running'} />
+                                        <HelpTooltip label="Task status help" align="start" iconSize={12}>
+                                            Current lifecycle state of the simulation job (Queued, Running, Completed, Failed, or Cancelled).
+                                        </HelpTooltip>
+                                    </span>
+                                    {(task.artifacts_incomplete || effectiveTelemetry?.partial) && (
+                                        <span className="inline-flex items-center gap-1">
+                                            <Badge tone="warning" size="xs">Partial Results</Badge>
+                                            <HelpTooltip label="Partial results help" align="start" iconSize={12}>
+                                                Run ended early or some telemetry streams were incomplete; available client/server data is still shown.
+                                            </HelpTooltip>
+                                        </span>
+                                    )}
+                                    {effectiveTelemetry?.legacy && (
+                                        <span className="inline-flex items-center gap-1">
+                                            <Badge tone="neutral" size="xs">Legacy run (client-only)</Badge>
+                                            <HelpTooltip label="Legacy run help" align="start" iconSize={12}>
+                                                Recorded before normalized server telemetry persistence; metrics are synthesized from client-side summary data only.
+                                            </HelpTooltip>
+                                        </span>
+                                    )}
                                 </div>
-                                <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-slate-500">
-                                    <div className="flex min-w-0 gap-2"><dt>Task ID</dt><dd className="break-all font-mono text-slate-400">{taskId}</dd></div>
-                                    <div className="flex gap-2"><dt>Created</dt><dd className="text-slate-400">{formatTimestamp(task.created_at)}</dd></div>
+                                <dl className="mt-2.5 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-theme-muted">
+                                    <div className="flex min-w-0 items-center gap-1.5">
+                                        <dt className="inline-flex items-center gap-1">
+                                            <span>Task ID</span>
+                                            <HelpTooltip label="Task ID help" align="start" iconSize={11}>
+                                                Unique simulation task identifier used in API paths, artifact filenames, and URLs.
+                                            </HelpTooltip>
+                                        </dt>
+                                        <dd className="break-all font-mono text-theme-text">{taskId}</dd>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                        <dt className="inline-flex items-center gap-1">
+                                            <span>Created</span>
+                                            <HelpTooltip label="Created timestamp help" align="start" iconSize={11}>
+                                                Local timestamp when this simulation task was submitted.
+                                            </HelpTooltip>
+                                        </dt>
+                                        <dd className="text-theme-text">{formatTimestamp(task.created_at)}</dd>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                        <dt className="inline-flex items-center gap-1">
+                                            <span>Model</span>
+                                            <HelpTooltip label="Model help" align="start" iconSize={11}>
+                                                Target model identifier evaluated during this simulation run.
+                                            </HelpTooltip>
+                                        </dt>
+                                        <dd className="text-theme-text">{task.model_name || '—'}</dd>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                        <dt className="inline-flex items-center gap-1">
+                                            <span>Backend</span>
+                                            <HelpTooltip label="Backend help" align="start" iconSize={11}>
+                                                Load generator backend and version that executed the replay.
+                                            </HelpTooltip>
+                                        </dt>
+                                        <dd className="text-theme-text">{displayName(taskBackend(task))}{backendVersion ? ` ${backendVersion}` : ''}</dd>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                        <dt className="inline-flex items-center gap-1">
+                                            <span>Dataset</span>
+                                            <HelpTooltip label="Dataset help" align="start" iconSize={11}>
+                                                Trace dataset or corpus replayed against the inference endpoint.
+                                            </HelpTooltip>
+                                        </dt>
+                                        <dd className="text-theme-text">{taskDataset(task)}</dd>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                        <dt className="inline-flex items-center gap-1">
+                                            <span>Hardware</span>
+                                            <HelpTooltip label="Hardware help" align="start" iconSize={11}>
+                                                Accelerator model or hardware profile detected on the target serving nodes or cluster during the run (or External / Not reported when unavailable).
+                                            </HelpTooltip>
+                                        </dt>
+                                        <dd className="text-theme-text">{taskHardware}</dd>
+                                    </div>
+                                    {taskPacing.label && (
+                                        <div className="flex items-center gap-1.5">
+                                            <dt className="inline-flex items-center gap-1">
+                                                <span>Pacing</span>
+                                                <HelpTooltip label="Pacing help" align="start" iconSize={11} formula="Fixed Schedule: t_target = t_trace / Scale_Factor | Concurrency: Active_Slots ≤ N">
+                                                    Replay pacing mode: Fixed Schedule follows trace timestamps, while Concurrency (N) maintains N simultaneous in-flight session/request slots.
+                                                </HelpTooltip>
+                                            </dt>
+                                            <dd className="text-theme-text">{taskPacing.label}</dd>
+                                        </div>
+                                    )}
                                 </dl>
                             </>
                         )}
                     </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
-                    <Button variant="outline" size="icon" onClick={() => loadTaskDetails()} disabled={loading} title="Refresh" aria-label="Refresh simulation task details">
-                        <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-                    </Button>
-                    {task && RUNNING_STATUSES.has(taskStatus) && (
+                    <RefreshButton
+                        onClick={() => void loadTaskDetails()}
+                        refreshing={loading}
+                        label="Refresh simulation task details"
+                    />
+                    {task && isRunning && (
                         <Button
                             variant="dangerOutline"
                             onClick={stopTask}
@@ -461,18 +2021,34 @@ export default function SimulationTaskDetails({ onNavigate }) {
                             <Square className="h-3.5 w-3.5" /> Stop
                         </Button>
                     )}
-                    {task && !RUNNING_STATUSES.has(taskStatus) && (
-                        <Button variant="secondary" className="simulation-rerun-button" onClick={rerunSimulationTask} isLoading={rerunningTaskId === taskId}>
-                            <RefreshCw className="h-3.5 w-3.5" /> Rerun
-                        </Button>
+                    {task && !isRunning && (
+                        <>
+                            <Button
+                                variant="primary"
+                                className="simulation-ask-ai-button"
+                                onClick={() => setAskAiOpen(true)}
+                            >
+                                <Sparkles className="h-4 w-4" /> Ask AI
+                            </Button>
+                            <Button
+                                variant="secondary"
+                                className="simulation-rerun-button"
+                                onClick={rerunSimulationTask}
+                                disabled={isLegacyTraceReplayer}
+                                isLoading={rerunningTaskId === taskId}
+                                title={isLegacyTraceReplayer ? 'Legacy trace-replayer backend is no longer supported' : 'Rerun simulation task'}
+                            >
+                                <RefreshCw className="h-3.5 w-3.5" /> Rerun
+                            </Button>
+                        </>
                     )}
                     {task && (
                         <Button
                             variant="dangerOutline"
                             onClick={deleteSimulationTask}
-                            disabled={RUNNING_STATUSES.has(taskStatus)}
+                            disabled={isRunning}
                             isLoading={deletingTaskId === taskId}
-                            title={RUNNING_STATUSES.has(taskStatus) ? 'Stop this task before deleting it' : 'Delete task and all backend data'}
+                            title={isRunning ? 'Stop this task before deleting it' : 'Delete task and all backend data'}
                         >
                             <Trash2 className="h-3.5 w-3.5" /> Delete
                         </Button>
@@ -480,300 +2056,300 @@ export default function SimulationTaskDetails({ onNavigate }) {
                 </div>
             </header>
 
-            {error && <div role="alert" className="flex gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200"><AlertTriangle className="h-4 w-4 shrink-0" />{error}</div>}
-            {actionError && <div role="alert" className="flex gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200"><AlertTriangle className="h-4 w-4 shrink-0" />{actionError}</div>}
+            {error && (
+                <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-700 dark:text-red-200">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{error}</span>
+                </div>
+            )}
+            {actionError && (
+                <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-700 dark:text-red-200">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{actionError}</span>
+                </div>
+            )}
+            {artifactDownloadError && (
+                <div role="alert" className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-700 dark:text-red-200">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{artifactDownloadError}</span>
+                </div>
+            )}
 
             {loading && !task ? (
-                <p className="text-sm text-slate-500">Loading simulation task details...</p>
+                <div className="flex items-center gap-2 py-12 text-sm text-theme-muted">
+                    <Spinner /> Loading simulation task details…
+                </div>
             ) : !task ? (
-                <EmptyState icon={<Activity className="h-8 w-8" />} title="Task not found" message="Return to the simulation list and choose another task." />
+                <EmptyState
+                    icon={<Activity className="h-8 w-8" />}
+                    title="Task not found"
+                    message="Return to the simulation list and choose another task."
+                />
+            ) : isRunning ? (
+                <LiveMonitorPanel
+                    task={task}
+                    liveTelemetry={liveTelemetry}
+                    liveError={liveError}
+                    onStop={stopTask}
+                    stopping={stopping && stoppingTaskId === taskId}
+                    durationClockMs={durationClockMs}
+                    onOpenErrorInspector={(filter = 'all') => setErrorInspectorFilter(filter)}
+                />
             ) : (
                 <div className="space-y-5">
-                    <section className="rounded-xl border border-slate-800 bg-slate-900/60 p-4">
-                        <div className="flex flex-wrap items-center gap-x-6 gap-y-3 text-xs">
-                            {[
-                                ['Model', task.model_name || '—'],
-                                ['Endpoint', task.endpoint_url || '—'],
-                                ['Backend', `${displayName(taskBackend(task))}${backendVersion ? ` ${backendVersion}` : ''}`],
-                                ['Dataset', taskDataset(task)],
-                                ['Scenario', scenarioDisplayName(task.scenario) || '—'],
-                                ['Created', formatTimestamp(task.created_at)],
-                            ].map(([label, value]) => (
-                                <div key={label} className="min-w-0">
-                                    <span className="mr-2 text-slate-500">{label}:</span>
-                                    <span className="break-all font-semibold text-slate-200">{value}</span>
-                                </div>
-                            ))}
-                            <div className="ml-auto flex items-center gap-2">
-                                {RUNNING_STATUSES.has(taskStatus) && <Spinner />}
-                                <StatusChip status={statusForChip} label={displayName(taskStatus)} pulse={taskStatus === 'running'} />
+                    <Panel padding="sm">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="flex flex-wrap items-center gap-3">
+                                <span className="inline-flex items-center gap-1.5">
+                                    <ToggleGroup
+                                        value={analysisWindow}
+                                        onChange={setAnalysisWindow}
+                                        options={[
+                                            { value: 'profiling', label: 'Profiling Steady-State' },
+                                            { value: 'full', label: 'Full Run' },
+                                        ]}
+                                    />
+                                    <HelpTooltip label="Analysis window help" align="start" iconSize={12} formula="Profiling = [Warmup_s, End]; Full = [0, End]">
+                                        Switches post-run KPIs between Profiling Steady-State (excluding the configured warmup window) and Full Run (all requests from t=0).
+                                    </HelpTooltip>
+                                </span>
+                                {profilingFallbackToFull && analysisWindow === 'profiling' && (
+                                    <span className="inline-flex items-center gap-1">
+                                        <Badge tone="neutral" size="xs">Full Run window active (warmup 0s)</Badge>
+                                        <HelpTooltip label="Full run fallback help" align="start" iconSize={12} formula="Active_Window = [0, End]  (when Warmup_s = 0 or slice empty)">
+                                            Warmup was 0 seconds or no steady-state slice differed, so Profiling Steady-State displays the full-run window.
+                                        </HelpTooltip>
+                                    </span>
+                                )}
+                                <span className="inline-flex items-center gap-1 text-xs text-theme-muted">
+                                    <span>Duration: <strong className="font-mono text-theme-text">{formatDuration(task, result?.summary, durationClockMs)}</strong></span>
+                                    <HelpTooltip label="Run duration help" align="start" iconSize={12} formula="Run_Duration_s = t_complete − t_execution_start">
+                                        Total wall-clock elapsed execution time from benchmark start to completion, including warmup and grace drain.
+                                    </HelpTooltip>
+                                </span>
+                                {telemetryLoading && <Spinner size="sm" />}
                             </div>
-                        </div>
-                        <div className="mt-4">
-                            <div className="mb-1.5 flex justify-between gap-4 text-[10px] text-slate-400">
-                                <span>{task.progress_message || task.message || displayName(taskStatus)}</span>
-                                <span>{formatNumber(progress, '%')}</span>
-                            </div>
-                            <div className="h-2 overflow-hidden rounded-full bg-slate-800" role="progressbar" aria-valuenow={progress} aria-valuemin="0" aria-valuemax="100">
-                                <div className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-cyan-400 transition-all" style={{ width: `${progress}%` }} />
-                            </div>
-                        </div>
-                    </section>
-
-                    <nav className="flex overflow-x-auto border-b border-slate-800" role="tablist" aria-label="Task detail sections">
-                        {[
-                            ['summary', 'Summary', Info],
-                            ['latency', 'Latency', Clock3],
-                            ['throughput', 'Throughput', Gauge],
-                            ['errors', 'Errors & Logs', AlertTriangle],
-                        ]
-                            .filter(([key]) => taskStatus !== 'running' || !['latency', 'throughput'].includes(key))
-                            .map(([key, label, Icon]) => (
-                                <button
-                                    key={key}
-                                    type="button"
-                                    role="tab"
-                                    aria-selected={detailTab === key}
-                                    onClick={() => setDetailTab(key)}
-                                    className={`relative flex shrink-0 items-center gap-2 px-5 py-3 text-xs font-semibold transition-colors ${detailTab === key ? 'simulation-detail-tab-active text-cyan-300' : 'text-slate-500 hover:text-slate-300'}`}
+                            <div className="flex flex-wrap items-center gap-2">
+                                <Button
+                                    variant="primary"
+                                    size="sm"
+                                    onClick={() => void downloadArtifact({
+                                        kind: 'report_html',
+                                        name: `${taskBackend(task)}-report-${taskId}.html`,
+                                    })}
+                                    isLoading={downloadingArtifact === 'report_html'}
                                 >
-                                    {React.createElement(Icon, { className: 'h-3.5 w-3.5' })}
-                                    {label}
-                                    {key === 'errors' && (task.error_message || Number(failedRequests) > 0) && <span className="h-1.5 w-1.5 rounded-full bg-rose-400" />}
-                                    {detailTab === key && <span className="simulation-detail-tab-indicator absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-cyan-400" />}
-                                </button>
-                            ))}
-                    </nav>
+                                    <Download className="h-3.5 w-3.5" />
+                                    Download HTML Report
+                                </Button>
+
+                                <div ref={downloadsMenuRef} className="relative">
+                                    <Button
+                                        variant="secondary"
+                                        size="sm"
+                                        aria-haspopup="menu"
+                                        aria-expanded={downloadsMenuOpen}
+                                        onClick={() => setDownloadsMenuOpen((open) => !open)}
+                                    >
+                                        Exports
+                                        <ChevronDown className="h-3.5 w-3.5" />
+                                    </Button>
+                                    {downloadsMenuOpen && (
+                                        <div
+                                            role="menu"
+                                            className="absolute right-0 z-30 mt-1 w-64 rounded-xl border border-theme-border bg-theme-card p-1.5 shadow-xl"
+                                        >
+                                            {[
+                                                ['report_bundle', 'Download Full Bundle (.tar.gz)', `${taskBackend(task)}-bundle-${taskId}.tar.gz`],
+                                                ['summary_csv', 'Summary CSV', `${taskBackend(task)}-summary-${taskId}.csv`],
+                                                ['forensics', 'Forensics JSON', `forensics-${taskId}.json`],
+                                            ].map(([kind, label, name]) => (
+                                                <button
+                                                    key={kind}
+                                                    type="button"
+                                                    role="menuitem"
+                                                    onClick={() => {
+                                                        setDownloadsMenuOpen(false);
+                                                        void downloadArtifact({ kind, name });
+                                                    }}
+                                                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-theme-text hover:bg-theme-bg"
+                                                >
+                                                    <FileText className="h-3.5 w-3.5 text-theme-muted" />
+                                                    <span>{label}</span>
+                                                </button>
+                                            ))}
+                                            <button
+                                                type="button"
+                                                role="menuitem"
+                                                onClick={() => {
+                                                    setDownloadsMenuOpen(false);
+                                                    handleSelectTab('logs');
+                                                    window.requestAnimationFrame(() => {
+                                                        artifactsHubRef.current?.scrollIntoView({ behavior: 'smooth' });
+                                                    });
+                                                }}
+                                                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-xs text-theme-text hover:bg-theme-bg"
+                                            >
+                                                <FileJson className="h-3.5 w-3.5 text-theme-muted" />
+                                                <span>Individual Artifacts…</span>
+                                            </button>
+                                        </div>
+                                    )}
+                                </div>
+
+                                <Button variant="secondary" size="sm" onClick={navigateToCompare}>
+                                    <GitCompareArrows className="h-3.5 w-3.5" />
+                                    Compare Runs
+                                </Button>
+                            </div>
+                        </div>
+                    </Panel>
+
+                    {telemetryNotice && (
+                        <div role="status" className="flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-xs text-amber-800 dark:text-amber-200">
+                            <AlertTriangle className="h-4 w-4 shrink-0" />
+                            <span>{telemetryNotice}</span>
+                        </div>
+                    )}
 
                     {resultWarnings.length > 0 && (
-                        <section className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-4" aria-label="Result warnings">
+                        <section className="space-y-1.5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-4" aria-label="Result warnings">
                             {resultWarnings.map((warning) => (
-                                <p key={warning} className="flex items-start gap-2 text-xs text-amber-100">
-                                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
-                                    {warning}
+                                <p key={warning} className="flex items-start gap-2 text-xs text-amber-800 dark:text-amber-100">
+                                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                                    <span>{warning}</span>
                                 </p>
                             ))}
                         </section>
                     )}
 
-                    {detailTab === 'errors' && (taskStatus === 'failed' || task.error_message) && (
-                        <section className="rounded-xl border-2 border-rose-500/40 bg-rose-500/10 p-5" aria-labelledby="simulation-failure-heading">
+                    {(taskStatus === 'failed' || task.error_message) && (
+                        <section className="rounded-xl border border-red-500/40 bg-red-500/10 p-4" aria-labelledby="simulation-failure-heading">
                             <div className="flex items-start gap-3">
-                                <AlertTriangle className="mt-0.5 h-6 w-6 shrink-0 text-rose-400" />
+                                <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-red-600 dark:text-red-400" />
                                 <div className="min-w-0 flex-1">
-                                    <h3 id="simulation-failure-heading" className="text-lg font-bold text-rose-200">Task Failed</h3>
-                                    <p className="mt-1 text-xs text-rose-200/80">{task.progress_message || 'The simulation encountered an error during execution.'}</p>
-                                    <div className="mt-4 rounded-lg border border-rose-500/20 bg-slate-950/80 p-4 font-mono text-[11px] leading-relaxed text-rose-100">
-                                        <div><span className="text-slate-500">Error: </span>{task.error_message || 'No error message was returned.'}</div>
-                                        <div><span className="text-slate-500">Progress: </span>{task.progress_message || '—'}</div>
-                                        <div className="mt-2"><span className="text-slate-500">Created: </span>{formatTimestamp(task.created_at)}</div>
-                                        <div><span className="text-slate-500">Started: </span>{formatTimestamp(task.started_at)}</div>
-                                        <div><span className="text-slate-500">Failed: </span>{formatTimestamp(task.completed_at)}</div>
-                                        <div className="mt-2"><span className="text-slate-500">Scenario / backend: </span>{scenarioDisplayName(task.scenario) || '—'} / {displayName(taskBackend(task))}</div>
-                                        <div><span className="text-slate-500">Endpoint / model: </span>{task.endpoint_url || '—'} / {task.model_name || '—'}</div>
-                                        <div><span className="text-slate-500">Trace: </span>{trace.path || task.trace_path || '—'} ({trace.format || task.trace_format || 'unknown format'})</div>
-                                    </div>
+                                    <h3 id="simulation-failure-heading" className="text-sm font-bold text-red-700 dark:text-red-200">
+                                        {taskStatus === 'failed' ? 'Task Failed' : 'Execution Error Reported'}
+                                    </h3>
+                                    <p className="mt-1 font-mono text-xs text-red-700 dark:text-red-200/90">
+                                        {task.error_message || task.progress_message || 'The simulation encountered an error during execution.'}
+                                    </p>
                                 </div>
                             </div>
                         </section>
                     )}
 
-                    {detailTab === 'summary' && <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Task overview">
-                        <DetailCard label="Duration" value={formatDuration(task, summary, durationClockMs)} />
-                        <DetailCard label="Error Rate" value={formatNumber(errorRate, '%')} accent={errorRateAccent} detail={errorRateSlo === null ? undefined : `SLA ≤ ${formatNumber(errorRateSlo, '%')}`} />
-                        <DetailCard label="Total Requests" value={formatCount(displayedTotalRequests)} />
-                        <DetailCard label="Total Errors" value={formatCount(displayedFailedRequests)} accent={totalErrorsAccent} />
-                    </section>}
+                    <nav className="flex overflow-x-auto border-b border-theme-border" role="tablist" aria-label="Post-run analysis sections">
+                        {POST_RUN_TABS.map((tab) => {
+                            const active = postTab === tab.key;
+                            return (
+                                <button
+                                    key={tab.key}
+                                    type="button"
+                                    role="tab"
+                                    aria-selected={active}
+                                    onClick={() => handleSelectTab(tab.key)}
+                                    className={cn(
+                                        'relative shrink-0 px-5 py-3 text-xs font-semibold transition-colors',
+                                        active
+                                            ? 'simulation-detail-tab-active text-emerald-600 dark:text-emerald-300'
+                                            : 'text-theme-muted hover:text-theme-text',
+                                    )}
+                                >
+                                    {tab.label}
+                                    {active && (
+                                        <span className="simulation-detail-tab-indicator absolute inset-x-2 bottom-0 h-0.5 rounded-full bg-emerald-500" />
+                                    )}
+                                </button>
+                            );
+                        })}
+                    </nav>
 
-                    {detailTab === 'summary' && <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Key performance metrics">
-                        <DetailCard label="Average TTFT" value={formatMilliseconds(ttftMean)} accent={ttftAccent} />
-                        <DetailCard label="Average TPOT" value={formatMilliseconds(tpotMean)} accent={tpotAccent} />
-                        <DetailCard label="Request Throughput" value={formatNumber(requestRate, ' req/s')} />
-                        <DetailCard label="Output Token Throughput" value={formatNumber(tokenRate, ' tok/s')} />
-                    </section>}
-
-                    {detailTab === 'summary' && <Panel title="Request Processing Timeline">
-                        {completionTimeline.length > 0 ? (
-                            <>
-                                <div className="mb-3 flex flex-wrap gap-4 text-[10px] text-slate-400">
-                                    <span className="flex items-center gap-1.5"><span className="h-2.5 w-3 border-t-2 border-blue-400 bg-blue-400/20" />Arrived per interval</span>
-                                    <span className="flex items-center gap-1.5"><span className="h-2.5 w-3 border-t-2 border-emerald-400 bg-emerald-400/20" />Successful per interval</span>
-                                    <span className="flex items-center gap-1.5"><span className="h-2.5 w-3 border-t-2 border-rose-400 bg-rose-400/20" />Failed per interval</span>
-                                    <span className="flex items-center gap-1.5"><span className="h-0.5 w-3 bg-violet-400" />Cumulative completed</span>
-                                </div>
-                                <div className="h-72 w-full">
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <ComposedChart data={completionTimeline} margin={{ top: 8, right: 20, left: 0, bottom: 4 }}>
-                                            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                                            <XAxis dataKey="time_seconds" type="number" domain={['dataMin', 'dataMax']} tickFormatter={(value) => `${formatNumber(value)}s`} tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" />
-                                            <YAxis yAxisId="interval" allowDecimals={false} width={48} tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" />
-                                            <YAxis yAxisId="cumulative" orientation="right" allowDecimals={false} width={56} tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" />
-                                            <Tooltip labelFormatter={(value) => `Elapsed ${formatNumber(value)}s`} formatter={(value, name) => [formatNumber(value), name]} contentStyle={{ background: '#020617', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }} />
-                                            <Area yAxisId="interval" type="monotone" dataKey="arrived_requests" name="Arrived requests" stroke="#60a5fa" strokeWidth={2} fill="#60a5fa" fillOpacity={0.18} dot={false} isAnimationActive={false} />
-                                            <Area yAxisId="interval" type="monotone" dataKey="successful_requests" name="Successful requests" stroke="#34d399" strokeWidth={2} fill="#34d399" fillOpacity={0.18} dot={false} isAnimationActive={false} />
-                                            <Area yAxisId="interval" type="monotone" dataKey="failed_requests" name="Failed requests" stroke="#fb7185" strokeWidth={2} fill="#fb7185" fillOpacity={0.18} dot={false} isAnimationActive={false} />
-                                            <Line yAxisId="cumulative" type="monotone" dataKey="cumulative_completed" name="Cumulative completed" stroke="#a78bfa" strokeWidth={2} dot={false} isAnimationActive={false} />
-                                        </ComposedChart>
-                                    </ResponsiveContainer>
-                                </div>
-                            </>
-                        ) : (
-                            <p className="py-12 text-center text-xs text-slate-500">{RUNNING_STATUSES.has(taskStatus) ? 'Request processing data will appear as requests complete.' : 'No request arrival or completion timestamps are available.'}</p>
-                        )}
-                    </Panel>}
-
-                    {detailTab === 'throughput' && <section className="grid gap-3 md:grid-cols-2 xl:grid-cols-4" aria-label="Throughput highlights">
-                        <div className="rounded-xl border border-blue-400/20 bg-gradient-to-br from-blue-500/80 to-blue-700/80 p-5 text-white shadow-lg"><div className="flex items-center justify-between text-xs text-blue-100"><span>Request Throughput</span><Gauge className="h-5 w-5" /></div><div className="mt-2 text-3xl font-bold">{formatNumber(requestRate)}</div><div className="text-xs text-blue-100/80">requests/second</div></div>
-                        <div className="rounded-xl border border-amber-400/20 bg-gradient-to-br from-amber-500/80 to-amber-700/80 p-5 text-white shadow-lg"><div className="flex items-center justify-between text-xs text-amber-100"><span>Output Token Throughput</span><Activity className="h-5 w-5" /></div><div className="mt-2 text-3xl font-bold">{formatNumber(tokenRate)}</div><div className="text-xs text-amber-100/80">tokens/second</div></div>
-                        <div className="rounded-xl border border-cyan-400/20 bg-gradient-to-br from-cyan-500/80 to-cyan-700/80 p-5 text-white shadow-lg"><div className="flex items-center justify-between text-xs text-cyan-100"><span>Input Token Throughput</span><Activity className="h-5 w-5" /></div><div className="mt-2 text-3xl font-bold">{formatNumber(inputTokenRate)}</div><div className="text-xs text-cyan-100/80">tokens/second</div></div>
-                        <div className="rounded-xl border border-violet-400/20 bg-gradient-to-br from-violet-500/80 to-violet-700/80 p-5 text-white shadow-lg"><div className="flex items-center justify-between text-xs text-violet-100"><span>Total Token Throughput</span><Activity className="h-5 w-5" /></div><div className="mt-2 text-3xl font-bold">{formatNumber(totalTokenRate)}</div><div className="text-xs text-violet-100/80">tokens/second</div></div>
-                    </section>}
-
-                    {detailTab === 'throughput' && <Panel title="Throughput over Time">
-                        {throughputTimeline.length > 0 ? (
-                            <>
-                                <div className="mb-3 flex flex-wrap gap-4 text-[10px] text-slate-400">
-                                    <span className="flex items-center gap-1.5"><span className="h-2.5 w-3 border-t-2 border-blue-400 bg-blue-400/20" />Request arrival rate</span>
-                                    <span className="flex items-center gap-1.5"><span className="h-2.5 w-3 border-t-2 border-cyan-400 bg-cyan-400/20" />Request completion throughput</span>
-                                    <span className="flex items-center gap-1.5"><span className="h-2.5 w-3 border-t-2 border-amber-400 bg-amber-400/20" />Token completion throughput</span>
-                                </div>
-                                <div className="h-72 w-full">
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <ComposedChart data={throughputTimeline} margin={{ top: 8, right: 20, left: 0, bottom: 4 }}>
-                                            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                                            <XAxis dataKey="time_seconds" type="number" domain={['dataMin', 'dataMax']} tickFormatter={(value) => `${formatNumber(value)}s`} tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" />
-                                            <YAxis yAxisId="requests" width={56} tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" label={{ value: 'req/s', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 10 }} />
-                                            <YAxis yAxisId="tokens" orientation="right" width={64} tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" label={{ value: 'tok/s', angle: 90, position: 'insideRight', fill: '#64748b', fontSize: 10 }} />
-                                            <Tooltip labelFormatter={(value) => `Elapsed ${formatNumber(value)}s`} formatter={(value, name) => [formatNumber(value, name === 'Token completion throughput' ? ' tok/s' : ' req/s'), name]} contentStyle={{ background: '#020617', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }} />
-                                            <Area yAxisId="requests" type="monotone" dataKey="request_arrival_rps" name="Request arrival rate" stroke="#60a5fa" strokeWidth={2} fill="#60a5fa" fillOpacity={0.14} dot={false} isAnimationActive={false} />
-                                            <Area yAxisId="requests" type="monotone" dataKey="request_completion_rps" name="Request completion throughput" stroke="#22d3ee" strokeWidth={2} fill="#22d3ee" fillOpacity={0.14} dot={false} isAnimationActive={false} />
-                                            <Area yAxisId="tokens" type="monotone" dataKey="token_throughput_tps" name="Token completion throughput" stroke="#fbbf24" strokeWidth={2} fill="#fbbf24" fillOpacity={0.12} dot={false} isAnimationActive={false} />
-                                        </ComposedChart>
-                                    </ResponsiveContainer>
-                                </div>
-                            </>
-                        ) : <p className="py-12 text-center text-xs text-slate-500">No per-request throughput timestamps are available.</p>}
-                    </Panel>}
-
-                    {detailTab === 'throughput' && <Panel title="Goodput over Time">
-                        {goodputTimeline.length > 0 ? (
-                            <>
-                                <div className="mb-3 flex flex-wrap gap-4 text-[10px] text-slate-400">
-                                    <span className="flex items-center gap-1.5"><span className="h-2.5 w-3 border-t-2 border-cyan-400 bg-cyan-400/20" />Request completion throughput</span>
-                                    <span className="flex items-center gap-1.5"><span className="h-2.5 w-3 border-t-2 border-emerald-400 bg-emerald-400/20" />Goodput</span>
-                                    <span>Successful requests{ttftSloMs !== null ? ` · TTFT ≤ ${formatNumber(ttftSloMs)} ms` : ''}{tpotSloMs !== null ? ` · TPOT ≤ ${formatNumber(tpotSloMs)} ms` : ''}</span>
-                                </div>
-                                <div className="h-72 w-full">
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <ComposedChart data={goodputTimeline} margin={{ top: 8, right: 20, left: 0, bottom: 4 }}>
-                                            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                                            <XAxis dataKey="time_seconds" type="number" domain={['dataMin', 'dataMax']} tickFormatter={(value) => `${formatNumber(value)}s`} tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" />
-                                            <YAxis width={56} tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" label={{ value: 'req/s', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 10 }} />
-                                            <Tooltip labelFormatter={(value) => `Elapsed ${formatNumber(value)}s`} formatter={(value, name) => [formatNumber(value, ' req/s'), name]} contentStyle={{ background: '#020617', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }} />
-                                            <Area type="monotone" dataKey="request_throughput_rps" name="Request completion throughput" stroke="#22d3ee" strokeWidth={2} fill="#22d3ee" fillOpacity={0.1} dot={false} isAnimationActive={false} />
-                                            <Area type="monotone" dataKey="goodput_rps" name="Goodput" stroke="#34d399" strokeWidth={2} fill="#34d399" fillOpacity={0.2} dot={false} isAnimationActive={false} />
-                                        </ComposedChart>
-                                    </ResponsiveContainer>
-                                </div>
-                            </>
-                        ) : <p className="py-12 text-center text-xs text-slate-500">No per-request goodput timestamps are available.</p>}
-                    </Panel>}
-
-                    {detailTab === 'latency' && <section className="grid gap-3 md:grid-cols-2" aria-label="Latency highlights"><div className="rounded-xl border border-violet-400/20 bg-gradient-to-br from-violet-500/80 to-violet-700/80 p-5 text-white shadow-lg"><div className="flex items-center justify-between text-xs text-violet-100"><span>Avg TTFT</span><Clock3 className="h-5 w-5" /></div><div className="mt-2 text-3xl font-bold">{formatMilliseconds(ttftMean)}</div></div><div className="rounded-xl border border-emerald-400/20 bg-gradient-to-br from-emerald-500/80 to-emerald-700/80 p-5 text-white shadow-lg"><div className="flex items-center justify-between text-xs text-emerald-100"><span>Avg TPOT</span><Activity className="h-5 w-5" /></div><div className="mt-2 text-3xl font-bold">{formatMilliseconds(tpotMean)}</div></div></section>}
-
-                    {detailTab === 'latency' && <Panel title="Latency under Load">
-                        {latencyTimeline.length > 0 ? (
-                            <>
-                                <div className="mb-3 flex flex-wrap gap-4 text-[10px] text-slate-400">
-                                    <span className="flex items-center gap-1.5"><span className="h-2.5 w-3 border-t-2 border-blue-400 bg-blue-400/20" />Request arrival rate</span>
-                                    <span className="flex items-center gap-1.5"><span className="h-2.5 w-3 border-t-2 border-amber-400 bg-amber-400/20" />Average latency</span>
-                                    <span className="flex items-center gap-1.5"><span className="h-0.5 w-3 bg-rose-400" />P95 latency</span>
-                                </div>
-                                <div className="h-72 w-full">
-                                    <ResponsiveContainer width="100%" height="100%">
-                                        <ComposedChart data={latencyTimeline} margin={{ top: 8, right: 20, left: 0, bottom: 4 }}>
-                                            <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
-                                            <XAxis dataKey="time_seconds" type="number" domain={['dataMin', 'dataMax']} tickFormatter={(value) => `${formatNumber(value)}s`} tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" />
-                                            <YAxis yAxisId="pressure" width={48} tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" label={{ value: 'req/s', angle: -90, position: 'insideLeft', fill: '#64748b', fontSize: 10 }} />
-                                            <YAxis yAxisId="latency" orientation="right" width={60} tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" label={{ value: 'ms', angle: 90, position: 'insideRight', fill: '#64748b', fontSize: 10 }} />
-                                            <Tooltip labelFormatter={(value) => `Elapsed ${formatNumber(value)}s`} formatter={(value, name) => [name.includes('latency') ? formatMilliseconds(value) : formatNumber(value, ' req/s'), name]} contentStyle={{ background: '#020617', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }} />
-                                            <Area yAxisId="pressure" type="monotone" dataKey="request_arrival_rps" name="Request arrival rate" stroke="#60a5fa" strokeWidth={2} fill="#60a5fa" fillOpacity={0.16} dot={false} isAnimationActive={false} />
-                                            <Area yAxisId="latency" type="monotone" dataKey="average_latency_ms" name="Average latency" stroke="#fbbf24" strokeWidth={2} fill="#fbbf24" fillOpacity={0.14} connectNulls dot={false} isAnimationActive={false} />
-                                            <Line yAxisId="latency" type="monotone" dataKey="p95_latency_ms" name="P95 latency" stroke="#fb7185" strokeWidth={2} connectNulls dot={false} isAnimationActive={false} />
-                                        </ComposedChart>
-                                    </ResponsiveContainer>
-                                </div>
-                            </>
-                        ) : <p className="py-12 text-center text-xs text-slate-500">No per-request latency timestamps are available.</p>}
-                    </Panel>}
-
-                    {detailTab === 'latency' && (<section className="grid gap-5 xl:grid-cols-2"><LatencyMetricTimeline title="TTFT over Time" metric="TTFT" data={ttftTimeline} color="#a78bfa" /><LatencyMetricTimeline title="TPOT over Time" metric="TPOT" data={tpotTimeline} color="#34d399" /><div className="xl:col-span-2"><LatencyHeatmap title="TTFT by Time and Input Sequence Length" metric="TTFT" data={ttftHeatmap} /></div><div className="xl:col-span-2"><LatencyHeatmap title="TPOT by Time and Output Sequence Length" metric="TPOT" data={tpotHeatmap} /></div></section>)}
-
-                    {detailTab === 'throughput' && <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3" aria-label="Token and request statistics"><DetailCard label="Successful Requests" value={formatNumber(successfulRequests)} detail={`${formatNumber(successfulRequests)} / ${formatNumber(totalRequests)} successful / total${failedRequests !== null ? ` · ${formatNumber(failedRequests)} failed` : ''}`} /><DetailCard label="Total Output Tokens" value={formatNumber(totalOutputTokens)} detail={averageOutputTokens !== null ? `${formatNumber(averageOutputTokens)} average / successful request` : 'Average unavailable'} /><DetailCard label="Total Input Tokens" value={formatNumber(totalInputTokens)} detail={averageInputTokens !== null ? `${formatNumber(averageInputTokens)} average / successful request` : 'Average unavailable'} /></section>}
-
-                    {detailTab === 'latency' && <section><Panel title="Latency Distribution"><MetricBars series={[{ label: 'End-to-end', values: latencyDistribution, tone: 'bg-blue-400' }, { label: 'TTFT', values: ttft, tone: 'bg-violet-400' }, { label: 'TPOT', values: tpot, tone: 'bg-emerald-400' }, { label: 'Schedule drift', values: driftDistribution, tone: 'bg-amber-400' }]} />{timing && <details className="mt-4"><summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-300">Raw timing metrics</summary><div className="mt-2"><JsonBlock value={timing} /></div></details>}</Panel></section>}
-
-                    {detailTab === 'throughput' && <section><Panel title="Throughput Metrics"><div className="space-y-3">{[['Request throughput', requestRate, 'req/s', 'bg-blue-400'], ['Output token throughput', tokenRate, 'tok/s', 'bg-amber-400'], ['Input token throughput', inputTokenRate, 'tok/s', 'bg-cyan-400'], ['Total token throughput', totalTokenRate, 'tok/s', 'bg-violet-400'], ['Effective concurrency', effectiveConcurrency, 'requests', 'bg-fuchsia-400'], ['Error rate', errorRate, '%', errorRateAccent === 'text-rose-300' ? 'bg-rose-400' : 'bg-emerald-400']].map(([label, value, unit, tone]) => (<div key={label} className="grid grid-cols-[8rem_1fr_auto] items-center gap-3 text-[11px]"><span className="text-slate-400">{label}</span><div className="h-2 overflow-hidden rounded-full bg-slate-800"><div className={`h-full rounded-full ${tone}`} style={{ width: value === null ? '0%' : `${Math.max(3, Math.min(100, unit === '%' ? value : 65))}%` }} /></div><span className="min-w-16 text-right font-mono text-slate-300">{formatNumber(value, unit === '%' ? '%' : '')}{unit !== '%' && value !== null ? ` ${unit}` : ''}</span></div>))}</div></Panel></section>}
-
-                    {detailTab === 'throughput' && <Panel title="Detailed Results"><div className="overflow-x-auto"><table className="w-full min-w-[950px] text-left text-xs"><thead><tr className="border-b border-slate-700 text-slate-500">{['Configuration / Backend', 'Requests', 'Req/s', 'Tokens/s', 'Error Rate', 'Input Tokens', 'Output Tokens', 'Total Tokens'].map((heading) => <th key={heading} className="pb-3 pr-5 font-semibold">{heading}</th>)}</tr></thead><tbody><tr className="text-slate-300"><td className="py-3 pr-5 font-semibold">{scenarioDisplayName(task.scenario)} · {displayName(taskBackend(task))}{backendVersion ? ` ${backendVersion}` : ''}</td><td className="py-3 pr-5 font-mono">{formatNumber(totalRequests)}</td>{[requestRate, tokenRate].map((value, index) => <td key={index} className="py-3 pr-5 font-mono">{formatNumber(value)}</td>)}<td className={`py-3 pr-5 font-mono ${errorRateAccent}`}>{formatNumber(errorRate, '%')}</td><td className="py-3 pr-5 font-mono">{formatNumber(totalInputTokens)}</td><td className="py-3 pr-5 font-mono">{formatNumber(totalOutputTokens)}</td><td className="py-3 pr-5 font-mono">{formatNumber(totalTokens)}</td></tr></tbody></table></div></Panel>}
-
-                    {detailTab === 'latency' && <section className="grid gap-5 lg:grid-cols-2"><StatisticsPanel title="TTFT Statistics" values={ttft} /><StatisticsPanel title="TPOT Statistics" values={tpot} /></section>}
-
-                    {detailTab === 'summary' && <Panel title="Task Configuration"><div className="grid gap-4 xl:grid-cols-2"><ConfigurationGroup title="Endpoint" items={[['Endpoint mode', task.endpoint_mode ? displayName(task.endpoint_mode) : 'External'], ...(String(task.endpoint_mode).toLowerCase() === 'deployment' ? [['Cluster', task.endpoint_cluster_name], ['Deployment', task.endpoint_deployment_name]] : []), ['Endpoint', task.endpoint_url], ['Model', task.model_name], ['Streaming', task.simulation?.stream === undefined ? null : task.simulation.stream ? 'Enabled' : 'Disabled']]} /><ConfigurationGroup title="Replay Workload" items={[['Scenario', scenarioDisplayName(task.scenario)], ['Dataset', taskDataset(task)], ['Trace path', trace.path || task.trace_path], ['Trace format', trace.format || task.trace_format], ['Replay range', replayEndSeconds !== null ? `${formatNumber(replayStartSeconds)}–${formatNumber(replayEndSeconds)} source seconds` : null], ['Duration', task.simulation?.duration_seconds !== undefined ? `${task.simulation.duration_seconds} seconds` : null], ['Scale factor', trace.synthesis_speedup_ratio ?? task.scale_factor]]} /><ConfigurationGroup title="Backend Runtime" items={[['Backend', displayName(taskBackend(task))], ['Backend version', backendVersion], ['Timeout', trace.timeout_seconds !== undefined ? `${trace.timeout_seconds} seconds` : null], ['Grace period', task.simulation?.grace_period_seconds !== undefined ? `${task.simulation.grace_period_seconds} seconds` : null], ['Tokenizer', tokenizer]]} /><ConfigurationGroup title="SLA Targets" items={[['TTFT', ttftSloMs === null ? 'Not set' : `${formatNumber(ttftSloMs)} ms`], ['TPOT', tpotSloMs === null ? 'Not set' : `${formatNumber(tpotSloMs)} ms`], ['Error rate', errorRateSlo === null ? 'Not set' : `${formatNumber(errorRateSlo)}%`]]} />{backendOptionEntries.length > 0 && <ConfigurationGroup title="Advanced Backend Options" items={backendOptionEntries.map(([key, value]) => [backendOptionLabel(key), backendOptionValue(key, value)])} />}</div></Panel>}
-
-                    {detailTab === 'errors' && <Panel title="Errors over Time">{errorTimeline.length > 0 ? (<><div className="mb-3 flex flex-wrap gap-4 text-[10px] text-slate-400"><span className="flex items-center gap-1.5"><span className="h-2.5 w-3 border-t-2 border-rose-400 bg-rose-400/20" />Failed requests</span><span className="flex items-center gap-1.5"><span className="h-0.5 w-3 bg-amber-400" />Error rate</span></div><div className="h-48 w-full"><ResponsiveContainer width="100%" height="100%"><ComposedChart data={errorTimeline} margin={{ top: 8, right: 20, left: 0, bottom: 4 }}><CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} /><XAxis dataKey="time_seconds" type="number" domain={['dataMin', 'dataMax']} tickFormatter={(value) => `${formatNumber(value)}s`} tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" /><YAxis yAxisId="failures" allowDecimals={false} width={48} tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" /><YAxis yAxisId="rate" orientation="right" domain={[0, 'auto']} width={56} tickFormatter={(value) => `${formatNumber(value)}%`} tick={{ fill: '#64748b', fontSize: 10 }} stroke="#334155" /><Tooltip labelFormatter={(value) => `Elapsed ${formatNumber(value)}s`} formatter={(value, name) => [formatNumber(value, name === 'Error rate' ? '%' : ''), name]} contentStyle={{ background: '#020617', border: '1px solid #334155', borderRadius: 8, fontSize: 11 }} /><Area yAxisId="failures" type="monotone" dataKey="failed_requests" name="Failed requests" stroke="#fb7185" strokeWidth={2} fill="#fb7185" fillOpacity={0.18} dot={false} isAnimationActive={false} /><Line yAxisId="rate" type="monotone" dataKey="error_rate_percent" name="Error rate" stroke="#fbbf24" strokeWidth={2} dot={false} isAnimationActive={false} /></ComposedChart></ResponsiveContainer></div></>) : <p className="py-12 text-center text-xs text-slate-500">No per-request error timestamps are available.</p>}</Panel>}
-
-                    {detailTab === 'errors' && <Panel title="Error Summary"><dl className="grid gap-4 text-xs sm:grid-cols-3"><div><dt className="text-slate-500">Failed requests</dt><dd className={`mt-1 text-xl font-bold ${Number(failedRequests) > 0 ? 'text-rose-300' : 'text-emerald-300'}`}>{formatNumber(failedRequests)}</dd></div><div><dt className="text-slate-500">Task error</dt><dd className="mt-1 text-slate-200">{task.error_message || 'None'}</dd></div><div><dt className="text-slate-500">Final state</dt><dd className="mt-1"><StatusChip status={statusForChip} label={displayName(taskStatus)} pulse={taskStatus === 'running'} /></dd></div></dl></Panel>}
-
-                    {detailTab === 'errors' && <Panel title="Errors by Type">{statusCodeBreakdown.length > 0 ? <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{statusCodeBreakdown.map((item) => { const statusCode = item.status_code ?? null; return (<button type="button" key={statusCode ?? 'unknown'} onClick={() => void openResponseCodeIssues(statusCode)} className="rounded-lg border border-slate-800 bg-slate-950/40 p-4 text-left transition-colors hover:border-rose-500/50 hover:bg-rose-500/5 focus:outline-none focus:ring-2 focus:ring-rose-500/40"><div className="flex items-start justify-between gap-4"><div><div className="font-mono text-sm font-bold text-rose-300">{statusCode === null ? 'Client / transport' : `HTTP ${statusCode}`}</div><div className="mt-1 text-[10px] text-slate-500">{formatCount(item.count)} requests · {formatNumber(item.percentage, '%')} of errors</div></div><div className="rounded-md bg-rose-500/10 px-2 py-1 font-mono text-xs font-semibold text-rose-300">{formatCount(item.count)}</div></div><p className="mt-3 text-xs leading-relaxed text-slate-400">{responseStatusGuidance(statusCode)}</p><p className="mt-3 text-[10px] font-semibold text-rose-300">View request issues</p></button>); })}</div> : <p className="text-xs text-slate-500">No failed request details are available.</p>}</Panel>}
-
-                    {detailTab === 'errors' && <Panel title="Task Log">{taskLogs.length > 0 ? <div ref={taskLogRef} className="max-h-72 overflow-auto rounded-lg border border-slate-800 bg-slate-950/70 p-3 font-mono text-[10px] leading-relaxed text-slate-400">{taskLogs.map((line, index) => <div key={`${index}-${typeof line === 'string' ? line : JSON.stringify(line)}`}>{typeof line === 'string' ? line : JSON.stringify(line)}</div>)}</div> : <p className="text-xs text-slate-500">No task log entries are available yet.</p>}</Panel>}
-
-                    {detailTab === 'errors' && <Panel title="Artifacts">{artifacts.length ? (<>{artifactDownloadError && <p role="alert" className="mb-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-xs text-rose-400">{artifactDownloadError}</p>}<ul className="grid gap-2 md:grid-cols-2">{artifacts.map((artifact, index) => (<li key={`${artifact.kind || artifact.name}-${index}`} className="flex items-center justify-between gap-3 rounded-lg border border-slate-800 bg-slate-950/40 p-3"><div className="min-w-0"><div className="flex items-center gap-2 text-xs font-semibold text-slate-200"><FileJson className="h-3.5 w-3.5 shrink-0 text-cyan-400" />{displayName(artifact.kind || artifact.name || `Artifact ${index + 1}`)}</div>{artifact.media_type && <p className="mt-1 text-[10px] text-slate-600">{artifact.media_type}</p>}</div><Button variant="secondary" size="sm" onClick={() => downloadArtifact(artifact)} disabled={downloadingArtifact === artifact.kind}><Download className="h-3.5 w-3.5" />{downloadingArtifact === artifact.kind ? 'Downloading…' : 'Download'}</Button></li>))}</ul></>) : <p className="text-xs text-slate-500">{TERMINAL_STATUSES.has(taskStatus) ? 'No artifacts were returned.' : 'Artifacts will appear when the backend produces them.'}</p>}<div className="mt-4 space-y-2 border-t border-slate-800 pt-4"><details><summary className="cursor-pointer text-xs font-semibold text-slate-400 hover:text-slate-200">Raw backend metrics</summary><div className="mt-3"><JsonBlock value={backendMetrics} /></div></details><details><summary className="cursor-pointer text-xs font-semibold text-slate-400 hover:text-slate-200">Raw normalized result</summary><div className="mt-3"><JsonBlock value={result} /></div></details></div></Panel>}
+                    {postTab === 'overview' && (
+                        <OverviewTab
+                            task={task}
+                            telemetry={effectiveTelemetry}
+                            analysisWindow={analysisWindow}
+                            onSelectTab={handleSelectTab}
+                            onOpenErrorInspector={(filter = 'all') => setErrorInspectorFilter(filter)}
+                        />
+                    )}
+                    {postTab === 'workload' && (
+                        <WorkloadTab
+                            task={task}
+                            telemetry={effectiveTelemetry}
+                            analysisWindow={analysisWindow}
+                        />
+                    )}
+                    {postTab === 'bottlenecks' && (
+                        <BottlenecksTab
+                            task={task}
+                            telemetry={effectiveTelemetry}
+                            analysisWindow={analysisWindow}
+                            onSelectTab={handleSelectTab}
+                        />
+                    )}
+                    {postTab === 'serving' && (
+                        <ServingTab
+                            task={task}
+                            telemetry={effectiveTelemetry}
+                            analysisWindow={analysisWindow}
+                            scrollAnchor={pendingScrollAnchor}
+                        />
+                    )}
+                    {postTab === 'requests' && (
+                        <RequestsTab
+                            task={task}
+                            telemetry={effectiveTelemetry}
+                            analysisWindow={analysisWindow}
+                            onOpenErrorInspector={(filter = 'all') => setErrorInspectorFilter(filter)}
+                        />
+                    )}
+                    {postTab === 'system' && (
+                        <SystemTab
+                            task={task}
+                            telemetry={effectiveTelemetry}
+                            analysisWindow={analysisWindow}
+                            initialNode={systemInitialNode}
+                        />
+                    )}
+                    {postTab === 'hardware' && (
+                        <HardwareTab
+                            task={task}
+                            telemetry={effectiveTelemetry}
+                            onSelectTab={handleSelectTab}
+                        />
+                    )}
+                    {postTab === 'logs' && (
+                        <LogsAndConfigTab
+                            task={task}
+                            telemetry={effectiveTelemetry}
+                            artifacts={artifacts}
+                            downloadingArtifact={downloadingArtifact}
+                            artifactDownloadError={artifactDownloadError}
+                            onDownloadArtifact={downloadArtifact}
+                            artifactsHubRef={artifactsHubRef}
+                        />
+                    )}
                 </div>
             )}
 
-            <Modal
-                isOpen={selectedResponseCode !== undefined}
-                onClose={closeResponseCodeIssues}
-                title={selectedResponseCode === null ? 'Client / transport request issues' : `HTTP ${selectedResponseCode} request issues`}
-                subtitle={`${formatCount(responseCodeIssueTotal)} matching failed requests`}
-                size="xl"
-            >
-                {responseCodeIssuesLoading ? (
-                    <div className="flex justify-center py-12"><Spinner /></div>
-                ) : responseCodeIssuesError ? (
-                    <div role="alert" className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-200">{responseCodeIssuesError}</div>
-                ) : responseCodeIssues.length > 0 ? (
-                    <>
-                        <div className="overflow-x-auto rounded-lg border border-slate-800">
-                            <table className="w-full min-w-[760px] text-left text-xs">
-                                <thead className="bg-slate-950/80 text-[10px] uppercase tracking-wide text-slate-500"><tr><th className="px-3 py-2">Request</th><th className="px-3 py-2">Start</th><th className="px-3 py-2">Latency</th><th className="px-3 py-2">Input / Output</th><th className="px-3 py-2">Issue</th></tr></thead>
-                                <tbody className="divide-y divide-slate-800">
-                                    {responseCodeIssues.map((issue) => (
-                                        <tr key={`${issue.request_number}-${issue.request_id || ''}`} className="bg-slate-950/30 align-top">
-                                            <td className="px-3 py-3 font-mono text-slate-300">{issue.request_id || `#${issue.request_number}`}</td>
-                                            <td className="px-3 py-3 font-mono text-slate-400">{issue.started_at_seconds == null ? '—' : `${formatNumber(issue.started_at_seconds)}s`}</td>
-                                            <td className="px-3 py-3 font-mono text-slate-400">{issue.latency_ms == null ? '—' : `${formatMilliseconds(issue.latency_ms)}`}</td>
-                                            <td className="px-3 py-3 font-mono text-slate-400">{issue.input_tokens == null ? '—' : formatCount(issue.input_tokens)} {' / '} {issue.output_tokens == null ? '—' : formatCount(issue.output_tokens)}</td>
-                                            <td className="max-w-md whitespace-pre-wrap break-words px-3 py-3 text-rose-200">{issue.error || responseStatusGuidance(issue.status_code)}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                        <div className="mt-4 flex items-center justify-between gap-3">
-                            <p className="text-[10px] text-slate-500">{formatCount(responseCodeIssuePage * RESPONSE_CODE_ISSUE_PAGE_SIZE + 1)}–{formatCount(Math.min(responseCodeIssueTotal, responseCodeIssuePage * RESPONSE_CODE_ISSUE_PAGE_SIZE + responseCodeIssues.length))} of {formatCount(responseCodeIssueTotal)}</p>
-                            <div className="flex gap-2">
-                                <button type="button" disabled={responseCodeIssuePage === 0} onClick={() => void openResponseCodeIssues(selectedResponseCode, responseCodeIssuePage - 1)} className="inline-flex items-center gap-1 rounded-md border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-40"><ChevronLeft className="h-3.5 w-3.5" /> Previous</button>
-                                <button type="button" disabled={(responseCodeIssuePage + 1) * RESPONSE_CODE_ISSUE_PAGE_SIZE >= responseCodeIssueTotal} onClick={() => void openResponseCodeIssues(selectedResponseCode, responseCodeIssuePage + 1)} className="inline-flex items-center gap-1 rounded-md border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-40">Next <ChevronRight className="h-3.5 w-3.5" /></button>
-                            </div>
-                        </div>
-                    </>
-                ) : (
-                    <p className="py-12 text-center text-xs text-slate-500">No matching per-request issue records are available.</p>
-                )}
-            </Modal>
+            <ErrorInspectorModal
+                isOpen={errorInspectorFilter !== null}
+                onClose={() => setErrorInspectorFilter(null)}
+                taskId={taskId}
+                initialFilter={errorInspectorFilter || 'all'}
+                isRunning={isRunning}
+                taskStartedAt={task?.execution_started_at || task?.started_at}
+            />
+
+            <AskAiModal
+                isOpen={askAiOpen}
+                onClose={() => setAskAiOpen(false)}
+                task={task}
+                taskId={taskId}
+                onNavigate={onNavigate}
+            />
         </section>
     );
 }

@@ -9,6 +9,7 @@ from sqlalchemy import select
 
 from llm_d_lens.db.dao.base import BaseDao
 from llm_d_lens.db.models.simulation_task import PER_REQUEST_FILENAME, SimulationTaskRow
+from llm_d_lens.db.models.user import UserRow
 
 if TYPE_CHECKING:
     from llm_d_lens.simulation.models import SimulationTask
@@ -21,14 +22,27 @@ class SimulationTaskDaoError(Exception):
 class SimulationTaskDao(BaseDao):
     def save(self, task: SimulationTask, upsert: bool = True) -> SimulationTask:
         with self._transaction() as session:
+            persisted_owner_id = (
+                task.owner_user_id
+                if (task.owner_user_id and session.get(UserRow, task.owner_user_id) is not None)
+                else None
+            )
             row = session.get(SimulationTaskRow, task.id)
             if row is None:
-                row = SimulationTaskRow.from_dto(task, result_per_request_ref=_per_request_ref(task))
+                row = SimulationTaskRow.from_dto(
+                    task,
+                    result_per_request_ref=_per_request_ref(task),
+                    owner_user_id=persisted_owner_id,
+                )
                 session.add(row)
             else:
                 if not upsert:
                     raise SimulationTaskDaoError(f"simulation task already exists: {task.id}")
-                row.sync_from_dto(task, result_per_request_ref=_per_request_ref(task))
+                row.sync_from_dto(
+                    task,
+                    result_per_request_ref=_per_request_ref(task),
+                    owner_user_id=persisted_owner_id,
+                )
             session.flush()
             return row.to_dto()
 

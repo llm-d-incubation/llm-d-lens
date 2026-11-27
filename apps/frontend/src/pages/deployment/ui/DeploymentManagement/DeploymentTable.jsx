@@ -10,6 +10,7 @@ import {
     deploymentTitle,
     effectiveStatusGroup,
     effectiveStatusLabel,
+    formatPodStatusLabel,
     statusDotClassForGroup,
     statusGroup,
     successfulPagePods,
@@ -246,7 +247,7 @@ function PodsExpandPanel({ pods, loading, error }) {
                                 <td className="py-1 pr-3">
                                     <div className="flex items-center gap-1.5 text-slate-300">
                                         <PodStatusBadge phase={pod.phase} reason={pod.status_reason} ready={pod.ready} />
-                                        <span>{pod.status_reason || pod.phase || 'Unknown'}</span>
+                                        <span>{formatPodStatusLabel(pod)}</span>
                                     </div>
                                 </td>
                                 <td className="py-1 pr-3 text-slate-400">{pod.restarts ?? 0}</td>

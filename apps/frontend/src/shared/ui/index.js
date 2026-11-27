@@ -18,7 +18,8 @@
 export { Button, RefreshButton } from './Button';
 export { Badge, StatusChip } from './Badge';
 export { Modal } from './Modal';
-export { Input, Select, Textarea, Checkbox, Label } from './FormControls';
+export { SideDrawer } from './SideDrawer';
+export { Input, Select, Textarea, Checkbox, Label, HelpTooltip } from './FormControls';
 export { Panel, WorkspaceHeader, SummaryStrip } from './Panel';
 export { StatCard, StatCardRow } from './StatCard';
 export { Spinner, LoadingState } from './Spinner';

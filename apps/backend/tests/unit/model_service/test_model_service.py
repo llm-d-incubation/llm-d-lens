@@ -1592,3 +1592,213 @@ def test_model_service_connection_handles_malformed_ipv6_public_url_without_500(
     entry = conn["clusters"][0]
     assert entry["address"] is None
     assert entry["baseUrl"] == ""
+
+
+# --- delegated run tokens ----------------------------------------------------
+
+
+def _decode_delegated_payload(token: str) -> dict:
+    import base64
+    import json
+
+    _, payload_b64, _ = token.split(".")
+    padded = payload_b64 + ("=" * ((-len(payload_b64)) % 4))
+    return json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+
+
+def test_delegated_token_mint_validate_touch_and_gateway_attribution(monkeypatch, tmp_path):
+    from llm_d_lens.auth.settings import AuthSettings, reset_settings_override, set_settings_for_testing
+    from llm_d_lens.model_service.contracts import DELEGATED_TOKEN_PREFIX
+
+    _patch_target(monkeypatch)
+    monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path))
+    set_settings_for_testing(AuthSettings(auth_mode="local", secret_key="master-secret-1"))  # noqa: S106
+    try:
+        user = _create_user("delegated-owner")
+        service = _service()
+        group = service.create_group(
+            GroupCreateRequest(name="delegated-model", model_ref="Qwen/Qwen3-8B", clusterId="cluster-a"),
+            created_by=user.id,
+        )
+        service.create_member(MemberCreateRequest(group_id=group.id, execution_id="exec-1"), published_by=user.id)
+        record, _raw = service.tokens.create(user.id, name="sim-runner")
+
+        delegated = service.tokens.mint_delegated_run_token(user.id, record.id, ttl_seconds=300)
+        assert delegated.startswith(DELEGATED_TOKEN_PREFIX)
+        assert len(delegated.split(".")) == 3
+
+        validated = service.tokens.validate(delegated, ip="10.20.30.40")
+        assert validated is not None
+        assert validated.id == record.id
+        assert validated.user_id == user.id
+        assert validated.last_used_at is not None
+        assert validated.last_used_ip == "10.20.30.40"
+
+        reloaded = service.tokens.get(record.id)
+        assert reloaded is not None and reloaded.last_used_ip == "10.20.30.40"
+
+        auth_res = service.authorize_request(
+            AuthorizeRequest(token=delegated, model="delegated-model", client_ip="10.20.30.41")
+        )
+        assert auth_res.user_id == user.id
+        assert auth_res.token_id == record.id
+    finally:
+        reset_settings_override()
+
+
+def test_delegated_token_supports_master_key_rotation(monkeypatch, tmp_path):
+    from llm_d_lens.auth.settings import AuthSettings, reset_settings_override, set_settings_for_testing
+
+    monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path))
+    user = _create_user("rotation-owner")
+    service = ModelTokenService()
+    record, _ = service.create(user.id, name="rotate")
+
+    set_settings_for_testing(AuthSettings(auth_mode="local", secret_key="key-v1"))  # noqa: S106
+    try:
+        delegated = service.mint_delegated_run_token(user.id, record.id, ttl_seconds=600)
+        set_settings_for_testing(
+            AuthSettings(auth_mode="local", secret_key="key-v2", old_secret_keys=("key-v1",))  # noqa: S106
+        )
+        assert service.validate(delegated) is not None
+
+        set_settings_for_testing(AuthSettings(auth_mode="local", secret_key="key-v2", old_secret_keys=()))  # noqa: S106
+        assert service.validate(delegated) is None
+    finally:
+        reset_settings_override()
+
+
+def test_delegated_token_fails_closed_when_master_key_unconfigured(monkeypatch, tmp_path):
+    from llm_d_lens.auth.master_key import MasterKey, master_key_path
+    from llm_d_lens.auth.settings import AuthSettings, reset_settings_override, set_settings_for_testing
+    from llm_d_lens.model_service import tokens as tokens_module
+
+    monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path))
+    user = _create_user("unconfigured-owner")
+    service = ModelTokenService()
+    record, _ = service.create(user.id, name="unconfigured")
+
+    set_settings_for_testing(AuthSettings(auth_mode="local", secret_key="temp-key"))  # noqa: S106
+    try:
+        delegated = service.mint_delegated_run_token(user.id, record.id, ttl_seconds=600)
+
+        monkeypatch.setattr(
+            tokens_module,
+            "ensure_master_key",
+            lambda _settings: MasterKey(primary="", old=(), source="unconfigured"),
+        )
+        with pytest.raises(RuntimeError, match="Master key is unconfigured"):
+            service.mint_delegated_run_token(user.id, record.id, ttl_seconds=600)
+
+        set_settings_for_testing(AuthSettings(auth_mode="local", secret_key=""))
+        ensure_calls = []
+        monkeypatch.setattr(
+            tokens_module,
+            "ensure_master_key",
+            lambda _settings: ensure_calls.append(True) or MasterKey(primary="x", old=(), source="file"),
+        )
+        assert service.validate(delegated) is None
+        assert ensure_calls == []
+        assert not master_key_path().exists()
+    finally:
+        reset_settings_override()
+
+
+def test_delegated_token_expiry_clamping_and_expiration(monkeypatch, tmp_path):
+    from datetime import timedelta
+
+    from llm_d_lens.auth.settings import AuthSettings, reset_settings_override, set_settings_for_testing
+    from llm_d_lens.model_service import tokens as tokens_module
+    from llm_d_lens.model_service.contracts import utcnow
+    from llm_d_lens.model_service.tokens import MAX_DELEGATED_RUN_TTL_SECONDS
+
+    monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path))
+    set_settings_for_testing(AuthSettings(auth_mode="local", secret_key="expiry-secret"))  # noqa: S106
+    try:
+        user = _create_user("expiry-owner")
+        service = ModelTokenService()
+        record, _ = service.create(user.id, name="clamped")
+
+        with pytest.raises(ValueError):
+            service.mint_delegated_run_token(user.id, record.id, ttl_seconds=0)
+        with pytest.raises(ValueError):
+            service.mint_delegated_run_token(user.id, record.id, ttl_seconds=True)
+
+        # Clamped to MAX_DELEGATED_RUN_TTL_SECONDS
+        long_tok = service.mint_delegated_run_token(user.id, record.id, ttl_seconds=MAX_DELEGATED_RUN_TTL_SECONDS * 10)
+        long_payload = _decode_delegated_payload(long_tok)
+        assert long_payload["exp"] - long_payload["iat"] == MAX_DELEGATED_RUN_TTL_SECONDS
+
+        # Delegated token's own exp elapsed while backing token is still active (expires_at=None)
+        short_tok = service.mint_delegated_run_token(user.id, record.id, ttl_seconds=10)
+        assert service.validate(short_tok) is not None
+        future_now = utcnow() + timedelta(seconds=30)
+        with monkeypatch.context() as mp:
+            mp.setattr(tokens_module, "utcnow", lambda: future_now)
+            assert service.validate(short_tok) is None
+
+        # Clamped to backing record.expires_at
+        record.expires_at = utcnow() + timedelta(seconds=90)
+        service._dao.save(record)
+        clamped_tok = service.mint_delegated_run_token(user.id, record.id, ttl_seconds=3600)
+        clamped_payload = _decode_delegated_payload(clamped_tok)
+        assert 1 <= clamped_payload["exp"] - clamped_payload["iat"] <= 91
+
+        # Already expired backing token cannot mint or validate
+        record.expires_at = utcnow() - timedelta(seconds=10)
+        service._dao.save(record)
+        with pytest.raises(ValueError, match="expired"):
+            service.require_active_owned_token(user.id, record.id)
+        with pytest.raises(ValueError, match="expired"):
+            service.mint_delegated_run_token(user.id, record.id, ttl_seconds=60)
+        assert service.validate(long_tok) is None
+    finally:
+        reset_settings_override()
+
+
+def test_delegated_token_revocation_cross_user_and_tampering(monkeypatch, tmp_path):
+    import base64
+    import json
+
+    from llm_d_lens.auth.settings import AuthSettings, reset_settings_override, set_settings_for_testing
+    from llm_d_lens.model_service.contracts import DELEGATED_TOKEN_PREFIX
+
+    monkeypatch.setenv("LENS_DATA_DIR", str(tmp_path))
+    set_settings_for_testing(AuthSettings(auth_mode="local", secret_key="revocation-secret"))  # noqa: S106
+    try:
+        owner = _create_user("owner-a")
+        other = _create_user("other-b")
+        service = ModelTokenService()
+        record, _ = service.create(owner.id, name="owned")
+
+        delegated = service.mint_delegated_run_token(owner.id, record.id, ttl_seconds=300)
+        assert service.validate(delegated) is not None
+
+        # Cross-user and missing/revoked produce identical anti-enumeration error
+        with pytest.raises(ValueError, match="not found or is inactive") as cross_exc:
+            service.require_active_owned_token(other.id, record.id)
+        with pytest.raises(ValueError, match="not found or is inactive") as missing_exc:
+            service.require_active_owned_token(owner.id, "mat-does-not-exist")
+        assert str(cross_exc.value) == str(missing_exc.value)
+
+        with pytest.raises(ValueError, match="not found or is inactive"):
+            service.mint_delegated_run_token(other.id, record.id, ttl_seconds=300)
+
+        # Tampered payload fails signature check
+        _, payload_b64, sig_b64 = delegated.split(".")
+        tampered_payload = _decode_delegated_payload(delegated)
+        tampered_payload["uid"] = other.id
+        tampered_b64 = (
+            base64.urlsafe_b64encode(json.dumps(tampered_payload, separators=(",", ":"), sort_keys=True).encode())
+            .rstrip(b"=")
+            .decode("ascii")
+        )
+        assert service.validate(f"{DELEGATED_TOKEN_PREFIX}{tampered_b64}.{sig_b64}") is None
+        assert service.validate(f"{DELEGATED_TOKEN_PREFIX}{payload_b64}.bad") is None
+        assert service.validate(f"{DELEGATED_TOKEN_PREFIX}{payload_b64}.{sig_b64}.extra") is None
+
+        # Revocation immediately invalidates previously minted delegated token
+        assert service.revoke(owner.id, record.id) is True
+        assert service.validate(delegated) is None
+    finally:
+        reset_settings_override()

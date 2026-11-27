@@ -15,6 +15,7 @@
 import React from 'react';
 import { cn } from '../lib/cn';
 import { Button } from './Button';
+import { HelpTooltip } from './FormControls';
 
 const PADDING = {
     none: 'p-0',
@@ -31,21 +32,34 @@ const TONES = {
 
 // The standard card surface. Replaces hand-rolled
 // "bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700" shells.
-export function Panel({ title, actions, padding = 'md', tone = 'neutral', className, children, ...props }) {
+export function Panel({ title, help, helpFormula, helpAlign = 'start', actions, padding = 'md', tone = 'neutral', className, children, ...props }) {
+    const hasHelp = Boolean(help || helpFormula);
     return (
         <div
             className={cn(
-                'bg-theme-card border border-theme-border rounded-xl shadow-lg transition-colors',
+                'relative hover:z-20 focus-within:z-20 bg-theme-card border border-theme-border rounded-xl shadow-lg transition-colors',
                 TONES[tone],
                 PADDING[padding],
                 className
             )}
             {...props}
         >
-            {(title || actions) && (
+            {(title || hasHelp || actions) && (
                 <div className={cn('flex items-center justify-between gap-4 mb-4', padding === 'none' && 'p-4 mb-0 border-b border-theme-border')}>
-                    {title && (
-                        <h3 className="text-sm font-bold text-theme-text">{title}</h3>
+                    {(title || hasHelp) && (
+                        <div className="flex min-w-0 items-center gap-1.5">
+                            {title && <h3 className="text-sm font-bold text-theme-text">{title}</h3>}
+                            {hasHelp && (
+                                <HelpTooltip
+                                    label={`${typeof title === 'string' ? title : 'Panel'} help`}
+                                    align={helpAlign}
+                                    iconSize={13}
+                                    formula={helpFormula}
+                                >
+                                    {help}
+                                </HelpTooltip>
+                            )}
+                        </div>
                     )}
                     {actions && <div className="flex items-center gap-2">{actions}</div>}
                 </div>
@@ -82,14 +96,27 @@ const STRIP_TONES = {
 
 /** Compact context row; interactive facts open their existing editor or review. Items may carry an `icon` and `tone`. */
 export function SummaryStrip({ items, ...props }) {
-    return <div className="grid grid-cols-2 overflow-hidden rounded-xl border border-theme-border bg-theme-card md:grid-cols-4" {...props}>
-        {items.map(item => <div key={item.label} className="flex min-w-0 items-start gap-3 border-b border-r border-theme-border p-4 last:border-r-0 md:border-b-0">
-            {item.icon && <span className={cn('grid h-9 w-9 shrink-0 place-items-center rounded-lg', STRIP_TONES[item.tone] || STRIP_TONES.neutral)} aria-hidden="true"><item.icon size={17} /></span>}
-            <div className="min-w-0">
-                <div className="text-xs text-theme-muted">{item.label}</div>
-                {item.onClick ? <Button variant="link" className="mt-1 h-auto max-w-full justify-start whitespace-normal p-0 text-left text-sm font-semibold" onClick={item.onClick} disabled={item.disabled}>{item.value}</Button> : <div className="mt-1 break-words text-sm font-semibold">{item.value}</div>}
-                {item.detail && <div className="mt-1 truncate text-xs text-theme-muted" title={typeof item.detail === 'string' ? item.detail : undefined}>{item.detail}</div>}
-            </div>
-        </div>)}
+    const hasHelp = items.some((item) => Boolean(item.help || item.formula || item.helpFormula));
+    return <div className={cn('relative grid grid-cols-2 rounded-xl border border-theme-border bg-theme-card md:grid-cols-4', hasHelp ? 'overflow-visible hover:z-20 focus-within:z-20' : 'overflow-hidden')} {...props}>
+        {items.map(item => {
+            const itemHasHelp = Boolean(item.help || item.formula || item.helpFormula);
+            return (
+                <div key={item.label} className="flex min-w-0 items-start gap-3 border-b border-r border-theme-border p-4 last:border-r-0 md:border-b-0">
+                    {item.icon && <span className={cn('grid h-9 w-9 shrink-0 place-items-center rounded-lg', STRIP_TONES[item.tone] || STRIP_TONES.neutral)} aria-hidden="true"><item.icon size={17} /></span>}
+                    <div className="min-w-0">
+                        <div className={cn('text-xs text-theme-muted', itemHasHelp && 'flex items-center gap-1.5')}>
+                            <span>{item.label}</span>
+                            {itemHasHelp && (
+                                <HelpTooltip label={`${typeof item.label === 'string' ? item.label : 'Item'} help`} align="start" iconSize={12} formula={item.formula ?? item.helpFormula}>
+                                    {item.help}
+                                </HelpTooltip>
+                            )}
+                        </div>
+                        {item.onClick ? <Button variant="link" className="mt-1 h-auto max-w-full justify-start whitespace-normal p-0 text-left text-sm font-semibold" onClick={item.onClick} disabled={item.disabled}>{item.value}</Button> : <div className="mt-1 break-words text-sm font-semibold">{item.value}</div>}
+                        {item.detail && <div className="mt-1 truncate text-xs text-theme-muted" title={typeof item.detail === 'string' ? item.detail : undefined}>{item.detail}</div>}
+                    </div>
+                </div>
+            );
+        })}
     </div>;
 }

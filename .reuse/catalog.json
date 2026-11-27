@@ -2766,8 +2766,7 @@
       "purpose": "Format error values from Simulation tool artifacts.",
       "boundaries": "Tool adapters choose the source field and timeout precedence. Shared fallback fields, structured-message precedence and 1000-character truncation remain unchanged. Status codes and latency units remain tool-specific.",
       "examples": [
-        "apps/backend/src/llm_d_lens/simulation/backends/aiperf.py",
-        "apps/backend/src/llm_d_lens/simulation/backends/trace_replayer.py"
+        "apps/backend/src/llm_d_lens/simulation/backends/aiperf.py"
       ],
       "tests": [
         "apps/backend/tests/unit/simulation/test_progress.py"

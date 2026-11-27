@@ -55,21 +55,30 @@ export const MultiSelectDropdown = ({ label, options, selected = new Set(), onCh
                 type="button"
                 onClick={() => setIsOpen(!isOpen)}
                 aria-expanded={isOpen}
-                className={cn('w-full border border-theme-border text-theme-text text-xs rounded-xl px-3 py-2 flex items-center justify-between', className)}
+                data-has-selection={selectedCount > 0 ? 'true' : 'false'}
+                className={cn(
+                    'lens-multiselect-trigger w-full border border-theme-border text-theme-text text-xs rounded-xl px-3 py-2 flex items-center justify-between',
+                    selectedCount > 0 && 'dark:border-cyan-500/60 dark:bg-cyan-500/10',
+                    className
+                )}
                 title={`${label}: ${selectedCount > 0 ? [...safeSelected].join(', ') : 'All'}`}
             >
                 <div className="flex items-center gap-2 truncate pr-2">
                     <span className="font-semibold text-theme-muted">{label}</span>
                     {labelSuffix}
-                    <span className="truncate text-theme-text">
-                        {selectedCount === 0 ? emptyLabel : `${selectedCount} selected`}
-                    </span>
+                    {selectedCount > 0 ? (
+                        <span className="lens-multiselect-count inline-flex items-center rounded-full bg-cyan-500 px-1.5 py-0.5 text-[10px] font-semibold text-white shrink-0">
+                            {selectedCount} selected
+                        </span>
+                    ) : (
+                        <span className="truncate text-theme-text">{emptyLabel}</span>
+                    )}
                 </div>
                 <ChevronDown size={12} className={cn('text-theme-muted transition-transform', isOpen && 'rotate-180')} />
             </Button>
 
             {isOpen && (
-                <div role="group" aria-label={`${label} options`} className={cn('mt-2 max-h-80 overflow-y-auto bg-theme-card border border-theme-border rounded-xl shadow-2xl z-[100] p-2.5 space-y-1.5', inlineMenu ? 'relative w-full' : 'absolute top-full left-0 w-72')}>
+                <div role="group" aria-label={`${label} options`} className={cn('lens-multiselect-menu mt-2 max-h-80 overflow-y-auto bg-theme-card border border-theme-border rounded-xl shadow-2xl z-[100] p-2.5 space-y-1.5', inlineMenu ? 'relative w-full' : 'absolute top-full left-0 w-72')}>
                     {searchable && (
                         <div className="relative mb-1">
                             <Search size={12} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
@@ -103,14 +112,14 @@ export const MultiSelectDropdown = ({ label, options, selected = new Set(), onCh
                             <React.Fragment key={opt}>
                             {optionGroup && (index === 0 || optionGroup(opt) !== optionGroup(visibleOptions[index - 1])) && <p className="text-xs font-semibold text-theme-muted">{optionGroup(opt)}</p>}
                             <Button type="button" variant="ghost" role="checkbox" aria-checked={isSelected} disabled={disabledOptions?.has(opt)} aria-label={formatLabel ? formatLabel(opt) : opt}
-                                className={cn('w-full h-auto flex items-start gap-2 px-2.5 py-2 rounded-lg text-left whitespace-normal', hasCounts && count === 0 && 'opacity-45', isSelected && 'bg-theme-bg font-semibold')}
+                                className={cn('lens-multiselect-option w-full h-auto flex items-start gap-2 px-2.5 py-2 rounded-lg text-left whitespace-normal', hasCounts && count === 0 && 'opacity-45', isSelected && 'bg-theme-bg dark:bg-cyan-500/15 font-semibold')}
                                 onClick={() => onChange(opt)}
                                 title={description || (formatLabel ? formatLabel(opt) : opt)}
                             >
-                                 <span className="w-3.5 h-3.5 shrink-0 rounded border border-theme-border flex items-center justify-center">
+                                 <span className={cn('lens-multiselect-check w-3.5 h-3.5 shrink-0 rounded border border-theme-border flex items-center justify-center', isSelected && 'dark:bg-cyan-500 dark:border-cyan-500 dark:text-white')}>
                                     {isSelected && <Check size={10} strokeWidth={3} />}
                                  </span>
-                                 <span className="text-xs flex-1 min-w-0 text-theme-text">
+                                 <span className={cn('lens-multiselect-label text-xs flex-1 min-w-0 text-theme-text', isSelected && 'dark:text-white')}>
                                      {formatLabel ? formatLabel(opt) : opt}
                                      {description && <small className="block mt-1 font-normal text-theme-muted">{description}</small>}
                                  </span>

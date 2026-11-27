@@ -3,19 +3,21 @@ title: 轨迹回放（Trace Replayer）
 description: 向模型重放请求流量，检查延迟、吞吐量和错误。
 ---
 
-使用 **Trace Replayer（轨迹回放）**，将请求轨迹数据集重放到模型服务或指定端点。
+使用 **Trace Replayer（轨迹回放）**，以 **AIPerf** 作为执行后端将请求轨迹数据集重放到模型服务或指定端点。
 
 ## 创建模拟任务
 
 1. 打开 **Trace Replayer**，点击任务状态卡片最右侧、图标刷新按钮旁的 **New Task（新建任务）**。
 2. 在 **Benchmark & Endpoint** 中选择 **Benchmark tool（测试工具）**。
 3. 在 **Inference Endpoint（推理端点）**中，按下表选择 **Model Service** 或 **Endpoint URL**。
-4. 填写 **Model access token（访问令牌）**，检查解析出的 **Model（模型）**。
+4. 从下拉列表中选择一个有效的 **Model access token（模型访问令牌）**（可点击 **Refresh（刷新）** 重新加载密钥；若尚无密钥，可通过空状态引导链接直接前往 **API keys -> Create key**；选择 **Endpoint URL** 时也可选择 **None (unauthenticated endpoint)** 免认证模式），然后检查解析出的 **Model（模型）**。原始令牌密钥绝不会持久化存储在任务记录中。
 5. 在 **Scenario & Prompt** 中选择场景和 **Trace dataset（轨迹数据集）**。未下载时点击 **Download dataset**。
 6. 数据集有时间线时，选择重放起止位置、缩放系数和持续时间。
-7. 在 **Load & Backend** 中检查 **Stream responses（流式响应）**；需要判断是否达标时，再填写 TTFT、TPOT 或错误率目标。
+7. 在 **Load & Backend** 中检查 **Stream responses（流式响应）**（AIPerf 要求开启）。对于使用文件轨迹数据集（`mooncake_trace`、`bailian_trace`、`baseten_trace`、`burst_gpt_trace`）的 AIPerf 任务，可选择 **Replay Pacing（回放节奏）**（**Fixed Schedule** 按轨迹时间戳回放，或 **Concurrency Slots** 按固定并发槽位驱动）；选择 **Concurrency Slots** 时（以及 `weka_public_dataset` 始终显示），设置 **Session Concurrency（会话并发数）**（`>= 1`）。对于兼容 `inferencex-agentx-mvp` 的负载（兼容的 Weka subagent 公开数据集，以及 **Concurrency Slots** 模式下的 `mooncake_trace`），还可配置 **Trajectory start min ratio**（`trajectory_start_min_ratio`，默认 `0.25`）和 **Trajectory start max ratio**（`trajectory_start_max_ratio`，默认 `0.75`）。有效范围为 `[0.0, 1.0]` 且需满足 `min <= max`；清空任一字段会省略对应的 CLI 参数，使 AIPerf 回退到场景默认值（`0.0` / `1.0`），而输入 `0` 会保留为 `0.0`。对于不兼容的轨迹或 **Fixed Schedule** 模式，这两个字段会被禁用并省略。任务详情与 **Compare Runs** 会将其显示为 **Pacing**（`Fixed Schedule` 或 `Concurrency (<N>)`）。可按需配置 **Grace period (s)**（`grace_period_seconds`，默认 `30`，范围 `0–3600`）以设置发送窗口结束后的在途请求排空宽限期，以及 **Warmup Window (s)（预热窗口）**、**Collect Server Telemetry（采集服务端遥测）** 与 **TTFT**、**TPOT**、**E2E Latency SLO (s)** 或 **Error Rate** 目标。
 8. 在 **Task Details** 中填写 **Task name（任务名称）**和可选描述。
 9. 点击 **Create Task（创建任务）**，打开新任务卡片查看进度。
+
+AIPerf 运行始终启用 `--use-server-token-count`、`--slice-duration 1.0` 和 `--streaming`。在兼容的 Weka subagent 公开数据集以及 **Concurrency Slots** 模式下的 `mooncake_trace` 上，Lens 会自动启用 `--scenario inferencex-agentx-mvp`；当运行时长低于 `900` 秒或使用本地 `mooncake_trace` 时，还会自动添加 `--unsafe-override`。
 
 | 端点选项 | 需要提供 |
 | --- | --- |
@@ -23,7 +25,7 @@ description: 向模型重放请求流量，检查延迟、吞吐量和错误。
 | **Endpoint URL** | 待测试的地址；服务要求认证时还需令牌 |
 
 没有服务或令牌时，先[发布模型服务](/tutorials/publish-a-model-service)。
-首次运行保留 **Advanced backend settings（高级后端设置）**。
+首次运行保留 **Advanced backend settings（高级后端设置）**（或展开以自定义 **Random seed**（`random_seed`，`>= 0` 的整数，默认 `666`），可按次运行编辑以复现流量与采样）。
 
 选择 **Endpoint URL** 时，Lens 会通过端点的 `/v1/models` API 进行校验，并使用可选的模型访问令牌。
 校验未完成或失败时，无法继续或创建任务，即使手动输入模型名称也不能绕过校验。
@@ -35,15 +37,61 @@ description: 向模型重放请求流量，检查延迟、吞吐量和错误。
 对于已发布的集群服务，请选择 **Model Service**，使用集群内的压测执行路径。
 其他情况应提供 Lens 后端和压测运行环境均可访问的端点。
 
+## 监控运行中的任务
+
+当任务处于 `queued`、`running` 或 `cancelling` 状态时，详情页提供三个运行时子视图：
+
+1. **Replay Monitor（回放监控，默认视图）**：
+   - **状态栏与阶段**：展示 `Preparing`、`Warmup`（当 `warmup_seconds > 0`）、`Profiling`、`Cooldown` 与 `Collecting Telemetry` 阶段，以及基于 **Schedule Drift（调度漂移）** P90 的 **Replay Fidelity（回放保真度）**（`On-Schedule`、`Mild Drift` 或 `Lagging`）。
+   - **6 张实时 KPI 卡片**：**Throughput（吞吐量）**、**Rolling Latency (15s)**、**Error Rate（错误率）**、**Running & Waiting Requests（运行中与等待队列请求数）**、**KV Cache Usage & Prefix Cache Hit Rate（KV 缓存使用率与前缀缓存命中率）** 与 **Accelerator Util & Power**（标题由硬件 Profile 动态生成）。
+   - **2×2 实时流图**：客户端吞吐与并发、滚动延迟与调度漂移、vLLM 引擎与 EPP 负载（vLLM Engine & EPP Load）、KV 缓存与加速器压力。
+   - **健康/瓶颈告警条**：展示持续触发的异常告警（`ERROR_BURST`、`QUEUE_SATURATION`、`KV_EVICTION_RISK`、`PD_IMBALANCE`、`SCHEDULE_DRIFT`）。
+   - **Live Error Inspector（实时错误明细）**：点击 **Error Rate** 卡片（或其 `4xx`/`5xx`/`Timeout`/`Transport` 徽章）、顶部 **Failed: N** 或 **`ERROR_BURST`** 告警，即可打开实时错误抽屉，支持状态码筛选胶囊、`3s` 自动刷新开关与一键复制错误文本。
+2. **Live Monitoring（实时拓扑监控）**：
+   - 实时渲染 `llm-d` 部署的 **Flow Map**（`Users -> Inference Gateway -> EPP -> Prefill / Decode / Worker Pods -> Output`）。
+   - 若压测目标为多成员 **Model Service** 路由组，可通过 **Deployment execution** 下拉框切换不同成员实例；若部署尚未开启监控，可点击 **Enable monitoring / retry**。
+3. **Logs & Configuration（日志与配置）**：
+   - 实时流式展示剥离 ANSI 颜色码后的 `AIPerf` stdout/stderr 日志（支持关键词搜索与仅看错误）及运行配置摘要。
+
 ## 查看结果
 
-1. 打开任务卡片。
-2. 在 **Summary（摘要）**中检查任务状态、已完成请求和主要指标。
-3. 在 **Latency（延迟）**中查看 TTFT、TPOT 随时间的变化，在 **Throughput（吞吐量）**中查看处理速率。
-4. 打开 **Errors & Logs（错误与日志）**排查失败。
-5. 在 **Artifacts（产物）**中点击文件旁的 **Download（下载）**。
+任务进入终态（`completed`、`failed` 或 `cancelled`）后，Lens 会打开持久化的 **8-Tab 测试后工作台**。任务详情页顶部元数据栏会在 **Model**、**Backend**、**Dataset** 和 **Pacing** 旁展示 **Hardware**（显示检测到的加速器型号/配置 Profile；对于无硬件遥测的外部端点，显示 `External / Not reported`）：
 
-缺失指标不是零。指标不可用时，先检查 **Task Log（任务日志）**，确认运行或采集是否失败。
+1. **Overview（总览）**：展示 **Automated Verdict** 主导瓶颈结论卡、**SLO Attainment**、**Throughput vs Goodput**、Warmup 与 Steady-State 对比 KPI 卡片，以及 5 组总览图表（含双源在途并发对照、**Warmup vs Steady-State Latency（预热与稳态延迟对比）**、加速器功耗与能耗；存在排空宽限期时，时间轴上会标注发送与排空分界线）。
+2. **Workload（负载画像）**：顶部展示结构清晰的 **Workload & Replay Configuration** 摘要卡片，涵盖 **Dataset**（数据集名称、Trace 格式与场景）、**Replay Time Range & Duration/Warmup**（源 Trace 回放切片 `start_seconds`–`end_seconds`，未设上限时为从 `start_seconds` 起的完整 Trace，以及配置的回放时长、预热时长和可选宽限期）以及 **Pacing Mode, Configured Concurrency & Scale Factor**（使用带用户配置并发槽位上限的 **Concurrency** 限流模式或基于 Trace 时间戳的 **Fixed Schedule** 模式，以及回放时间缩放倍率）——即使在缺少逐请求详细负载分布的历史摘要运行中也会保持可见。下方与 **Profiling Steady-State** / **Full Run** 分析窗口切换保持同步，并采用与 **Serving** 标签页一致的吸顶子分类筛选栏（`All`、`Summary`、`Input Sequence Length`、`Output Sequence Length`、`ISL vs OSL`、`Concurrency & Arrival`、`Multi-Turn & Prefix`），展示请求输入序列长度（Input Sequence Length，ISL）与输出序列长度（Output Sequence Length，OSL）直方图、经验累积分布（CDF）与 6 项统计摘要（`Min / P50 / Mean / P90 / P99 / Max` 及 `CV`）、OSL/ISL 解码强度比及 **Prefill-Heavy**（`< 0.25`）/ **Balanced**（`0.25–1.0`）/ **Decode-Heavy**（`> 1.0`）区间占比、按解码区间着色并附带 `OSL = ISL` 参考对角线的逐请求 **Input Sequence Length vs Output Sequence Length**（`ISL vs OSL`）散点图及按输入序列长度（ISL）分桶的 ISL 与 OSL 联合分布、基于精确事件扫描的在途并发驻留分布与并发/到达率对比完成率时间轴，以及多轮对话与可复用前缀上下文增长。
+3. **Bottlenecks（瓶颈归因）**：按优先级列出瓶颈发现与调优建议、**Request Stage Latency Breakdown（请求阶段延迟拆解）**（堆叠展示 `EPP Scheduling`、`Queue Time`、`Prefill Time` 与 `Decode Time`，支持 `P50`/`P90` 切换、E2E/TTFT 各阶段占比 `%`、主导阶段归因及峰值窗口切换检测）、**Per-Role Saturation Timeline（按角色饱和度时间轴）**、**TTFT Stage Decomposition（TTFT 阶段拆解）**、**Multi-Turn Prefix Cache Reuse（多轮前缀缓存复用）**、**EPP Predicted vs vLLM Actual Prefix Cache Hit Rate（EPP 预测与 vLLM 实际前缀缓存命中率对比）** 及 **Per-Pod Load Skew（单 Pod 负载偏斜）**。
+4. **Serving（服务端）**：还原测试窗口内的历史 **Flow Map**（支持 `Requests` / `Tokens` 切换）、**Inference Gateway** 与 **EPP** 路由、vLLM 引擎指标、按部署拓扑展示的 CPU Tier KV Offload 指标（聚合部署展示 `CPU KV Cache Usage`、`KV Offload Throughput`、`KV Restore Throughput`、`KV Offload Lookup Sync Delay (P95)`，P/D 分离部署额外展示跨 Pod `NIXL KV Transfer` 指标）、Profile 驱动的加速器遥测，以及直达本次时间窗的 **Grafana Deep Links**。
+5. **Requests（请求分析）**：展示覆盖主动发送窗口（`dispatch_duration_seconds`）的回放保真度（**Schedule Drift（调度漂移）**）、**Sessions over Time** 会话泳道图（将请求紧凑排入 **Concurrent Session Slots（并发会话槽位）** `S1..Sn`，每个并发槽位一行并在上一请求完成后复用，按 Prompt 前缀缓存命中层级着色：`cold (<10%)`、`partial (10–70%)`、`warm (≥70%)`，并支持可选的预热区间阴影标注；在实时 **Requests** 标签页与独立离线 HTML 报告中，点击多轮会话的任意轮次块即可跨并发槽位高亮该会话的全部轮次、淡化无关请求、在相邻轮次间绘制虚线时序连接线，并显示带 **Clear** 按钮的选中摘要胶囊——再次点击该轮次、点击图表空白处、按 `Escape` 或点击 **Clear** 均可清除高亮）、Input Sequence Length 与前缀缓存命中分桶，以及逐请求 **TTFT by Time and Input Sequence Length** / **TPOT by Time and Output Sequence Length** 散点图（每个点代表一个请求并按单次请求的 TTFT/TPOT 着色，支持与 **Profiling Steady-State** / **Full Run** 窗口切换同步）、对话结构、CDF 与完整分位表及错误明细钻取。
+6. **System（系统资源）**：展示来自 `node-exporter` 的服务节点主机 CPU、内存、磁盘、网络与功耗指标。在实时界面与独立离线 HTML 报告中均支持交互式 **Node Scope（节点范围）**切换——可点击 **Target Nodes** 徽章、使用顶部 **Scope** 选择器或时序图上方同步的 **Charts Scope** 栏，或点击 **Per-Node Summary** 中的任意行，在 `All Nodes (Aggregate)` 与单个服务节点之间切换查看全部 4 组图表（`Host CPU Utilization`、`Host Memory & Disk I/O`、`Network RX / TX Throughput` 与 `Host & Accelerator Power`）。在 `Network RX / TX Throughput` 图表中，支持在 `All NICs (Total)`（聚合 RX/TX，自动过滤环回与临时虚拟/CNI 接口，保留物理、绑定、VLAN 及 RDMA/RoCE/InfiniBand 接口）、`By NIC` 多网卡对比以及按当前节点或跨目标节点聚合的单个网卡明细之间切换。
+7. **Hardware（硬件配置）**：通过四个部分展示 Profile 驱动的被测环境硬件配置——**Hardware Overview** KPI（目标模式、集群/命名空间、部署拓扑、加速器型号/Profile、参与节点与 Pod 数量、已分配加速器数量、设备显存及主机 CPU/内存）、**Node Hardware Specifications**（单节点加速器规格、主机 CPU/内存、OS/内核/容器运行时信息，支持点击跳转至对应节点范围的 **System** 标签页）、**Serving Pod Hardware Allocation**（各服务 Pod 的角色、所在节点、已分配加速器及 CPU/内存请求与上限）以及 **KV Cache & Memory Hierarchy**（加速器显存、KV Cache 利用率及启用时的 CPU 层卸载配置）。对于外部端点或缺少硬件遥测的历史运行，会优雅降级并显示提示信息。
+8. **Logs & Configuration（日志与配置）**：展示目标摘要（含检测到的 **Hardware**）、脱敏后的 `run-manifest.yaml`（含 `grace_period_seconds`）、可搜索的生命周期与工具日志，以及 **Artifacts Download Hub**。
+
+可通过工作台顶栏执行以下操作：
+- 在 **Profiling Steady-State**（剔除 `warmup_seconds`）与 **Full Run** 之间切换分析窗口。
+- 点击 **Compare Runs** 并排对比 2–3 次运行（配置对比中包含 `grace_period_seconds`）。
+- 点击 **Download HTML Report** 一键下载零外链离线单文件交互式 HTML 报告（完整对齐 8 个页面，包含 **Workload** 标签页的 **Workload & Replay Configuration** 区域及其 `ISL vs OSL` 散点图，以及 **Hardware** 页面），或从下拉菜单下载 **Download Full Bundle (.tar.gz)**、**Summary CSV**、**Forensics JSON** 及单项产物。
+
+### 优雅降级
+
+- **外部端点 / 无 Prometheus**：客户端遥测、调度漂移（Schedule Drift）、Warmup/Steady-State、客户端侧 Verdict 与离线 HTML 报告均正常工作；**Serving** 与 **System** 显示能力提示。
+- **Non-Admin 集群**：配置外部 `prometheus_url` 时直连查询，并在顶部标注 `Direct Prometheus (Non-Admin)`。
+- **缺失 `node_exporter` 或宿主功耗**：**System** 仅渲染可用面板并提示缺失的导出器。
+- **缺少按网卡采集的历史快照**：当缺少按网卡（`device`）遥测数据时，`Network RX / TX Throughput` 会优雅回退至节点级聚合 RX/TX 并显示简要提示。
+- **无会话标识的 Trace**：**Requests** 仍会在 **Sessions over Time** 中渲染并发槽位泳道图（`slot_lanes`），并保留 Input Sequence Length 分桶、CDF 与 **Schedule Drift**；仅多轮对话树需要会话 ID。
+- **单轮 / 无会话 Trace 或缺少原始请求导出的历史运行**：缺少多轮会话数据时，**Workload** 会展示清晰的单轮提示状态；对于缺少原始请求导出的历史运行，则自动回退到分桶级负载摘要。
+- **提前取消或部分失败**：保留已采集遥测，并在顶部显示 `Partial Results (artifacts_incomplete)` 提示条。
+
+缺失指标不是零。指标不可用时，先检查 **Logs & Configuration** 中的运行日志或采集状态，再下结论。
+
+## 使用 Ask AI 分析瓶颈与调优方案
+
+在模拟任务详情页的操作栏中点击 **Ask AI**，即可基于本次任务的测试后遥测、客户端 KPI、自动化诊断（forensics，含 `Request Stage Latency Breakdown` 各阶段占比、主导阶段归因及峰值窗口切换）以及服务端/系统指标运行 AI 驱动的瓶颈诊断与调优建议：
+
+1. **选择提供商与模型**：选择已配置的外部 AI 提供商及可选的模型覆盖。若尚未配置提供商，可点击 **Configure External Providers** 前往配置。
+2. **一键分析与快捷提示词**：运行自动瓶颈诊断，或点击快捷提示词（包括定位主要瓶颈与 vLLM / llm-d 调优参数、分析 KV 缓存 / 前缀复用 / 卸载效率，以及诊断瓶颈并制定端到端调优方案）。
+3. **多轮追问与导出**：在同一弹窗中继续进行多轮追问、重新生成或复制 Markdown 分析结果，也可点击 **Continue in Lens Assistant** 将上下文交接至 **Playground**。
+
+在将遥测上下文发送给外部提供商之前，系统会自动脱敏任务密钥与 API 密钥。
 
 ## 将结果复用为 Agentic 证据
 
@@ -63,8 +111,7 @@ Kubernetes 查询与服务容器元数据探测，获取模型、加速器和运
 证据不可用不会丢弃 Simulation 自身的测试结果。
 
 标准化要求逐请求工件完整，且与实测请求数一致。P95 由观测值计算。平均并发度使用全部
-请求（包括失败请求）的存续时间之和，除以这些请求的完整观测窗口。AIPerf 的报告时长与
-成功请求窗口比较，Trace Replayer 的报告时长与全部请求窗口比较，均保留一秒容差；
+请求（包括失败请求）的存续时间之和，除以这些请求的完整观测窗口。AIPerf 的报告时长与成功请求窗口比较并保留一秒容差；
 完整请求窗口还必须处于任务实测执行时长以内。保留原始报告时长和吞吐指标，不补造缺失指标。
 证据记录的 provenance 标明时长口径和观测窗口。
 未知共享前缀比例保持 null，相似度计算不给该维度加分。
@@ -92,8 +139,10 @@ python -m llm_d_lens.simulation.benchmark_evidence --task-id abcdef12 --apply
 
 ## 查找历史任务
 
-1. 使用搜索、状态卡片、**Model** 或 **Dataset** 缩小范围。
-2. 按日期或端点筛选时，打开 **Advanced Filters**，填写条件并点击 **Apply Filters**。
+在 **Matching Tasks（匹配任务）** 列表中，当本次运行具备硬件遥测或集群硬件 Profile 时，每个任务行都会展示检测到的加速器 **Hardware** 标签。
+
+1. 使用搜索框（同时匹配任务硬件）、状态卡片、**Model** 或 **Dataset** 缩小范围。
+2. 按日期、端点或 **Hardware**（根据已检测到的任务硬件值动态填充）筛选时，打开 **Advanced Filters**，填写条件并点击 **Apply Filters**。
 3. 使用 **Rows per page** 和分页按钮查看更多结果，**Clear Filters** 清除筛选。
 
 自动化运行见 [Trace Replayer API 参考](/api-reference/modules/simulation)（`/api/simulation`）。

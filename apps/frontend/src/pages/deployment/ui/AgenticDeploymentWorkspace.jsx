@@ -160,6 +160,23 @@ export function RetrievalEvidenceSources({ run }) {
     });
 }
 
+function preflightScopeNotes(plan) {
+    const notes = new Set();
+    for (const source of [
+        plan?.validation?.unmodeled,
+        plan?.validation?.hardware?.unmodeled,
+        plan?.source_bundle?.validation?.unmodeled,
+        plan?.source_bundle?.validation?.hardware?.unmodeled,
+    ]) {
+        if (!Array.isArray(source)) continue;
+        for (const item of source) {
+            const note = typeof item === 'string' ? item.trim() : '';
+            if (note) notes.add(note);
+        }
+    }
+    return [...notes];
+}
+
 export function DeploymentSummary({
     run,
     draft,
@@ -208,6 +225,7 @@ export function DeploymentSummary({
     ];
     const endpointMissing = checked && Boolean(plan.source_bundle) && !plan.endpoints?.some(item => item.value === endpoint);
     const enabledOptimizations = plan?.decisions?.length ? optimizationRows(plan, candidate).filter(row => row.state === 'Enabled') : null;
+    const preflightNotes = preflightScopeNotes(plan);
     // The Deploy button and readiness checks already say a checked plan awaits confirmation.
     const showHero = submitted || cleanupRequired || busy || editing || !checked;
     return <section id="deployment-summary" className="grid min-w-0 gap-5 lg:grid-cols-[minmax(0,1fr)_300px]" aria-label="Deployment summary">
@@ -229,6 +247,10 @@ export function DeploymentSummary({
                 {state ? <CheckCircle2 size={16} aria-hidden="true" /> : state === null ? <Info size={16} aria-hidden="true" /> : <Circle size={16} aria-hidden="true" />}<span>{label}</span>
             </li>)}</ul>
             {plan?.validation?.warnings?.length > 0 && <div className="deployment-check deployment-tone-warning flex-col"><p className="flex items-center gap-2 font-medium"><AlertTriangle size={16} />{plan.validation.warnings.length} configuration warning{plan.validation.warnings.length === 1 ? '' : 's'}</p><ul className="list-disc space-y-1 pl-6 text-theme-muted">{plan.validation.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></div>}
+            {preflightNotes.length > 0 && <details className="deployment-check deployment-tone-neutral flex-col">
+                <summary className="flex cursor-pointer items-center gap-2 text-sm font-medium"><Info size={14} aria-hidden="true" />Preflight scope notes ({preflightNotes.length})</summary>
+                <ul className="mt-2 list-disc space-y-1 pl-6 text-xs text-theme-muted">{preflightNotes.map(note => <li key={note}>{note}</li>)}</ul>
+            </details>}
             {!submitted && adminHandoff && (
                 <DeploymentPermissionHandoff
                     mode="bootstrap"

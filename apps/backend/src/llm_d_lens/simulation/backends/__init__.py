@@ -5,7 +5,7 @@ from typing import Any
 from ..models import SimulationResponseCodeIssueSlice, SimulationTask
 from . import registry as _registry
 from .base import SCENARIOS, Backend, CommandBackend, artifact, command_for_log
-from .registry import get_backend, list_backends, list_scenarios, register_backend
+from .registry import get_backend, get_registered_backend_or_none, list_backends, list_scenarios, register_backend
 
 
 def completion_timeline_from_artifacts(
@@ -91,6 +91,7 @@ __all__ = [
     "command_for_log",
     "completion_timeline_from_artifacts",
     "get_backend",
+    "get_registered_backend_or_none",
     "goodput_timeline_from_artifacts",
     "latency_timelines_from_artifacts",
     "list_backends",

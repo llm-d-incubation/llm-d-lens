@@ -8,12 +8,21 @@ from datetime import datetime
 from typing import Any, Literal, TypeAlias
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 SimulationTaskStatus: TypeAlias = Literal["queued", "running", "completed", "failed", "cancelled"]
 SimulationScenario: TypeAlias = Literal["chat", "api-calling", "coding"]
 Scenario: TypeAlias = SimulationScenario
-BackendName: TypeAlias = Literal["aiperf", "trace-replayer"]
+BackendName: TypeAlias = Literal["aiperf"]
+StoredBackendName: TypeAlias = Literal["aiperf", "trace-replayer"]
 TraceFormat: TypeAlias = Literal[
     "mooncake_trace",
     "bailian_trace",
@@ -59,7 +68,7 @@ class SimulationTaskCreateRequest(FrozenDomainModel):
     name: str = "Trace simulation"
     description: str = ""
     scenario: SimulationScenario
-    backend: BackendName = "trace-replayer"
+    backend: BackendName = "aiperf"
     endpoint_mode: EndpointMode = "external"
     cluster_session_id: str | None = Field(default=None, min_length=36, max_length=36)
     endpoint_namespace: str | None = None
@@ -80,6 +89,9 @@ class SimulationTaskCreateRequest(FrozenDomainModel):
     #: must call a deployment through the cluster's shared Gateway. Never
     #: persisted on the task and never returned by the API (``exclude=True``).
     api_key: str | None = Field(default=None, exclude=True, max_length=4096)
+    #: Saved personal Model Access Token id (``mat-...``). Mutually exclusive
+    #: with ``api_key``; used to mint a short-lived delegated token at probe/run time.
+    model_access_token_id: str | None = Field(default=None, min_length=1, max_length=128)
     trace_dataset: str = Field(min_length=1)
     trace_path: str = Field(min_length=1)
     duration_seconds: int = Field(default=60, ge=1)
@@ -87,6 +99,7 @@ class SimulationTaskCreateRequest(FrozenDomainModel):
     trace_start_seconds: float = Field(default=0, ge=0)
     trace_end_seconds: float | None = Field(default=None, gt=0)
     trace_timeout_seconds: int = Field(default=3600, ge=1)
+    grace_period_seconds: float = Field(default=30.0, ge=0.0, le=3600.0)
     fixed_schedule: bool = True
     stream: bool = True
     backend_options: dict[str, Any] = Field(default_factory=dict)
@@ -99,6 +112,14 @@ class SimulationTaskCreateRequest(FrozenDomainModel):
             raise ValueError("Input should be a valid HTTP or HTTPS URL")
         return value
 
+    @field_validator("backend_options")
+    @classmethod
+    def validate_backend_options_keys(cls, value: dict[str, Any]) -> dict[str, Any]:
+        for key in value:
+            if isinstance(key, str) and key.startswith("__lens_"):
+                raise ValueError("backend_options keys starting with '__lens_' are reserved")
+        return value
+
     @model_validator(mode="after")
     def validate_trace_range(self) -> SimulationTaskCreateRequest:
         if self.trace_end_seconds is not None and self.trace_end_seconds <= self.trace_start_seconds:
@@ -107,8 +128,10 @@ class SimulationTaskCreateRequest(FrozenDomainModel):
 
     @model_validator(mode="after")
     def validate_model_service_target(self) -> SimulationTaskCreateRequest:
-        if self.model_service_group_id and not self.api_key:
-            raise ValueError("model_service_group_id requires api_key (a model access token)")
+        if self.api_key and self.model_access_token_id:
+            raise ValueError("Provide either api_key or model_access_token_id, not both")
+        if self.model_service_group_id and not (self.api_key or self.model_access_token_id):
+            raise ValueError("model_service_group_id requires api_key or model_access_token_id (a model access token)")
         return self
 
 
@@ -132,6 +155,14 @@ class SimulationTaskRerunRequest(FrozenDomainModel):
     model_service_group_id: str | None = None
     #: Re-supply the model access token for a rerun; it is never persisted.
     api_key: str | None = Field(default=None, exclude=True, max_length=4096)
+    model_access_token_id: str | None = Field(default=None, min_length=1, max_length=128)
+    grace_period_seconds: float | None = Field(default=None, ge=0.0, le=3600.0)
+
+    @model_validator(mode="after")
+    def validate_token_source(self) -> SimulationTaskRerunRequest:
+        if self.api_key and self.model_access_token_id:
+            raise ValueError("Provide either api_key or model_access_token_id, not both")
+        return self
 
 
 class TraceDatasetDownloadRequest(FrozenDomainModel):
@@ -142,6 +173,13 @@ class TraceDatasetDownloadRequest(FrozenDomainModel):
 class ModelDiscoveryRequest(FrozenDomainModel):
     endpoint_url: str = Field(min_length=1, max_length=2000)
     api_key: str | None = Field(default=None, exclude=True, max_length=4096)
+    model_access_token_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_token_source(self) -> ModelDiscoveryRequest:
+        if self.api_key and self.model_access_token_id:
+            raise ValueError("Provide either api_key or model_access_token_id, not both")
+        return self
 
 
 class SimulationArtifact(FrozenDomainModel):
@@ -172,7 +210,7 @@ class SimulationResult(BaseModel):
     model_config = ConfigDict(extra="allow", strict=True, validate_assignment=True)
 
     run_id: str
-    backend: BackendName
+    backend: StoredBackendName
     backend_version: str | None = None
     summary: dict[str, Any]
     artifacts: list[SimulationArtifact]
@@ -182,7 +220,7 @@ class SimulationResult(BaseModel):
 
 
 class SimulationConfig(FrozenDomainModel):
-    backend: BackendName
+    backend: StoredBackendName
     backend_options: dict[str, Any]
     duration_seconds: float = Field(gt=0)
     num_requests: None = None
@@ -249,9 +287,12 @@ class SimulationTask(BaseModel):
     endpoint_deployment_name: str | None = None
     endpoint_url: str
     model_name: str
+    hardware: str | None = None
     #: In-memory model access token for this run only: excluded from persistence
     #: and API responses so the plaintext never lands at rest.
     api_key: str | None = Field(default=None, exclude=True)
+    model_access_token_id: str | None = Field(default=None, min_length=1, max_length=128)
+    owner_user_id: str | None = Field(default=None, exclude=True)
     simulation: SimulationConfig
     prompt: SimulationPrompt
     task_dir: str
@@ -334,20 +375,50 @@ class SimulationResponseCodeIssue(FrozenDomainModel):
     latency_ms: float | None
     input_tokens: float | None
     output_tokens: float | None
+    category: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if self.category is None:
+            data.pop("category", None)
+        return data
 
 
 class SimulationResponseCodeIssueSlice(FrozenDomainModel):
     total: int = Field(ge=0)
     items: list[SimulationResponseCodeIssue]
+    counts_by_code: dict[str, int] = Field(default_factory=dict)
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if not self.counts_by_code and "counts_by_code" not in self.model_fields_set:
+            data.pop("counts_by_code", None)
+        return data
 
 
 class SimulationResponseCodeIssuePage(FrozenDomainModel):
     task_id: str
-    status_code: int | None
+    status_code: int | None = None
     items: list[SimulationResponseCodeIssue] = Field(serialization_alias="issues")
     total: int = Field(ge=0)
     offset: int = Field(ge=0)
     limit: int = Field(ge=1)
+    filter_code: str | None = None
+    counts_by_code: dict[str, int] = Field(default_factory=dict)
+    sort: str = "request_number"
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        data = handler(self)
+        if self.filter_code is None and "filter_code" not in self.model_fields_set:
+            data.pop("filter_code", None)
+        if not self.counts_by_code and "counts_by_code" not in self.model_fields_set:
+            data.pop("counts_by_code", None)
+        if self.sort == "request_number" and "sort" not in self.model_fields_set:
+            data.pop("sort", None)
+        return data
 
 
 class SimulationLatencyHeatmapCell(FrozenDomainModel):
@@ -377,6 +448,32 @@ class SimulationGoodputTimelinePoint(FrozenDomainModel):
     good_requests: int = Field(ge=0)
     request_throughput_rps: float = Field(ge=0)
     goodput_rps: float = Field(ge=0)
+
+
+class SimulationAIAnalysisMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=12000)
+
+
+class SimulationAIAnalysisRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider_id: str | None = Field(default=None, max_length=200)
+    model: str | None = Field(default=None, max_length=200)
+    question: str | None = Field(default=None, max_length=4000)
+    messages: list[SimulationAIAnalysisMessage] = Field(default_factory=list, max_length=20)
+
+
+class SimulationAIAnalysisResponse(BaseModel):
+    task_id: str
+    provider_id: str
+    provider_name: str
+    model: str
+    analysis: str
+    generated_at: str
+    telemetry_scope: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -412,6 +509,8 @@ class ArtifactRecord:
     rate_completed: float | None = None
     rate_output_tokens: float | None = None
     issue_failed: bool | None = None
+    s_time_drift_ms: float | None = None
+    error_category: str | None = None
 
     @property
     def latency_arrival(self) -> float | None:

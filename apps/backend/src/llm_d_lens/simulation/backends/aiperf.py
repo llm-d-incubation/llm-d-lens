@@ -6,9 +6,10 @@ import asyncio
 import math
 import os
 import sys
+from collections.abc import Mapping
 from functools import singledispatchmethod
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from llm_d_lens.infrastructure.hostos import current_host
 from llm_d_lens.infrastructure.process import run_sync, which
@@ -23,6 +24,7 @@ from ..models import (
     SimulationTask,
 )
 from ..process import CommandResult, RunContext
+from ..telemetry_post import redact_manifest_payload
 from ..traces import BasetenTrace, BaseTrace, WekaPublicDatasetTrace, trace_registry
 from .analytics import artifact_error_message
 from .analytics import (
@@ -83,7 +85,28 @@ def _metric(raw: dict, name: str) -> dict | None:
 
 def _aiperf_profiling_record(record: dict) -> bool:
     metadata = record.get("metadata")
-    return not isinstance(metadata, dict) or metadata.get("benchmark_phase") in (None, "profiling")
+    if not isinstance(metadata, dict):
+        return True
+    return metadata.get("benchmark_phase") in (None, "profiling") and metadata.get("phase_kind") in (
+        None,
+        "profiling",
+    )
+
+
+def _find_artifact_file(root: Path, filename: str) -> Path | None:
+    """Locate an artifact file under ``root``, preferring direct files and skipping ``checkpoints/``."""
+    direct = root / filename
+    if direct.is_file():
+        return direct
+    if not root.is_dir():
+        return None
+    candidates = [
+        path for path in root.rglob(filename) if path.is_file() and "checkpoints" not in path.relative_to(root).parts
+    ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda path: (len(path.relative_to(root).parts), str(path)))
+    return candidates[0]
 
 
 def _response_status_code(record: dict) -> int | None:
@@ -101,11 +124,38 @@ def _error_message(record: dict) -> str | None:
     return artifact_error_message(record, record.get("error"))
 
 
+DEFAULT_RANDOM_SEED = 666
+INFERENCEX_AGENTX_MVP_SCENARIO = "inferencex-agentx-mvp"
+INFERENCEX_AGENTX_MVP_MIN_DURATION_SECONDS = 900
+INFERENCEX_AGENTX_MVP_WEKA_DATASETS: frozenset[str] = frozenset(
+    {
+        "semianalysis_cc_traces_weka_with_subagents",
+        "semianalysis_cc_traces_weka_with_subagents_256k",
+        "semianalysis_cc_traces_weka_with_subagents_060226",
+        "semianalysis_cc_traces_weka_with_subagents_060226_256k",
+        "semianalysis_cc_traces_weka_with_subagents_060526",
+        "semianalysis_cc_traces_weka_with_subagents_060526_256k",
+        "semianalysis_cc_traces_weka_with_subagents_060826",
+        "semianalysis_cc_traces_weka_with_subagents_060826_256k",
+        "semianalysis_cc_traces_weka_061326",
+        "semianalysis_cc_traces_weka_061326_256k",
+        "semianalysis_cc_traces_weka_061526",
+        "semianalysis_cc_traces_weka_061526_256k",
+        "semianalysis_cc_traces_weka_062126",
+        "semianalysis_cc_traces_weka_062126_256k",
+    }
+)
+
+
 @register_backend
 class AIPerfBackend(CommandBackend):
     name = "aiperf"
     display_name = "AIPerf"
-    VERSION = "0.12.0"
+    VERSION = "0.14.0"
+    DEFAULT_RANDOM_SEED: ClassVar[int] = DEFAULT_RANDOM_SEED
+    INFERENCEX_AGENTX_MVP_SCENARIO: ClassVar[str] = INFERENCEX_AGENTX_MVP_SCENARIO
+    INFERENCEX_AGENTX_MVP_MIN_DURATION_SECONDS: ClassVar[int] = INFERENCEX_AGENTX_MVP_MIN_DURATION_SECONDS
+    INFERENCEX_AGENTX_MVP_WEKA_DATASETS: ClassVar[frozenset[str]] = INFERENCEX_AGENTX_MVP_WEKA_DATASETS
     # aiperf is a pure Python PyPI package. In-cluster runs use the official
     # nvcr.io/nvidia/ai-dynamo/aiperf image (see
     # llm_d_lens.simulation.incluster.incluster_image), which already has it
@@ -130,31 +180,48 @@ class AIPerfBackend(CommandBackend):
         "supports_per_request_results": True,
         "supports_cancellation": True,
         "supports_trace_range": True,
+        "supports_concurrency": True,
         "scale_factor_trace_formats": ["baseten_trace"],
+        "inferencex_agentx_mvp_weka_datasets": sorted(INFERENCEX_AGENTX_MVP_WEKA_DATASETS),
         "trace_format_capabilities": {
             "mooncake_trace": {
                 "supports_trace_range": True,
                 "supports_scale_factor": False,
+                "supports_fixed_schedule": True,
+                "supports_concurrency": True,
             },
             "bailian_trace": {
                 "supports_trace_range": True,
                 "supports_scale_factor": False,
+                "supports_fixed_schedule": True,
+                "supports_concurrency": True,
             },
             "baseten_trace": {
                 "supports_trace_range": True,
                 "supports_scale_factor": True,
+                "supports_fixed_schedule": True,
+                "supports_concurrency": True,
             },
             "burst_gpt_trace": {
                 "supports_trace_range": True,
                 "supports_scale_factor": False,
+                "supports_fixed_schedule": True,
+                "supports_concurrency": True,
             },
             "weka_public_dataset": {
                 "supports_trace_range": False,
                 "supports_scale_factor": False,
+                "supports_fixed_schedule": False,
+                "supports_concurrency": True,
             },
         },
         "advanced_options": [
-            {"name": "random_seed", "label": "Random seed", "minimum": 0},
+            {
+                "name": "random_seed",
+                "label": "Random seed",
+                "minimum": 0,
+                "default": DEFAULT_RANDOM_SEED,
+            },
             {
                 "name": "num_profile_runs",
                 "label": "Profile runs",
@@ -172,7 +239,20 @@ class AIPerfBackend(CommandBackend):
                 "label": "Session concurrency",
                 "minimum": 1,
                 "default": 1,
-                "trace_formats": ["weka_public_dataset"],
+            },
+            {
+                "name": "trajectory_start_min_ratio",
+                "label": "Trajectory start min ratio",
+                "minimum": 0.0,
+                "maximum": 1.0,
+                "default": 0.25,
+            },
+            {
+                "name": "trajectory_start_max_ratio",
+                "label": "Trajectory start max ratio",
+                "minimum": 0.0,
+                "maximum": 1.0,
+                "default": 0.75,
             },
             {
                 "name": "max_context_length",
@@ -194,11 +274,16 @@ class AIPerfBackend(CommandBackend):
         "num_profile_runs",
         "profile_run_cooldown_seconds",
         "concurrency",
+        "trajectory_start_min_ratio",
+        "trajectory_start_max_ratio",
         "max_context_length",
         "trace_idle_gap_cap_seconds",
         "error_rate_slo",
         "ttft_slo",
         "tpot_slo",
+        "e2e_slo",
+        "warmup_seconds",
+        "collect_server_telemetry",
     }
 
     @property
@@ -282,7 +367,21 @@ class AIPerfBackend(CommandBackend):
                 context.log(f"AIPerf installation completed: {destination}")
             return str(destination)
 
+    def normalize_backend_options(self, options: Mapping[str, Any]) -> dict[str, Any]:
+        normalized = dict(options)
+        if normalized.get("random_seed") is None:
+            normalized["random_seed"] = self.DEFAULT_RANDOM_SEED
+        for option in ("trajectory_start_min_ratio", "trajectory_start_max_ratio"):
+            if option not in normalized:
+                continue
+            value = normalized[option]
+            if value is None or (isinstance(value, str) and not value.strip()):
+                normalized.pop(option)
+        return normalized
+
     async def validate_backend(self, task: SimulationTask) -> None:
+        if not task.simulation.stream:
+            raise SimulationConfigurationError("AIPerf requires streaming responses (stream=True)")
         trace = task.prompt.trace
         runtime_trace = trace_registry.resolve(trace.path, trace.format)
         options = task.simulation.backend_options
@@ -317,6 +416,32 @@ class AIPerfBackend(CommandBackend):
                 or float(options[option]) < 0
             ):
                 raise SimulationConfigurationError(f"AIPerf {option} must be a non-negative number")
+        for option in ("trajectory_start_min_ratio", "trajectory_start_max_ratio"):
+            if option not in options:
+                continue
+            value = options[option]
+            if (
+                not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(float(value))
+                or not 0.0 <= float(value) <= 1.0
+            ):
+                raise SimulationConfigurationError(f"AIPerf {option} must be a finite number between 0.0 and 1.0")
+        if (
+            "trajectory_start_min_ratio" in options
+            and "trajectory_start_max_ratio" in options
+            and float(options["trajectory_start_min_ratio"]) > float(options["trajectory_start_max_ratio"])
+        ):
+            raise SimulationConfigurationError(
+                "AIPerf trajectory_start_min_ratio must be less than or equal to trajectory_start_max_ratio"
+            )
+        if (
+            "trajectory_start_min_ratio" in options or "trajectory_start_max_ratio" in options
+        ) and not self._supports_inferencex_agentx_mvp(runtime_trace, trace, options):
+            raise SimulationConfigurationError(
+                "AIPerf trajectory_start_min_ratio and trajectory_start_max_ratio are only supported "
+                "for inferencex-agentx-mvp compatible workloads"
+            )
         if float(options.get("profile_run_cooldown_seconds", 0)) > 0 and int(options.get("num_profile_runs", 1)) <= 1:
             raise SimulationConfigurationError(
                 "AIPerf profile_run_cooldown_seconds requires num_profile_runs greater than 1"
@@ -331,33 +456,46 @@ class AIPerfBackend(CommandBackend):
             raise SimulationConfigurationError("AIPerf synthesis_speedup_ratio must be greater than zero")
         self._validate_trace(runtime_trace, trace, options)
 
+    @staticmethod
+    def _uses_concurrency_mode(trace, options: Mapping[str, Any]) -> bool:
+        """Return whether trace replay runs in concurrency-slot mode instead of fixed schedule."""
+        return not trace.fixed_schedule or options.get("concurrency") is not None
+
+    @classmethod
+    def _supports_inferencex_agentx_mvp(
+        cls,
+        runtime_trace: BaseTrace,
+        trace: Any,
+        options: Mapping[str, Any],
+    ) -> bool:
+        """Return whether the workload supports AIPerf's ``inferencex-agentx-mvp`` scenario."""
+        if isinstance(runtime_trace, WekaPublicDatasetTrace):
+            return runtime_trace.dataset in cls.INFERENCEX_AGENTX_MVP_WEKA_DATASETS
+        return runtime_trace.format == "mooncake_trace" and cls._uses_concurrency_mode(trace, options)
+
+    @staticmethod
+    def _reject_weka_only_options(trace, options: dict) -> None:
+        unsupported = {"max_context_length", "trace_idle_gap_cap_seconds"}.intersection(options)
+        if unsupported:
+            raise SimulationConfigurationError(
+                f"AIPerf options are not supported by {trace.format}: {', '.join(sorted(unsupported))}"
+            )
+
     @singledispatchmethod
     def _validate_trace(self, runtime_trace: BaseTrace, trace, options: dict) -> None:
         raise SimulationConfigurationError(f"AIPerf does not support {runtime_trace.format}")
 
     @_validate_trace.register
     def _(self, runtime_trace: BaseTrace, trace, options: dict) -> None:
-        unsupported = {"concurrency", "max_context_length", "trace_idle_gap_cap_seconds"}.intersection(options)
-        if unsupported:
-            raise SimulationConfigurationError(
-                f"AIPerf options are not supported by {trace.format}: {', '.join(sorted(unsupported))}"
-            )
-        if not trace.fixed_schedule:
-            raise SimulationConfigurationError("AIPerf Simulation requires fixed-schedule trace replay")
-        if trace.synthesis_speedup_ratio != 1:
+        self._reject_weka_only_options(trace, options)
+        if not self._uses_concurrency_mode(trace, options) and trace.synthesis_speedup_ratio != 1:
             raise SimulationConfigurationError(
                 f"AIPerf {trace.format} does not support synthesis_speedup_ratio values other than 1.0"
             )
 
     @_validate_trace.register
     def _(self, runtime_trace: BasetenTrace, trace, options: dict) -> None:
-        unsupported = {"concurrency", "max_context_length", "trace_idle_gap_cap_seconds"}.intersection(options)
-        if unsupported:
-            raise SimulationConfigurationError(
-                f"AIPerf options are not supported by {trace.format}: {', '.join(sorted(unsupported))}"
-            )
-        if not trace.fixed_schedule:
-            raise SimulationConfigurationError("AIPerf Simulation requires fixed-schedule trace replay")
+        self._reject_weka_only_options(trace, options)
 
     @_validate_trace.register
     def _(self, runtime_trace: WekaPublicDatasetTrace, trace, options: dict) -> None:
@@ -370,6 +508,7 @@ class AIPerfBackend(CommandBackend):
         self,
         runtime_trace: BaseTrace,
         trace,
+        options: dict,
         *,
         scale_flag: str,
         relative_offsets: bool,
@@ -379,10 +518,18 @@ class AIPerfBackend(CommandBackend):
             str(runtime_trace.path),
             "--custom-dataset-type",
             runtime_trace.format,
-            "--fixed-schedule",
-            scale_flag,
-            str(trace.synthesis_speedup_ratio),
         ]
+        if self._uses_concurrency_mode(trace, options):
+            concurrency = options.get("concurrency")
+            args.extend(["--concurrency", str(1 if concurrency is None else concurrency)])
+            return args
+        args.extend(
+            [
+                "--fixed-schedule",
+                scale_flag,
+                str(trace.synthesis_speedup_ratio),
+            ]
+        )
         if trace.end_seconds is not None:
             index = runtime_trace.build_timeline_index()
             offset_origin = 0.0 if relative_offsets else float(index["minimum_timestamp"])
@@ -405,6 +552,7 @@ class AIPerfBackend(CommandBackend):
         return "chat", self._file_trace_args(
             runtime_trace,
             trace,
+            options,
             scale_flag="--synthesis-speedup-ratio",
             relative_offsets=False,
         )
@@ -414,17 +562,19 @@ class AIPerfBackend(CommandBackend):
         return "completions", self._file_trace_args(
             runtime_trace,
             trace,
+            options,
             scale_flag="--replay-speedup",
             relative_offsets=True,
         )
 
     @_trace_args.register
     def _(self, runtime_trace: WekaPublicDatasetTrace, trace, options: dict) -> tuple[str, list[str]]:
+        concurrency = options.get("concurrency")
         args = [
             "--public-dataset",
             runtime_trace.dataset,
             "--concurrency",
-            str(options.get("concurrency", 1)),
+            str(1 if concurrency is None else concurrency),
         ]
         flags = {
             "max_context_length": "--max-context-length",
@@ -453,8 +603,25 @@ class AIPerfBackend(CommandBackend):
             "--ui-type",
             str(options.get("ui_type", "none")),
         ]
-        if task.simulation.stream:
-            args.append("--streaming")
+        args.extend(
+            [
+                "--streaming",
+                "--use-server-token-count",
+                "--slice-duration",
+                "1.0",
+            ]
+        )
+        if self._supports_inferencex_agentx_mvp(runtime_trace, trace, options):
+            args.extend(["--scenario", self.INFERENCEX_AGENTX_MVP_SCENARIO])
+            if (
+                task.simulation.duration_seconds < self.INFERENCEX_AGENTX_MVP_MIN_DURATION_SECONDS
+                or runtime_trace.format == "mooncake_trace"
+            ):
+                args.append("--unsafe-override")
+            if "trajectory_start_min_ratio" in options and options["trajectory_start_min_ratio"] is not None:
+                args.extend(["--trajectory-start-min-ratio", str(options["trajectory_start_min_ratio"])])
+            if "trajectory_start_max_ratio" in options and options["trajectory_start_max_ratio"] is not None:
+                args.extend(["--trajectory-start-max-ratio", str(options["trajectory_start_max_ratio"])])
         args.extend(trace_args)
         args.extend(
             [
@@ -467,8 +634,9 @@ class AIPerfBackend(CommandBackend):
         tokenizer = task.prompt.dataset.tokenizer
         if tokenizer:
             args.extend(["--tokenizer", tokenizer])
-        if "random_seed" in options:
-            args.extend(["--random-seed", str(options["random_seed"])])
+        raw_seed = options.get("random_seed")
+        seed = self.DEFAULT_RANDOM_SEED if raw_seed is None else raw_seed
+        args.extend(["--random-seed", str(seed)])
         if "num_profile_runs" in options:
             args.extend(["--num-profile-runs", str(options["num_profile_runs"])])
         if "profile_run_cooldown_seconds" in options and int(options.get("num_profile_runs", 1)) > 1:
@@ -494,7 +662,7 @@ class AIPerfBackend(CommandBackend):
         tolerate_incomplete: bool = False,
     ) -> list[ArtifactRecord]:
         root = Path(task.task_dir) / "artifacts" / self.name
-        path = next((candidate for candidate in root.rglob("profile_export.jsonl") if candidate.is_file()), None)
+        path = _find_artifact_file(root, "profile_export.jsonl")
         if path is None:
             return []
         records: list[ArtifactRecord] = []
@@ -512,17 +680,30 @@ class AIPerfBackend(CommandBackend):
                 value = _number(raw.get("value") if isinstance(raw, dict) else raw, float("nan"))
                 return value if math.isfinite(value) else None
 
+            input_tokens = metric("input_sequence_length")
+            if input_tokens is None:
+                input_tokens = metric("usage_prompt_tokens")
             output_tokens = metric("output_sequence_length")
+            if output_tokens is None:
+                output_tokens = metric("usage_completion_tokens")
             mismatch_percent = metric("osl_mismatch_diff_pct")
             requested_output_tokens = output_tokens
             if output_tokens is not None and mismatch_percent is not None:
                 ratio = 1 + mismatch_percent / 100
                 if ratio > 0:
                     requested_output_tokens = round(output_tokens / ratio)
-            started = _number(metadata.get("request_start_ns"), float("nan")) / 1_000_000_000
-            completed = _number(metadata.get("request_end_ns"), float("nan")) / 1_000_000_000
+            started_ns = _number(metadata.get("request_start_ns"), float("nan"))
+            completed_ns = _number(metadata.get("request_end_ns"), float("nan"))
+            credit_issued_ns = _number(metadata.get("credit_issued_ns"), float("nan"))
+            started = started_ns / 1_000_000_000
+            completed = completed_ns / 1_000_000_000
             arrived_value = started if math.isfinite(started) else None
             completed_value = completed if math.isfinite(completed) else None
+            drift_ms: float | None = None
+            if math.isfinite(started_ns) and math.isfinite(credit_issued_ns):
+                candidate_drift = (started_ns - credit_issued_ns) / 1_000_000
+                if candidate_drift >= 0:
+                    drift_ms = candidate_drift
             status_code = _response_status_code(record)
             error = bool(record.get("error") or record.get("timeout"))
             error_message = _error_message(record)
@@ -540,12 +721,13 @@ class AIPerfBackend(CommandBackend):
                     request_id=(
                         record.get("request_id") or metadata.get("request_id") or record.get("id") or metadata.get("id")
                     ),
-                    input_tokens=metric("input_sequence_length"),
+                    input_tokens=input_tokens,
                     output_tokens=output_tokens,
                     requested_output_tokens=requested_output_tokens,
                     latency_ms=metric("request_latency"),
                     ttft_ms=metric("time_to_first_token"),
                     tpot_ms=metric("inter_token_latency"),
+                    s_time_drift_ms=drift_ms,
                 )
             )
 
@@ -555,6 +737,16 @@ class AIPerfBackend(CommandBackend):
     def artifact_time_origin(self, records: list[ArtifactRecord]) -> float:
         return min((record.arrived for record in records if record.arrived is not None), default=0)
 
+    def expected_request_count(self, task: SimulationTask) -> int | None:
+        if self._uses_concurrency_mode(task.prompt.trace, task.simulation.backend_options):
+            return None
+        return super().expected_request_count(task)
+
+    def arrival_schedule_seconds(self, task: SimulationTask) -> list[float]:
+        if self._uses_concurrency_mode(task.prompt.trace, task.simulation.backend_options):
+            return []
+        return super().arrival_schedule_seconds(task)
+
     async def parse(
         self,
         task: SimulationTask,
@@ -562,10 +754,9 @@ class AIPerfBackend(CommandBackend):
         version: str | None,
     ) -> SimulationResult:
         root = Path(task.task_dir) / "artifacts" / self.name
-        files = sorted(path for path in root.rglob("*") if path.is_file())
 
         def named(filename: str) -> Path | None:
-            return next((path for path in files if path.name == filename), None)
+            return _find_artifact_file(root, filename)
 
         summary_path = named("profile_export_aiperf.json")
         if summary_path is None:
@@ -574,6 +765,9 @@ class AIPerfBackend(CommandBackend):
         requests_path = named("profile_export.jsonl")
         successful = failed = 0
         total_input = total_output = 0.0
+        saw_profiling_records = False
+        saw_input_tokens = False
+        saw_output_tokens = False
         completion_seconds: list[float] = []
         successful_completion_seconds: list[float] = []
         failed_completion_seconds: list[float] = []
@@ -587,8 +781,10 @@ class AIPerfBackend(CommandBackend):
 
         def visit(record: dict) -> None:
             nonlocal successful, failed, total_input, total_output
+            nonlocal saw_profiling_records, saw_input_tokens, saw_output_tokens
             if not _aiperf_profiling_record(record):
                 return
+            saw_profiling_records = True
             metadata = record.get("metadata")
             started = completed = float("nan")
             if isinstance(metadata, dict):
@@ -631,10 +827,23 @@ class AIPerfBackend(CommandBackend):
                 return
             successful += 1
             metrics = record.get("metrics") if isinstance(record.get("metrics"), dict) else {}
-            input_metric = metrics.get("input_sequence_length")
-            output_metric = metrics.get("output_sequence_length")
-            total_input += _number(input_metric.get("value") if isinstance(input_metric, dict) else None)
-            total_output += _number(output_metric.get("value") if isinstance(output_metric, dict) else None)
+
+            def _record_metric(primary: str, fallback: str) -> float:
+                for name in (primary, fallback):
+                    raw_val = metrics.get(name)
+                    parsed = _number(raw_val.get("value") if isinstance(raw_val, dict) else raw_val, float("nan"))
+                    if math.isfinite(parsed):
+                        return parsed
+                return float("nan")
+
+            input_val = _record_metric("input_sequence_length", "usage_prompt_tokens")
+            output_val = _record_metric("output_sequence_length", "usage_completion_tokens")
+            if math.isfinite(input_val):
+                saw_input_tokens = True
+                total_input += input_val
+            if math.isfinite(output_val):
+                saw_output_tokens = True
+                total_output += output_val
             timestamp = completed / 1_000_000_000 if math.isfinite(completed) else started / 1_000_000_000
             if math.isfinite(timestamp):
                 successful_completion_seconds.append(timestamp)
@@ -642,7 +851,7 @@ class AIPerfBackend(CommandBackend):
                     (
                         started / 1_000_000_000,
                         timestamp,
-                        _number(output_metric.get("value") if isinstance(output_metric, dict) else output_metric),
+                        output_val if math.isfinite(output_val) else 0.0,
                         False,
                     )
                 )
@@ -658,10 +867,14 @@ class AIPerfBackend(CommandBackend):
             total = successful + failed
         if raw.get("total_isl") is not None:
             total_input = _average(raw, "total_isl")
+        elif raw.get("total_usage_prompt_tokens") is not None:
+            total_input = _average(raw, "total_usage_prompt_tokens")
         if raw.get("total_osl") is not None:
             total_output = _average(raw, "total_osl")
         elif raw.get("total_output_tokens") is not None:
             total_output = _average(raw, "total_output_tokens")
+        elif raw.get("total_usage_completion_tokens") is not None:
+            total_output = _average(raw, "total_usage_completion_tokens")
         latency = _metric(raw, "request_latency")
         ttft = _metric(raw, "time_to_first_token")
         tpot = _metric(raw, "inter_token_latency")
@@ -700,6 +913,8 @@ class AIPerfBackend(CommandBackend):
             (summary_path, "summary", "application/json"),
             (requests_path, "per_request", "application/x-ndjson"),
             (named("profile_export_aiperf.csv"), "summary_csv", "text/csv"),
+            (named("profile_export_aiperf_timeslices.json"), "timeslices_json", "application/json"),
+            (named("profile_export_aiperf_timeslices.csv"), "timeslices_csv", "text/csv"),
             (named("inputs.json"), "inputs", "application/json"),
             (named("aiperf.log"), "tool_log", "text/plain"),
         ]:
@@ -707,11 +922,72 @@ class AIPerfBackend(CommandBackend):
                 artifacts.append(_artifact(kind, path, media))
         wall_time = (command.completed_at - command.started_at).total_seconds()
         origin_seconds = min(request_start_seconds) if request_start_seconds else 0
+        request_span = (
+            max(completion_seconds) - min(request_start_seconds)
+            if request_start_seconds and completion_seconds
+            else 0.0
+        )
+        benchmark_duration = _average(raw, "benchmark_duration")
+        num_profile_runs = max(1, int(task.simulation.backend_options.get("num_profile_runs", 1) or 1))
+        use_request_span = request_span > 0 and (num_profile_runs <= 1 or benchmark_duration <= 0)
+        duration_seconds = (
+            request_span if use_request_span else (benchmark_duration if benchmark_duration > 0 else wall_time)
+        )
+        has_raw_request_count = raw.get("request_count") is not None
+        has_raw_error_count = raw.get("error_request_count") is not None
+        has_raw_input = raw.get("total_isl") is not None or raw.get("total_usage_prompt_tokens") is not None
+        has_raw_output = (
+            raw.get("total_osl") is not None
+            or raw.get("total_output_tokens") is not None
+            or raw.get("total_usage_completion_tokens") is not None
+        )
+
+        has_request_counts = saw_profiling_records or has_raw_request_count or has_raw_error_count
+        has_input_tokens = saw_input_tokens or has_raw_input
+        has_output_tokens = saw_output_tokens or has_raw_output
+        if task.simulation.stream and successful > 0 and not has_input_tokens and not has_output_tokens:
+            warnings.append(
+                "AIPerf did not record server token counts for this task because the endpoint "
+                "omitted usage statistics in its responses."
+            )
+
+        if not use_request_span and num_profile_runs > 1:
+            per_run_successful = successful if has_raw_request_count else (successful / num_profile_runs)
+            per_run_failed = failed if has_raw_error_count else (failed / num_profile_runs)
+            rate_total = per_run_successful + per_run_failed
+            rate_input = total_input if has_raw_input else (total_input / num_profile_runs)
+            rate_output = total_output if has_raw_output else (total_output / num_profile_runs)
+        else:
+            rate_total = total
+            rate_input = total_input
+            rate_output = total_output
+
+        throughput_rps = (
+            rate_total / duration_seconds
+            if duration_seconds > 0 and has_request_counts
+            else _average(raw, "request_throughput")
+        )
+        throughput_tps = (
+            rate_output / duration_seconds
+            if duration_seconds > 0 and has_output_tokens
+            else _average(raw, "output_token_throughput")
+        )
+        input_throughput_tps = (
+            rate_input / duration_seconds
+            if duration_seconds > 0 and has_input_tokens
+            else _average(raw, "input_token_throughput")
+        )
+        total_throughput_tps = (
+            (rate_input + rate_output) / duration_seconds
+            if duration_seconds > 0 and (has_input_tokens or has_output_tokens)
+            else _average(raw, "total_token_throughput")
+        )
         throughput_timeline, error_timeline = _rate_timelines(
             rate_records,
             origin_seconds=origin_seconds,
         )
-        latency_heatmaps = self.latency_timelines_from_artifacts(task)
+        parsed_records = self.artifact_records(task)
+        latency_heatmaps = self.latency_timelines_from_artifacts(task, records=parsed_records)
         return SimulationResult(
             run_id=task.id,
             backend=self.name,
@@ -721,11 +997,11 @@ class AIPerfBackend(CommandBackend):
                 "successful_requests": successful,
                 "failed_requests": failed,
                 "success_rate": successful / total * 100 if total else 0,
-                "duration_seconds": _average(raw, "benchmark_duration") or wall_time,
-                "throughput_rps": _average(raw, "request_throughput"),
-                "throughput_tps": _average(raw, "output_token_throughput"),
-                "input_throughput_tps": _average(raw, "input_token_throughput"),
-                "total_throughput_tps": _average(raw, "total_token_throughput"),
+                "duration_seconds": duration_seconds,
+                "throughput_rps": throughput_rps,
+                "throughput_tps": throughput_tps,
+                "input_throughput_tps": input_throughput_tps,
+                "total_throughput_tps": total_throughput_tps,
                 "request_error_rate": _average(raw, "request_error_rate"),
                 "effective_concurrency": _average(raw, "effective_concurrency"),
                 "total_input_tokens": total_input,
@@ -764,9 +1040,9 @@ class AIPerfBackend(CommandBackend):
                 "ttft_heatmap": latency_heatmaps["ttft_heatmap"],
                 "tpot_heatmap": latency_heatmaps["tpot_heatmap"],
                 "throughput_timeline": throughput_timeline,
-                "goodput_timeline": self.goodput_timeline_from_artifacts(task),
+                "goodput_timeline": self.goodput_timeline_from_artifacts(task, records=parsed_records),
                 "error_timeline": error_timeline,
-                "status_code_breakdown": self.status_code_breakdown_from_artifacts(task),
+                "status_code_breakdown": self.status_code_breakdown_from_artifacts(task, records=parsed_records),
                 "latency": latency,
                 "ttft": ttft,
                 "tpot": tpot,
@@ -774,6 +1050,6 @@ class AIPerfBackend(CommandBackend):
             },
             artifacts=artifacts,
             per_request=[],
-            backend_metrics=raw,
+            backend_metrics=redact_manifest_payload(raw),
             warnings=warnings,
         )

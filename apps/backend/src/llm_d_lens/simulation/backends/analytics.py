@@ -185,8 +185,8 @@ def latency_heatmap(
     sequence_length: SequenceLengthKind,
     sequence_length_source: SequenceLengthSource,
     origin_seconds: float = 0,
-    maximum_time_bins: int = 40,
-    maximum_sequence_length_bins: int = 20,
+    maximum_time_bins: int = 48,
+    maximum_sequence_length_bins: int = 28,
 ) -> SimulationLatencyHeatmap | None:
     values = [
         (arrived - origin_seconds, sequence, metric_ms)
@@ -202,16 +202,26 @@ def latency_heatmap(
         return None
 
     duration = max(max(arrived for arrived, _, _ in values), 0.001)
-    time_bin_count = min(maximum_time_bins, max(1, math.ceil(duration)))
+    if duration >= 1.0:
+        time_bin_count = min(maximum_time_bins, max(24, math.ceil(duration * 2)))
+    else:
+        time_bin_count = max(1, min(maximum_time_bins, len(values)))
     time_width = duration / time_bin_count
     minimum_sequence = min(sequence for _, sequence, _ in values)
     maximum_sequence = max(sequence for _, sequence, _ in values)
-    sequence_bin_count = (
-        1
-        if maximum_sequence == minimum_sequence
-        else min(maximum_sequence_length_bins, max(1, math.ceil(math.sqrt(len(values)))))
-    )
-    sequence_width = max(1, math.ceil((maximum_sequence - minimum_sequence) / sequence_bin_count))
+    if maximum_sequence == minimum_sequence:
+        sequence_bin_count = 1
+    else:
+        target_sequence_bins = min(
+            len(values),
+            int(maximum_sequence - minimum_sequence) + 1,
+            max(16, math.ceil(len(values) * 0.8)),
+        )
+        sequence_bin_count = min(maximum_sequence_length_bins, max(1, target_sequence_bins))
+    if sequence_bin_count > 1:
+        sequence_width = max(1.0, (maximum_sequence - minimum_sequence) / sequence_bin_count)
+    else:
+        sequence_width = 1.0
     buckets: dict[tuple[int, int], list[float]] = {}
     for arrived, sequence, metric_ms in values:
         time_index = min(time_bin_count - 1, int(arrived / time_width))
@@ -223,14 +233,17 @@ def latency_heatmap(
     for (time_index, sequence_index), bucket in sorted(buckets.items()):
         average = sum(bucket) / len(bucket)
         averages.append(average)
+        sequence_length_start = math.floor(minimum_sequence + sequence_index * sequence_width)
+        sequence_length_end = max(
+            sequence_length_start + 1,
+            math.ceil(min(maximum_sequence + 1, minimum_sequence + (sequence_index + 1) * sequence_width)),
+        )
         cells.append(
             {
                 "start_seconds": time_index * time_width,
                 "end_seconds": duration if time_index == time_bin_count - 1 else (time_index + 1) * time_width,
-                "sequence_length_start": math.floor(minimum_sequence + sequence_index * sequence_width),
-                "sequence_length_end": math.ceil(
-                    min(maximum_sequence + 1, minimum_sequence + (sequence_index + 1) * sequence_width)
-                ),
+                "sequence_length_start": sequence_length_start,
+                "sequence_length_end": sequence_length_end,
                 "request_count": len(bucket),
                 "average_metric_ms": average,
             }

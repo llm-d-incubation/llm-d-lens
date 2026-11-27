@@ -38,6 +38,24 @@ if TYPE_CHECKING:
 
 PER_REQUEST_FILENAME = "per_request.json"
 RESULT_EXTRA_FILENAME = "result_extra.json"
+_INTERNAL_TOKEN_ID_KEY = "__lens_model_access_token_id__"  # noqa: S105 - internal DB metadata key, not a secret
+_INTERNAL_OWNER_USER_ID_KEY = "__lens_owner_user_id__"
+_INTERNAL_HARDWARE_KEY = "__lens_hardware__"
+
+
+def _marshal_backend_options(dto: SimulationTask) -> dict[str, Any]:
+    options: dict[str, Any] = {
+        key: value
+        for key, value in dict(dto.simulation.backend_options).items()
+        if not (isinstance(key, str) and key.startswith("__lens_"))
+    }
+    if dto.model_access_token_id:
+        options[_INTERNAL_TOKEN_ID_KEY] = dto.model_access_token_id
+    if dto.owner_user_id:
+        options[_INTERNAL_OWNER_USER_ID_KEY] = dto.owner_user_id
+    if dto.hardware:
+        options[_INTERNAL_HARDWARE_KEY] = dto.hardware
+    return options
 
 
 class SimulationTaskRow(Base, DeclarativeDtoMixin):
@@ -174,6 +192,7 @@ class SimulationTaskRow(Base, DeclarativeDtoMixin):
             "endpoint_mode IN ('external', 'in-cluster', 'deployment')",
             name="ck_simulation_tasks_endpoint_mode",
         ),
+        # Keep 'trace-replayer' allowed for historical DB row read/delete compatibility.
         CheckConstraint(
             "simulation_backend IN ('aiperf', 'trace-replayer')",
             name="ck_simulation_tasks_simulation_backend",
@@ -196,6 +215,7 @@ class SimulationTaskRow(Base, DeclarativeDtoMixin):
     def from_dto(cls, dto: SimulationTask, **extra_columns: object) -> SimulationTaskRow:
         row = super().from_dto(dto, **extra_columns)
         row.id = dto.id
+        row.simulation_backend_options = _marshal_backend_options(dto)
         _sync_result(row, dto.result)
         row.created_at = _parse_timestamp(dto.created_at)
         row.started_at = _parse_timestamp(dto.started_at)
@@ -205,6 +225,7 @@ class SimulationTaskRow(Base, DeclarativeDtoMixin):
 
     def sync_from_dto(self, dto: SimulationTask, **extra_columns: object) -> None:
         super().sync_from_dto(dto, **extra_columns)
+        self.simulation_backend_options = _marshal_backend_options(dto)
         _sync_result(self, dto.result)
         self.created_at = _parse_timestamp(dto.created_at)
         self.started_at = _parse_timestamp(dto.started_at)
@@ -213,6 +234,17 @@ class SimulationTaskRow(Base, DeclarativeDtoMixin):
 
     def to_dto(self) -> SimulationTask:
         from llm_d_lens.simulation.models import SimulationTask
+
+        raw_options = dict(self.simulation_backend_options or {})
+        raw_token_id = raw_options.pop(_INTERNAL_TOKEN_ID_KEY, None)
+        raw_owner_id = raw_options.pop(_INTERNAL_OWNER_USER_ID_KEY, None)
+        raw_hardware = raw_options.pop(_INTERNAL_HARDWARE_KEY, None)
+        backend_options = {
+            key: value for key, value in raw_options.items() if not (isinstance(key, str) and key.startswith("__lens_"))
+        }
+        model_access_token_id = str(raw_token_id) if isinstance(raw_token_id, str) and raw_token_id else None
+        internal_owner_user_id = str(raw_owner_id) if isinstance(raw_owner_id, str) and raw_owner_id else None
+        hardware = str(raw_hardware).strip() if isinstance(raw_hardware, str) and raw_hardware.strip() else None
 
         payload: dict[str, object] = {
             "id": self.id,
@@ -232,9 +264,12 @@ class SimulationTaskRow(Base, DeclarativeDtoMixin):
             "endpoint_deployment_name": self.endpoint_deployment_name,
             "endpoint_url": self.endpoint_url,
             "model_name": self.model_name,
+            "hardware": hardware,
+            "model_access_token_id": model_access_token_id,
+            "owner_user_id": self.owner_user_id or internal_owner_user_id,
             "simulation": {
                 "backend": self.simulation_backend,
-                "backend_options": self.simulation_backend_options,
+                "backend_options": backend_options,
                 "duration_seconds": self.simulation_duration_seconds,
                 "num_requests": None,
                 "stream": self.simulation_stream,

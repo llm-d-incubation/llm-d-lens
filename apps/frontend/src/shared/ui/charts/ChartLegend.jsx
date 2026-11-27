@@ -17,13 +17,17 @@ import { cn } from '../../lib/cn';
 
 // Swatch legend for multi-series charts. Required whenever a chart renders
 // ≥2 series (see .agents/skills/ui/SKILL.md); single-series charts are named by their
-// title and need none. entries: [{ label, color }]
+// title and need none. entries: [{ label, color, opacity? }]
 export function ChartLegend({ entries, className }) {
     return (
         <div className={cn('flex items-center gap-4 flex-wrap', className)}>
             {entries.map((e) => (
                 <span key={e.label} className="flex items-center gap-1.5 text-[11px] text-theme-muted font-medium">
-                    <span className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: e.color }} aria-hidden="true" />
+                    <span
+                        className="w-3 h-3 rounded-sm shrink-0"
+                        style={{ backgroundColor: e.color, opacity: e.opacity ?? 1 }}
+                        aria-hidden="true"
+                    />
                     {e.label}
                 </span>
             ))}

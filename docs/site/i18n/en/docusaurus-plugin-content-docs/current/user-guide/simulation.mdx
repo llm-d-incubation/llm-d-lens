@@ -3,19 +3,21 @@ title: Trace Replayer
 description: Replay request traffic against a model and inspect latency, throughput and errors.
 ---
 
-Use **Trace Replayer** to replay a trace dataset against a model service or an endpoint URL.
+Use **Trace Replayer** to replay a trace dataset against a model service or an endpoint URL using **AIPerf** as the execution backend.
 
 ## Create a simulation task
 
 1. Open **Trace Replayer** and click **New Task** at the right of the task-status cards, beside the icon-only refresh button.
 2. In **Benchmark & Endpoint**, choose **Benchmark tool**.
 3. Under **Inference Endpoint**, choose **Model Service** or **Endpoint URL** using the table below.
-4. Enter **Model access token**, then check the resolved **Model**.
+4. Select an active **Model access token** from the dropdown (use **Refresh** to reload your keys, or follow the empty-state link directly to **API keys -> Create key** if none exist; for **Endpoint URL**, you can also choose **None (unauthenticated endpoint)**), then check the resolved **Model**. Raw token secrets are never persisted in task records.
 5. In **Scenario & Prompt**, select a scenario and **Trace dataset**. Click **Download dataset** if it is not downloaded.
 6. For a dataset with a timeline, select the replay start/end, scale factor and duration.
-7. In **Load & Backend**, review **Stream responses**. Add TTFT, TPOT or error-rate targets only if you want a pass/fail assessment.
+7. In **Load & Backend**, review **Stream responses** (required for AIPerf). For AIPerf runs on file trace datasets (`mooncake_trace`, `bailian_trace`, `baseten_trace`, `burst_gpt_trace`), choose **Replay Pacing** (**Fixed Schedule** to replay trace timestamps or **Concurrency Slots** to drive fixed concurrency). When **Concurrency Slots** is selected—or always for `weka_public_dataset`—set **Session Concurrency** (`>= 1`). For `inferencex-agentx-mvp`-compatible workloads (compatible Weka subagent public datasets and `mooncake_trace` in **Concurrency Slots** mode), you can also configure **Trajectory start min ratio** (`trajectory_start_min_ratio`, default `0.25`) and **Trajectory start max ratio** (`trajectory_start_max_ratio`, default `0.75`). Valid values are `[0.0, 1.0]` with `min <= max`. Clearing either field omits the corresponding CLI flag so AIPerf falls back to its scenario default (`0.0` / `1.0`), while `0` is preserved as `0.0`. These fields are disabled and omitted for incompatible traces or **Fixed Schedule** mode. Task details and **Compare Runs** display this as **Pacing** (`Fixed Schedule` vs `Concurrency (<N>)`). Optionally configure **Grace period (s)** (`grace_period_seconds`, default `30`, `0–3600`) to set the post-send drain window for in-flight requests, **Warmup Window (s)**, **Collect Server Telemetry**, and SLO targets (**TTFT**, **TPOT**, **E2E Latency SLO (s)**, or **Error Rate**) if you want a pass/fail assessment.
 8. In **Task Details**, enter **Task name** and an optional description.
 9. Click **Create Task**. Open the new task card to follow its progress.
+
+AIPerf runs always enable `--use-server-token-count`, `--slice-duration 1.0`, and `--streaming`. On compatible Weka subagent public datasets and `mooncake_trace` in **Concurrency Slots** mode, Lens automatically enables `--scenario inferencex-agentx-mvp`, and adds `--unsafe-override` when the run duration is under `900` seconds or when using local `mooncake_trace`.
 
 | Endpoint choice | What to supply |
 | --- | --- |
@@ -23,7 +25,7 @@ Use **Trace Replayer** to replay a trace dataset against a model service or an e
 | **Endpoint URL** | The endpoint address you want to test, plus a token if that service requires one |
 
 To create a service and token, follow [Publish a model service](/tutorials/publish-a-model-service).
-Leave **Advanced backend settings** unchanged for the first run.
+Leave **Advanced backend settings** unchanged for the first run (or expand it to customize **Random seed** (`random_seed`), an integer `>= 0` defaulting to `666` that can be edited per run for reproducible traffic and sampling).
 
 With **Endpoint URL**, Lens validates the endpoint through its `/v1/models` API,
 using the optional model access token. You cannot continue or create a task while
@@ -38,16 +40,61 @@ resolve from the Lens backend host. For a published cluster service, choose
 **Model Service** to use the cluster's benchmark execution path. Otherwise, supply
 an endpoint reachable from the Lens backend and benchmark runtime.
 
+## Monitor a running task
+
+When a task is `queued`, `running`, or `cancelling`, the detail page displays three runtime sub-views:
+
+1. **Replay Monitor** (default):
+   - **Header & Phases**: Tracks `Preparing`, `Warmup` (when `warmup_seconds > 0`), `Profiling`, `Cooldown`, and `Collecting Telemetry`, along with **Replay Fidelity** (`On-Schedule`, `Mild Drift`, or `Lagging` based on **Schedule Drift** P90).
+   - **6 Live KPI Cards**: **Throughput**, **Rolling Latency (15s)**, **Error Rate**, **Running & Waiting Requests**, **KV Cache Usage & Prefix Cache Hit Rate**, and **Accelerator Util & Power** (titled dynamically by hardware profile).
+   - **2x2 Streaming Charts**: Client Throughput & Concurrency, Rolling Latency & Schedule Drift, vLLM Engine & EPP Load, and KV Cache & Accelerator Pressure.
+   - **Health / Bottleneck Ticker**: Surfaces sustained alerts (`ERROR_BURST`, `QUEUE_SATURATION`, `KV_EVICTION_RISK`, `PD_IMBALANCE`, `SCHEDULE_DRIFT`).
+   - **Live Error Inspector**: Click **Error Rate** (or its `4xx`/`5xx`/`Timeout`/`Transport` badges), **Failed: N** in the header, or an **`ERROR_BURST`** alert to open the live error drawer with status-code filter pills, `3s` auto-refresh toggle, and one-click error copy.
+2. **Live Monitoring**:
+   - Displays the real-time `llm-d` deployment **Flow Map** (`Users -> Inference Gateway -> EPP -> Prefill / Decode / Worker Pods -> Output`).
+   - For multi-member **Model Service** groups, use the **Deployment execution** selector to switch between backend member instances. If monitoring is not yet enabled on the deployment, click **Enable monitoring / retry**.
+3. **Logs & Configuration**:
+   - Streams `AIPerf` stdout/stderr with ANSI stripping, keyword search, and error-only filtering alongside the run configuration.
+
 ## Read the result
 
-1. Open the task card.
-2. In **Summary**, check the task state, completed requests and key metrics.
-3. Use **Latency** to inspect TTFT and TPOT over time, and **Throughput** to inspect processing rate.
-4. Open **Errors & Logs** to investigate failures.
-5. In **Artifacts**, click **Download** beside each file you want to keep.
+Once a task reaches a terminal state (`completed`, `failed`, or `cancelled`), Lens opens the persistent **8-Tab Post-Run Workspace**. The Task Details header metadata strip displays **Hardware** alongside **Model**, **Backend**, **Dataset**, and **Pacing** (showing the detected accelerator model/profile, or `External / Not reported` for external endpoints without hardware telemetry):
 
-Missing measurements are not zero. If a metric is unavailable, check **Task Log**
-for a failed run or collection problem before drawing conclusions.
+1. **Overview**: Shows the **Automated Verdict** hero card, **SLO Attainment**, **Throughput vs Goodput**, Warmup vs Steady-State KPI tiles, and 5 overview charts (including dual-source **In-Flight Concurrency**, **Warmup vs Steady-State Latency**, and Accelerator Power & Energy, with a send-vs-drain boundary marker on timelines when a grace drain window is present).
+2. **Workload**: Opens with a scannable **Workload & Replay Configuration** summary card covering **Dataset** (dataset name, trace format, and scenario), **Replay Time Range & Duration/Warmup** (the source trace replay slice `start_seconds`–`end_seconds`, or full trace from `start_seconds` when unbounded, together with configured replay duration, warmup period, and optional grace period), and **Pacing Mode, Configured Concurrency & Scale Factor** (**Concurrency** pacing with the user-configured concurrency slot limit or **Fixed Schedule** with trace-driven timestamps, plus the replay time scale factor)—remaining visible even for legacy summary-only runs where detailed per-request workload distributions are unavailable. Below it, profiles the replayed request workload in sync with the **Profiling Steady-State** / **Full Run** analysis window toggle, organized under a sticky sub-category filter bar (`All`, `Summary`, `Input Sequence Length`, `Output Sequence Length`, `ISL vs OSL`, `Concurrency & Arrival`, `Multi-Turn & Prefix`) matching the **Serving** tab layout—displaying Input Sequence Length (ISL) & Output Sequence Length (OSL) histograms, empirical CDFs, and 6-stat summaries (`Min / P50 / Mean / P90 / P99 / Max` plus `CV`), OSL/ISL decode intensity ratio and **Prefill-Heavy** (`< 0.25`) / **Balanced** (`0.25–1.0`) / **Decode-Heavy** (`> 1.0`) regime shares, a per-request **Input Sequence Length vs Output Sequence Length** (`ISL vs OSL`) scatter chart colored by decode regime with an `OSL = ISL` reference diagonal alongside ISL-bucketed ISL vs OSL joint profiles, exact event-sweep in-flight concurrency residency distribution and concurrency / arrival vs completion rate timelines, and multi-turn & reusable-prefix context growth.
+3. **Bottlenecks**: Lists ranked findings with tuning recommendations, **Request Stage Latency Breakdown** (stacked `EPP Scheduling`, `Queue Time`, `Prefill Time`, and `Decode Time` with `P50`/`P90` toggle, E2E/TTFT stage `%` shares, dominant-stage attribution, and peak-window shift detection), **Per-Role Saturation Timeline**, **TTFT Stage Decomposition**, **Multi-Turn Prefix Cache Reuse**, **EPP Predicted vs vLLM Actual Prefix Cache Hit Rate**, and **Per-Pod Load Skew**.
+4. **Serving**: Renders the recorded historical **Flow Map** (`Requests` / `Tokens`), **Inference Gateway** & **EPP** routing, vLLM engine metrics, topology-aware CPU Tier KV Offload metrics (`CPU KV Cache Usage`, `KV Offload Throughput`, `KV Restore Throughput`, `KV Offload Lookup Sync Delay (P95)`) on **Aggregated** deployments plus inter-pod `NIXL KV Transfer` metrics on **P/D Disaggregation** deployments, profile-driven Accelerator Telemetry, and **Grafana Deep Links** scoped to the exact run window.
+5. **Requests**: Displays Trace Replay Fidelity (**Schedule Drift**) spanning the active send window (`dispatch_duration_seconds`), **Sessions over Time** swimlanes (packing requests into **Concurrent Session Slots** `S1..Sn`—one row per concurrent slot reused once its last request finishes—colored by prompt prefix-cache hit tier: `cold (<10%)`, `partial (10–70%)`, `warm (≥70%)`, with an optional shaded warmup span; in both the live **Requests** tab and the standalone offline HTML report, clicking any turn block of a multi-turn session highlights all turns belonging to that session across concurrent slots, dims unrelated requests, draws dashed chronological connectors between consecutive turns, and displays a selection summary pill with a **Clear** button—click the turn again, click the chart background, press `Escape`, or click **Clear** to clear the highlight), Input Sequence Length & Prefix Cache Hit buckets and per-request **TTFT by Time and Input Sequence Length** / **TPOT by Time and Output Sequence Length** scatter plots (each dot represents an individual request colored by its TTFT/TPOT, synced with the **Profiling Steady-State** / **Full Run** window toggle), Conversation Structure, CDF & full percentile table, and error drill-down.
+6. **System**: Shows host CPU, memory, disk, network, and power metrics from `node-exporter` for the serving nodes. Supports interactive **Node Scope** switching—click **Target Nodes** badges, use the top **Scope** selector or the synchronized **Charts Scope** bar directly above the time-series charts, or click a row in **Per-Node Summary**—to inspect either `All Nodes (Aggregate)` or an individual serving node across all 4 chart families (`Host CPU Utilization`, `Host Memory & Disk I/O`, `Network RX / TX Throughput`, and `Host & Accelerator Power`), both in the live UI and in the standalone HTML report. On `Network RX / TX Throughput`, switch between `All NICs (Total)` (aggregate RX/TX excluding loopback and ephemeral virtual/CNI interfaces while preserving physical, bonded, VLAN, and RDMA/RoCE/InfiniBand interfaces), `By NIC` multi-interface comparison, and individual interface drill-down scoped to the active node or aggregated across target nodes.
+7. **Hardware**: Presents the profile-driven hardware configuration of the tested environment across four sections—**Hardware Overview** KPIs (target mode, cluster/namespace, topology, accelerator model/profile, participating nodes and pods, allocated accelerators, device memory, and host CPU/memory), **Node Hardware Specifications** (per-node accelerator inventory, host CPU/memory, OS/kernel/runtime details, with click-through to the **System** tab scoped to that node), **Serving Pod Hardware Allocation** (per-pod role, node placement, allocated accelerators, and CPU/memory requests and limits), and **KV Cache & Memory Hierarchy** (accelerator memory, KV cache utilization, and CPU-tier offload configuration when enabled). Gracefully degrades with an informative notice for external endpoints or legacy runs without hardware telemetry.
+8. **Logs & Configuration**: Shows the target summary (including detected **Hardware**), sanitized `run-manifest.yaml` (including `grace_period_seconds`), searchable lifecycle/tool logs, and the **Artifacts Download Hub**.
+
+Use the workspace toolbar to:
+- Toggle between **Profiling Steady-State** (excludes `warmup_seconds`) and **Full Run**.
+- Click **Compare Runs** to compare 2–3 runs side by side (including `grace_period_seconds` in run configuration).
+- Click **Download HTML Report** for a zero-dependency, offline single-file interactive HTML report with full 8-section parity (including the **Workload** tab's **Workload & Replay Configuration** section and `ISL vs OSL` scatter chart, and the **Hardware** page), or use the dropdown for **Download Full Bundle (.tar.gz)**, **Summary CSV**, **Forensics JSON**, and individual artifacts.
+
+### Graceful degradation
+
+- **External endpoints / no Prometheus**: Client-side telemetry, Schedule Drift, Warmup/Steady-State, client-only verdicts, and offline HTML reports work normally; **Serving** and **System** display capability notices.
+- **Non-Admin clusters**: Uses direct `prometheus_url` queries when configured and labels the telemetry source as `Direct Prometheus (Non-Admin)`.
+- **Missing `node_exporter` or host power**: **System** renders only available panels and notes missing exporters.
+- **Legacy snapshots without per-NIC collection**: `Network RX / TX Throughput` gracefully falls back to node-level aggregate RX/TX with a subtle notice when per-NIC (`device`) telemetry is absent.
+- **Session-less traces**: **Requests** still renders the concurrent slot swimlane (`slot_lanes`) in **Sessions over Time** and keeps input sequence length buckets, CDF, and **Schedule Drift**; only multi-turn conversation trees require session IDs.
+- **Single-turn / sessionless traces or legacy runs without raw request exports**: **Workload** displays an informative single-turn state when multi-turn session data is absent, and gracefully falls back to bucket-level workload summaries on legacy runs without raw request exports.
+- **Partial or cancelled runs**: Retains collected telemetry and displays a `Partial Results (artifacts_incomplete)` banner.
+
+Missing measurements are not zero. If a metric is unavailable, check **Logs & Configuration** for a failed run or collection problem before drawing conclusions.
+
+## Ask AI to diagnose bottlenecks
+
+In the Simulation task details action bar, click **Ask AI** to run AI-powered bottleneck diagnosis and tuning recommendations grounded in the task's post-run telemetry, client KPIs, automated forensics (including `Request Stage Latency Breakdown` stage shares, dominant-stage attribution, and peak-window shift), and server/system metrics:
+
+1. **Select provider and model**: Choose a configured External AI Provider and an optional model override. If no provider is configured yet, click **Configure External Providers** to set one up.
+2. **One-click analysis and quick prompts**: Run the automatic bottleneck diagnosis, or pick a quick-prompt chip (including primary bottleneck & vLLM / llm-d tuning parameters, KV cache / prefix reuse / offload efficiency analysis, and an end-to-end bottleneck diagnosis & tuning plan).
+3. **Follow up and export**: Ask multi-turn follow-up questions in the same modal, regenerate or copy the Markdown analysis, or click **Continue in Lens Assistant** to hand off the context to **Playground**.
+
+Task secrets and API keys are automatically redacted before telemetry context is sent to the External Provider.
 
 ## Reuse results as Agentic evidence
 
@@ -76,8 +123,7 @@ The Simulation itself still retains its result if evidence is unavailable.
 Normalization requires complete request artifacts and matching measured counts.
 P95 latency is calculated from observations. Mean concurrency uses the summed
 lifetimes of all requests divided by their full observed window, including failures.
-AIPerf's reported duration is checked against successful requests; Trace Replayer's
-duration is checked against all requests. Both retain a one-second tolerance, and
+AIPerf's reported duration is checked against successful requests with a one-second tolerance, and
 the full request window must also fit within the task's measured execution duration.
 Reported durations and throughput metrics are preserved; missing metrics are not
 invented. Record provenance identifies the duration scope and observed windows.
@@ -108,8 +154,10 @@ Download required artifacts before deletion.
 
 ## Find an earlier task
 
-1. Use search, status cards, **Model** or **Dataset** to narrow the list.
-2. For a date range or endpoint, open **Advanced Filters**, fill the fields and click **Apply Filters**.
+In **Matching Tasks**, each task row displays a detected accelerator **Hardware** chip when hardware telemetry or a cluster hardware profile is available for the run.
+
+1. Use search (which also matches task hardware), status cards, **Model**, or **Dataset** to narrow the list.
+2. For a date range, endpoint, or **Hardware** filter (populated dynamically from detected task hardware values), open **Advanced Filters**, fill the fields, and click **Apply Filters**.
 3. Use **Rows per page** and the pager for more results. **Clear Filters** resets the list.
 
 For automated runs, see the [Trace Replayer API reference](/api-reference/modules/simulation) (`/api/simulation`).

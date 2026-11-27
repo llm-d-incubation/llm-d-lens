@@ -6,7 +6,6 @@ from types import SimpleNamespace
 import pytest
 
 from llm_d_lens.simulation.backends.aiperf import _error_message as aiperf_error
-from llm_d_lens.simulation.backends.trace_replayer import _error_message as replayer_error
 from llm_d_lens.simulation.progress import report_request_progress
 
 
@@ -52,10 +51,8 @@ async def test_progress_waits_for_readiness_and_preserves_totals(counts, percent
             await task
 
 
-def test_artifact_error_field_precedence_is_tool_specific():
+def test_artifact_error_field_precedence():
     assert aiperf_error({"error": {}, "timeout": "timed out"}) == "{}"
-    assert replayer_error({"error": {}, "timeout": "timed out"}) == "timed out"
-    for formatter in (aiperf_error, replayer_error):
-        assert formatter({"error": {"detail": "failure"}}) == "failure"
-        assert formatter({"message": "x" * 1100}) == "x" * 1000
-        assert formatter({}) is None
+    assert aiperf_error({"error": {"detail": "failure"}}) == "failure"
+    assert aiperf_error({"message": "x" * 1100}) == "x" * 1000
+    assert aiperf_error({}) is None

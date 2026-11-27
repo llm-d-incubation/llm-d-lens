@@ -79,20 +79,31 @@ export function PickerSelect({ value, onChange, options, placeholder = 'Select',
     );
 }
 
-export function Label({ className, children, help, ...props }) {
+function isStructuredHelp(value) {
+    return Boolean(
+        value
+        && typeof value === 'object'
+        && !Array.isArray(value)
+        && !React.isValidElement(value)
+        && ('text' in value || 'formula' in value)
+    );
+}
+
+export function Label({ className, children, help, helpFormula, ...props }) {
+    const hasHelp = Boolean(help || helpFormula);
     const label = (
         <label
-            className={cn('block text-xs font-semibold text-slate-600 dark:text-slate-400', help ? 'mb-0' : 'mb-1.5', className)}
+            className={cn('block text-xs font-semibold text-slate-600 dark:text-slate-400', hasHelp ? 'mb-0' : 'mb-1.5', className)}
             {...props}
         >
             {children}
         </label>
     );
-    if (!help) return label;
+    if (!hasHelp) return label;
     return (
         <div className="relative mb-1.5 flex items-center gap-1.5">
             {label}
-            <HelpTooltip label={`${typeof children === 'string' ? children : 'Field'} help`}>
+            <HelpTooltip label={`${typeof children === 'string' ? children : 'Field'} help`} formula={helpFormula}>
                 {help}
             </HelpTooltip>
         </div>
@@ -185,19 +196,80 @@ export const Checkbox = React.forwardRef(function Checkbox({ className, label, .
     );
 });
 
-export function HelpTooltip({ label, children, trigger, className, iconSize = 14, tooltipClassName = 'inset-x-0 top-full pt-1' }) {
+export function HelpTooltip({
+    label,
+    children,
+    formula,
+    trigger,
+    className,
+    iconSize = 14,
+    tooltipClassName,
+    align,
+    placement = 'bottom',
+    asSpan = false,
+    nonInteractive = false,
+}) {
     const helpId = React.useId();
+    const useSpanTrigger = Boolean(asSpan || nonInteractive);
+    const structured = isStructuredHelp(children);
+    const body = structured ? children.text : children;
+    const resolvedFormula = formula ?? (structured ? children.formula : undefined);
+    const hasFormula = typeof resolvedFormula === 'string' && resolvedFormula.trim().length > 0;
+    const widthClassName = hasFormula ? 'w-72 max-w-[min(22rem,85vw)]' : 'w-64 max-w-[min(18rem,80vw)]';
+    const positioningClassName = align
+        ? cn(
+            placement === 'top' ? 'bottom-full pb-1.5' : 'top-full pt-1.5',
+            align === 'end' ? 'right-0' : align === 'center' ? 'left-1/2 -translate-x-1/2' : 'left-0',
+            widthClassName,
+            tooltipClassName,
+        )
+        : (tooltipClassName ?? (hasFormula ? 'left-0 top-full pt-1 w-72 max-w-[min(22rem,85vw)]' : 'inset-x-0 top-full pt-1'));
+
     return (
-        <span className={cn('group inline-flex', className)}>
-            {trigger ? React.cloneElement(trigger, { 'aria-describedby': helpId }) : <button type="button" aria-label={label}
-                aria-describedby={helpId}
-                className="inline-flex rounded-full p-0.5 text-theme-muted hover:text-theme-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40">
-                <CircleHelp size={iconSize} aria-hidden="true" />
-            </button>}
-            <span className={cn('invisible absolute z-10 group-hover:visible group-focus-within:visible', tooltipClassName)}>
-                <span id={helpId} role="tooltip"
-                    className="block rounded-lg border border-theme-border bg-theme-card p-3 text-xs font-normal leading-relaxed text-theme-text shadow-lg">
-                    {children}
+        <span className={cn('group inline-flex', align && 'relative', className)}>
+            {trigger ? React.cloneElement(trigger, { 'aria-describedby': helpId }) : useSpanTrigger ? (
+                <span
+                    tabIndex={0}
+                    aria-label={label}
+                    aria-describedby={helpId}
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') e.stopPropagation(); }}
+                    className="inline-flex cursor-help rounded-full p-0.5 text-theme-muted hover:text-theme-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40"
+                >
+                    <CircleHelp size={iconSize} aria-hidden="true" />
+                </span>
+            ) : (
+                <button
+                    type="button"
+                    aria-label={label}
+                    aria-describedby={helpId}
+                    className="inline-flex rounded-full p-0.5 text-theme-muted hover:text-theme-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40"
+                >
+                    <CircleHelp size={iconSize} aria-hidden="true" />
+                </button>
+            )}
+            <span
+                className={cn(
+                    'invisible pointer-events-none absolute z-50 whitespace-normal group-hover:visible group-focus-within:visible group-hover:pointer-events-auto group-focus-within:pointer-events-auto',
+                    positioningClassName,
+                )}
+            >
+                <span
+                    id={helpId}
+                    role="tooltip"
+                    className="lens-help-tooltip block rounded-lg border border-theme-border bg-theme-card p-3 text-xs font-sans font-normal normal-case tracking-normal leading-relaxed text-left text-theme-text shadow-lg"
+                >
+                    {body}
+                    {hasFormula && (
+                        <span className="lens-help-formula mt-2 block border-t border-theme-border pt-2">
+                            <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wider text-theme-text/70">
+                                Formula
+                            </span>
+                            <code className="block whitespace-pre-wrap break-words rounded border border-theme-border/60 bg-theme-bg/70 px-2 py-1 font-mono text-[11px] leading-snug text-theme-text">
+                                {resolvedFormula}
+                            </code>
+                        </span>
+                    )}
                 </span>
             </span>
         </span>

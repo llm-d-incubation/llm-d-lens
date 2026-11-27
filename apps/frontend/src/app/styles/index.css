@@ -210,7 +210,7 @@ main span:has(> :only-child) + p.text-slate-600 {
   --color-theme-muted: var(--text-muted);
 }
 
-@variant dark (&:where(.dark, .dark *));
+@custom-variant dark (&:where(.dark, .dark *));
 
 @layer base {
   :root {
@@ -228,6 +228,8 @@ main span:has(> :only-child) + p.text-slate-600 {
 
     --chart-grid: #cfe9f7;
     --chart-axis: #475569;
+    --chart-cursor-fill: rgba(15, 23, 42, 0.05);
+    --chart-cursor-stroke: rgba(100, 116, 139, 0.30);
     --scrollbar-track: #f1f5f9;
     --scrollbar-thumb: #cbd5e1;
     --scrollbar-thumb-hover: #94a3b8;
@@ -248,6 +250,8 @@ main span:has(> :only-child) + p.text-slate-600 {
 
     --chart-grid: #1e293b;
     --chart-axis: #64748b;
+    --chart-cursor-fill: rgba(148, 163, 184, 0.10);
+    --chart-cursor-stroke: rgba(148, 163, 184, 0.28);
     --scrollbar-track: rgba(15, 23, 42, 0.4);
     --scrollbar-thumb: #334155;
     --scrollbar-thumb-hover: #475569;
@@ -274,6 +278,58 @@ main span:has(> :only-child) + p.text-slate-600 {
   .recharts-scatter-symbol {
     cursor: pointer !important;
   }
+}
+
+/* Recharts hover cursor & default tooltip surfaces (override Recharts #ccc / #fff inline defaults). */
+html.dark .recharts-rectangle.recharts-tooltip-cursor,
+:root.dark .recharts-rectangle.recharts-tooltip-cursor {
+  fill: var(--chart-cursor-fill, rgba(148, 163, 184, 0.10)) !important;
+}
+html:not(.dark) .recharts-rectangle.recharts-tooltip-cursor {
+  fill: var(--chart-cursor-fill, rgba(15, 23, 42, 0.05)) !important;
+}
+html.dark .recharts-curve.recharts-tooltip-cursor,
+:root.dark .recharts-curve.recharts-tooltip-cursor {
+  stroke: var(--chart-cursor-stroke, rgba(148, 163, 184, 0.28)) !important;
+}
+html:not(.dark) .recharts-curve.recharts-tooltip-cursor {
+  stroke: var(--chart-cursor-stroke, rgba(100, 116, 139, 0.30)) !important;
+}
+html.dark .recharts-default-tooltip,
+:root.dark .recharts-default-tooltip {
+  background-color: rgba(15, 23, 42, 0.96) !important;
+  border-color: rgba(51, 65, 85, 0.8) !important;
+  color: #f8fafc !important;
+}
+html.dark .recharts-default-tooltip .recharts-tooltip-label,
+:root.dark .recharts-default-tooltip .recharts-tooltip-label,
+html.dark .recharts-default-tooltip .recharts-tooltip-item,
+:root.dark .recharts-default-tooltip .recharts-tooltip-item {
+  color: #f8fafc !important;
+}
+
+/* Hardened ChartTooltip & HelpTooltip surfaces in both themes. */
+html.dark .lens-chart-tooltip,
+:root.dark .lens-chart-tooltip {
+  background-color: rgba(15, 23, 42, 0.96);
+  border-color: rgba(51, 65, 85, 0.8);
+  color: #f8fafc;
+}
+html:not(.dark) .lens-chart-tooltip {
+  background-color: rgba(255, 255, 255, 0.96);
+  border-color: #cbd5e1;
+  color: #0f172a;
+}
+html.dark .lens-help-tooltip,
+:root.dark .lens-help-tooltip {
+  background-color: rgba(15, 23, 42, 0.96);
+  border-color: rgba(51, 65, 85, 0.8);
+  color: #f8fafc;
+}
+html:not(.dark) .lens-help-tooltip {
+  background-color: rgba(255, 255, 255, 0.96);
+  border-color: #cbd5e1;
+  color: #0f172a;
 }
 
 /* Hide scrollbar for Chrome, Safari and Opera */
@@ -1588,10 +1644,16 @@ html:not(.dark) .optimization-comparison-tree [aria-pressed="true"] text {
 }
 
 /* Light mode: selected scenario uses brand blue with white ink. */
-html:not(.dark) .simulation-task-dialog .simulation-choice-active {
+html:not(.dark) .simulation-task-dialog .simulation-choice-active,
+html:not(.dark) .simulation-page .simulation-choice-active {
   background-color: #037ffc !important;
+  border-color: #037ffc !important;
   color: #ffffff !important;
   box-shadow: none !important;
+}
+html:not(.dark) .simulation-task-dialog .simulation-choice-active *,
+html:not(.dark) .simulation-page .simulation-choice-active * {
+  color: #ffffff !important;
 }
 
 /* Light mode: Request Timeline line and scrubber use brand blue / light gray. */
@@ -1687,14 +1749,21 @@ html:not(.dark) .simulation-task-dialog .simulation-load-card {
   border-color: #d1d5db !important;
 }
 
-/* Light mode: selected Simulation detail tab uses brand blue with white ink. */
+/* Light mode: selected Simulation detail tab uses brand blue with subtle surface highlight. */
+html:not(.dark) .simulation-details-page [role="tablist"]:not([aria-label="Serving sub-categories"]) [role="tab"][aria-selected="true"],
+html:not(.dark) .simulation-details-page .simulation-detail-tab-active,
 html:not(.dark) .simulation-detail-tab-active {
-  background-color: transparent !important;
+  background-color: #eef6ff !important;
   color: #037ffc !important;
+  box-shadow: inset 0 -2px 0 0 #037ffc !important;
 }
+html:not(.dark) .simulation-details-page [role="tablist"]:not([aria-label="Serving sub-categories"]) [role="tab"][aria-selected="true"] *,
+html:not(.dark) .simulation-details-page .simulation-detail-tab-active *,
 html:not(.dark) .simulation-detail-tab-active * {
   color: #037ffc !important;
 }
+html:not(.dark) .simulation-details-page [role="tablist"]:not([aria-label="Serving sub-categories"]) [role="tab"][aria-selected="true"] .simulation-detail-tab-indicator,
+html:not(.dark) .simulation-details-page .simulation-detail-tab-active .simulation-detail-tab-indicator,
 html:not(.dark) .simulation-detail-tab-active .simulation-detail-tab-indicator {
   background-color: #037ffc !important;
 }
@@ -1723,6 +1792,330 @@ html:not(.dark) .simulation-details-page .simulation-rerun-button {
 html:not(.dark) .simulation-details-page .simulation-rerun-button:hover {
   background-color: #e6f6fe !important;
   border-color: #9ca3af !important;
+}
+
+/* Light mode: shared ToggleGroup and MultiSelectDropdown controls. */
+html:not(.dark) div.lens-toggle-group[role="group"],
+html:not(.dark) .lens-toggle-group {
+  background-color: #eef2f6 !important;
+  border-color: #cbd5e1 !important;
+}
+html:not(.dark) .lens-toggle-group .lens-toggle-option {
+  background-color: transparent !important;
+  color: #475569 !important;
+}
+html:not(.dark) .lens-toggle-group .lens-toggle-option:hover:not(:disabled):not([aria-pressed="true"]) {
+  background-color: rgba(15, 23, 42, 0.06) !important;
+  color: #0f172a !important;
+}
+html:not(.dark) .lens-toggle-group .lens-toggle-option[aria-pressed="true"] {
+  background-color: #037ffc !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+  box-shadow: none !important;
+}
+html:not(.dark) .lens-toggle-group .lens-toggle-option[aria-pressed="true"] *,
+html:not(.dark) .lens-toggle-group .lens-toggle-option[aria-pressed="true"] svg {
+  color: #ffffff !important;
+}
+
+html:not(.dark) .lens-multiselect-trigger[data-has-selection="true"] {
+  border-color: #037ffc !important;
+  background-color: #eef6ff !important;
+}
+html:not(.dark) .lens-multiselect-trigger[data-has-selection="true"] .lens-multiselect-count {
+  background-color: #037ffc !important;
+  color: #ffffff !important;
+}
+html:not(.dark) div.lens-multiselect-menu[role="group"],
+html:not(.dark) .lens-multiselect-menu {
+  background-color: #ffffff !important;
+  border-color: #cbd5e1 !important;
+  box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.14), 0 4px 10px -4px rgba(15, 23, 42, 0.08) !important;
+}
+html:not(.dark) .lens-multiselect-option:hover:not(:disabled):not([aria-checked="true"]) {
+  background-color: #f1f5f9 !important;
+}
+html:not(.dark) .lens-multiselect-option[aria-checked="true"] {
+  background-color: #eef6ff !important;
+  color: #0265cb !important;
+}
+html:not(.dark) .lens-multiselect-option[aria-checked="true"] .lens-multiselect-label {
+  color: #0265cb !important;
+}
+html:not(.dark) .lens-multiselect-option[aria-checked="true"] .lens-multiselect-check {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .lens-multiselect-option[aria-checked="true"] .lens-multiselect-check svg {
+  color: #ffffff !important;
+}
+
+/* Dark mode: shared ToggleGroup and MultiSelectDropdown controls. */
+html.dark div.lens-toggle-group[role="group"],
+html.dark .lens-toggle-group {
+  background-color: #0f172a !important;
+  border-color: #1e293b !important;
+}
+html.dark .lens-toggle-group .lens-toggle-option:not([aria-pressed="true"]) {
+  background-color: transparent !important;
+  color: #94a3b8 !important;
+}
+html.dark .lens-toggle-group .lens-toggle-option:hover:not(:disabled):not([aria-pressed="true"]) {
+  background-color: rgba(148, 163, 184, 0.12) !important;
+  color: #e2e8f0 !important;
+}
+html.dark .lens-toggle-group .lens-toggle-option[aria-pressed="true"]:not([data-custom-active="true"]) {
+  background-color: #334155 !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+}
+html.dark .lens-toggle-group .lens-toggle-option[aria-pressed="true"]:not([data-custom-active="true"]) *,
+html.dark .lens-toggle-group .lens-toggle-option[aria-pressed="true"]:not([data-custom-active="true"]) svg {
+  color: #ffffff !important;
+}
+
+html.dark .lens-multiselect-trigger[data-has-selection="true"] {
+  border-color: rgba(6, 182, 212, 0.6) !important;
+  background-color: rgba(6, 182, 212, 0.1) !important;
+}
+html.dark .lens-multiselect-trigger[data-has-selection="true"] .lens-multiselect-count {
+  background-color: #06b6d4 !important;
+  color: #ffffff !important;
+}
+html.dark div.lens-multiselect-menu[role="group"],
+html.dark .lens-multiselect-menu {
+  background-color: #090d16 !important;
+  border-color: #1e293b !important;
+}
+html.dark .lens-multiselect-option:hover:not(:disabled):not([aria-checked="true"]) {
+  background-color: rgba(30, 41, 59, 0.7) !important;
+}
+html.dark .lens-multiselect-option[aria-checked="true"] {
+  background-color: rgba(6, 182, 212, 0.15) !important;
+  color: #ffffff !important;
+}
+html.dark .lens-multiselect-option[aria-checked="true"] .lens-multiselect-label {
+  color: #ffffff !important;
+}
+html.dark .lens-multiselect-option[aria-checked="true"] .lens-multiselect-check {
+  background-color: #06b6d4 !important;
+  border-color: #06b6d4 !important;
+  color: #ffffff !important;
+}
+html.dark .lens-multiselect-option[aria-checked="true"] .lens-multiselect-check svg {
+  color: #ffffff !important;
+}
+
+/* Light mode: Simulation wizard/dashboard choice cards, pills, compare rows, and details selectors. */
+html:not(.dark) .simulation-task-dialog .simulation-choice-card:is([data-selected="true"], [aria-pressed="true"]),
+html:not(.dark) .simulation-page .simulation-choice-card:is([data-selected="true"], [aria-pressed="true"]) {
+  background-color: #eef6ff !important;
+  border-color: #037ffc !important;
+  box-shadow: inset 0 0 0 1px #037ffc !important;
+}
+html:not(.dark) .simulation-task-dialog .simulation-choice-card:is([data-selected="true"], [aria-pressed="true"]) .simulation-choice-title,
+html:not(.dark) .simulation-page .simulation-choice-card:is([data-selected="true"], [aria-pressed="true"]) .simulation-choice-title {
+  color: #0265cb !important;
+}
+html:not(.dark) .simulation-task-dialog .simulation-choice-card:is([data-selected="true"], [aria-pressed="true"]) .simulation-choice-badge,
+html:not(.dark) .simulation-page .simulation-choice-card:is([data-selected="true"], [aria-pressed="true"]) .simulation-choice-badge {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .simulation-task-dialog .simulation-choice-card:is([data-selected="true"], [aria-pressed="true"]) .simulation-choice-badge svg,
+html:not(.dark) .simulation-page .simulation-choice-card:is([data-selected="true"], [aria-pressed="true"]) .simulation-choice-badge svg {
+  color: #ffffff !important;
+}
+html:not(.dark) .simulation-task-dialog .simulation-choice-card:not([data-selected="true"]):not([aria-pressed="true"]):hover,
+html:not(.dark) .simulation-page .simulation-choice-card:not([data-selected="true"]):not([aria-pressed="true"]):hover {
+  border-color: #93c5fd !important;
+  background-color: #f8fafc !important;
+}
+
+html:not(.dark) .simulation-task-dialog .simulation-choice-pill:not([aria-pressed="true"]):not([data-selected="true"]),
+html:not(.dark) .simulation-page .simulation-choice-pill:not([aria-pressed="true"]):not([data-selected="true"]),
+html:not(.dark) .simulation-details-page .simulation-choice-pill:not([aria-pressed="true"]):not([data-selected="true"]) {
+  background-color: #f1f5f9 !important;
+  border-color: #cbd5e1 !important;
+  color: #475569 !important;
+}
+html:not(.dark) .simulation-task-dialog .simulation-choice-pill:not(:disabled):not([aria-pressed="true"]):not([data-selected="true"]):hover,
+html:not(.dark) .simulation-page .simulation-choice-pill:not(:disabled):not([aria-pressed="true"]):not([data-selected="true"]):hover,
+html:not(.dark) .simulation-details-page .simulation-choice-pill:not(:disabled):not([aria-pressed="true"]):not([data-selected="true"]):hover {
+  background-color: #e2e8f0 !important;
+  border-color: #94a3b8 !important;
+  color: #0f172a !important;
+}
+html:not(.dark) .simulation-task-dialog .simulation-choice-pill:is([aria-pressed="true"], [data-selected="true"]),
+html:not(.dark) .simulation-page .simulation-choice-pill:is([aria-pressed="true"], [data-selected="true"]),
+html:not(.dark) .simulation-details-page .simulation-choice-pill:is([aria-pressed="true"], [data-selected="true"]) {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+}
+html:not(.dark) .simulation-task-dialog .simulation-choice-pill:is([aria-pressed="true"], [data-selected="true"]) *,
+html:not(.dark) .simulation-page .simulation-choice-pill:is([aria-pressed="true"], [data-selected="true"]) *,
+html:not(.dark) .simulation-details-page .simulation-choice-pill:is([aria-pressed="true"], [data-selected="true"]) * {
+  color: #ffffff !important;
+}
+
+html:not(.dark) .simulation-page .simulation-compare-check {
+  accent-color: #037ffc;
+}
+html:not(.dark) .simulation-page [data-compare-selected="true"] {
+  background-color: #eef6ff !important;
+}
+
+/* Dark mode: align simulation task cards to EvaluationTaskCard palette. */
+.dark .simulation-task-card {
+  background-color: #0c1422;
+}
+.dark .simulation-task-card[data-compare-selected="true"] {
+  background-color: rgba(6, 182, 212, 0.10);
+}
+.dark .simulation-task-card .sim-kpi-tile,
+.dark .simulation-task-card .sim-live-curve-box,
+.dark .simulation-task-card .sim-action-menu-trigger,
+.dark .simulation-task-card .sim-action-menu-popover {
+  background-color: #0a101c;
+}
+
+/* Light mode: simulation task cards mirror EvaluationTaskCard palette. */
+html:not(.dark) .simulation-task-card[data-tone="active"]:not([data-compare-selected="true"]) {
+  border-color: rgba(3, 127, 252, 0.4);
+}
+html:not(.dark) .simulation-task-card[data-tone="success"] .sim-status-badge {
+  background-color: #22c55e !important;
+  border-color: #22c55e !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .simulation-task-card[data-tone="danger"] .sim-status-badge {
+  background-color: #e11d48 !important;
+  border-color: #e11d48 !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .simulation-task-card[data-tone="active"] .sim-status-badge {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .simulation-task-card[data-tone="neutral"] .sim-status-badge {
+  background-color: #6b7280 !important;
+  border-color: #6b7280 !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .simulation-task-card .sim-status-badge,
+html:not(.dark) .simulation-task-card .sim-status-badge * {
+  color: #ffffff !important;
+}
+html:not(.dark) .simulation-task-card .sim-scenario-chip {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .simulation-task-card .sim-scenario-chip > span:first-child,
+html:not(.dark) .simulation-task-card .sim-scenario-chip [aria-describedby],
+html:not(.dark) .simulation-task-card .sim-scenario-chip [aria-describedby] svg {
+  color: #ffffff !important;
+}
+html:not(.dark) .simulation-task-card .sim-workload-chip {
+  background-color: #ffffff !important;
+  border-color: #d1d5db !important;
+  color: #4b5563 !important;
+}
+html:not(.dark) .simulation-task-card .sim-pacing-fact {
+  color: rgba(3, 127, 252, 0.8);
+}
+html:not(.dark) .simulation-task-card .sim-live-curve-box {
+  background-color: rgba(3, 127, 252, 0.04);
+  border-color: rgba(3, 127, 252, 0.22);
+}
+html:not(.dark) .simulation-task-card .sim-progress-active {
+  background-color: #037ffc;
+}
+html:not(.dark) .simulation-task-card .sim-progress-label,
+html:not(.dark) .simulation-task-card .sim-endpoint-link {
+  color: #037ffc;
+}
+html:not(.dark) .simulation-task-card .sim-action-menu-trigger {
+  background-color: #ffffff;
+  border-color: #d1d5db;
+  color: #4b5563;
+}
+html:not(.dark) .simulation-task-card .sim-action-menu-trigger:hover {
+  border-color: #9ca3af;
+  color: #111827;
+}
+html:not(.dark) .simulation-page .simulation-task-card .sim-action-menu-popover,
+html:not(.dark) .simulation-task-card .sim-action-menu-popover {
+  background-color: #ffffff;
+  border-color: #d1d5db;
+  box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.14), 0 4px 10px -4px rgba(15, 23, 42, 0.08) !important;
+}
+
+html:not(.dark) .simulation-details-page [aria-label="Serving sub-categories"] [role="tab"] {
+  background-color: #f1f5f9 !important;
+  border-color: #cbd5e1 !important;
+  color: #475569 !important;
+}
+html:not(.dark) .simulation-details-page [aria-label="Serving sub-categories"] [role="tab"]:hover:not([aria-selected="true"]) {
+  background-color: #e2e8f0 !important;
+  color: #0f172a !important;
+}
+html:not(.dark) .simulation-details-page [aria-label="Serving sub-categories"] [role="tab"][aria-selected="true"] {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+}
+html:not(.dark) .simulation-details-page [aria-label="Serving sub-categories"] [role="tab"][aria-selected="true"] * {
+  color: #ffffff !important;
+}
+
+html:not(.dark) .simulation-details-page .simulation-filter-pill,
+html:not(.dark) .simulation-error-inspector-modal .simulation-filter-pill,
+html:not(.dark) .simulation-filter-pill[aria-pressed] {
+  background-color: #f1f5f9 !important;
+  border-color: #cbd5e1 !important;
+  color: #475569 !important;
+}
+html:not(.dark) .simulation-details-page .simulation-filter-pill:hover:not(:disabled):not([aria-pressed="true"]),
+html:not(.dark) .simulation-error-inspector-modal .simulation-filter-pill:hover:not(:disabled):not([aria-pressed="true"]),
+html:not(.dark) .simulation-filter-pill[aria-pressed]:hover:not(:disabled):not([aria-pressed="true"]) {
+  background-color: #e2e8f0 !important;
+  border-color: #94a3b8 !important;
+  color: #0f172a !important;
+}
+html:not(.dark) .simulation-details-page .simulation-filter-pill[aria-pressed="true"],
+html:not(.dark) .simulation-error-inspector-modal .simulation-filter-pill[aria-pressed="true"],
+html:not(.dark) .simulation-filter-pill[aria-pressed="true"] {
+  background-color: #037ffc !important;
+  border-color: #037ffc !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+}
+html:not(.dark) .simulation-details-page .simulation-filter-pill[aria-pressed="true"] *,
+html:not(.dark) .simulation-error-inspector-modal .simulation-filter-pill[aria-pressed="true"] *,
+html:not(.dark) .simulation-filter-pill[aria-pressed="true"] * {
+  color: #ffffff !important;
+}
+html:not(.dark) .simulation-details-page .simulation-filter-pill[data-tone="error"][aria-pressed="true"],
+html:not(.dark) .simulation-error-inspector-modal .simulation-filter-pill[data-tone="error"][aria-pressed="true"],
+html:not(.dark) .simulation-filter-pill[data-tone="error"][aria-pressed="true"] {
+  background-color: #dc2626 !important;
+  border-color: #dc2626 !important;
+  color: #ffffff !important;
+}
+html:not(.dark) .simulation-details-page .simulation-filter-pill[data-tone="warn"][aria-pressed="true"],
+html:not(.dark) .simulation-error-inspector-modal .simulation-filter-pill[data-tone="warn"][aria-pressed="true"],
+html:not(.dark) .simulation-filter-pill[data-tone="warn"][aria-pressed="true"] {
+  background-color: #d97706 !important;
+  border-color: #d97706 !important;
+  color: #ffffff !important;
 }
 
 /* Light mode: module header badges match the solid Exp badge. */

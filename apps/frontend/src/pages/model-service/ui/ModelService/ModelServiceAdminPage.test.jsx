@@ -1,7 +1,9 @@
 import test, { describe } from 'node:test';
 import assert from 'node:assert/strict';
-import React, { createElement, Children } from 'react';
+import React, { act, createElement, Children } from 'react';
+import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { ApiKeysPage } from './ApiKeysPage.jsx';
 import {
     AddModelForm,
     applyGatewayConfigSaved,
@@ -691,7 +693,7 @@ describe("Service flow", () => {
                 assert.ok(box.includes(`id="${helpId}" role="tooltip"`));
                 assert.ok(box.includes(description));
                 assert.ok(box.includes(`${source}" target="_blank" rel="noopener noreferrer"`));
-                assert.match(box, /group-hover:visible group-focus-within:visible right-0 w-80 bottom-full pb-2/);
+                assert.match(box, /group-hover:visible group-focus-within:visible group-hover:pointer-events-auto group-focus-within:pointer-events-auto right-0 w-80 bottom-full pb-2/);
             }
         }
         assert.equal(new Set(helpIds).size, 8);
@@ -2863,5 +2865,235 @@ describe("Non-Admin K8s capability & handoff UX", () => {
         });
         assert.doesNotMatch(unsafeUrlSamples[0].command, /javascript:/);
         assert.match(unsafeUrlSamples[0].command, /^curl '\/chat\/completions' /);
+    });
+});
+
+describe("API keys page", () => {
+    function collectDom(root, predicate, out = []) {
+        if (!root || root.nodeType !== 1) return out;
+        if (predicate(root)) out.push(root);
+        for (const child of root.childNodes) collectDom(child, predicate, out);
+        return out;
+    }
+
+    function getProps(node) {
+        const key = Object.keys(node || {}).find((entry) => entry.startsWith('__reactProps$'));
+        return key ? node[key] : {};
+    }
+
+    async function withApiKeysDom(t, fetchHandler, run) {
+        const prevAct = globalThis.IS_REACT_ACT_ENVIRONMENT;
+        const prevDoc = globalThis.document;
+        const prevWin = globalThis.window;
+        const prevHtml = globalThis.HTMLElement;
+        const prevSvg = globalThis.SVGElement;
+        const prevFetch = globalThis.fetch;
+
+        const makeNode = (tag, doc) => ({
+            nodeType: tag === '#text' ? 3 : tag === '#comment' ? 8 : 1,
+            nodeName: tag.toUpperCase(),
+            tagName: tag.toUpperCase(),
+            namespaceURI: 'http://www.w3.org/1999/xhtml',
+            ownerDocument: doc,
+            parentNode: null,
+            childNodes: [],
+            attributes: {},
+            style: {},
+            dataset: {},
+            nodeValue: '',
+            get textContent() {
+                if (this.nodeType === 3) return this.nodeValue || '';
+                if (this.nodeType === 8) return '';
+                return this.childNodes.map((child) => child.textContent).join('');
+            },
+            set textContent(value) {
+                const text = String(value);
+                if (this.nodeType === 3) {
+                    this.nodeValue = text;
+                    return;
+                }
+                this.childNodes = text ? [doc.createTextNode(text)] : [];
+                for (const child of this.childNodes) child.parentNode = this;
+            },
+            addEventListener() {},
+            removeEventListener() {},
+            setAttribute(key, value) { this.attributes[key] = String(value); },
+            removeAttribute(key) { delete this.attributes[key]; },
+            getAttribute(key) { return key in this.attributes ? this.attributes[key] : null; },
+            hasAttribute(key) { return key in this.attributes; },
+            appendChild(child) {
+                if (child.parentNode) child.parentNode.removeChild(child);
+                child.parentNode = this;
+                this.childNodes.push(child);
+                return child;
+            },
+            insertBefore(child, reference) {
+                if (child.parentNode) child.parentNode.removeChild(child);
+                child.parentNode = this;
+                const index = reference ? this.childNodes.indexOf(reference) : -1;
+                if (index === -1) this.childNodes.push(child);
+                else this.childNodes.splice(index, 0, child);
+                return child;
+            },
+            removeChild(child) {
+                const index = this.childNodes.indexOf(child);
+                if (index !== -1) {
+                    this.childNodes.splice(index, 1);
+                    child.parentNode = null;
+                }
+                return child;
+            },
+            get firstChild() { return this.childNodes[0] || null; },
+            get nextSibling() {
+                if (!this.parentNode) return null;
+                const index = this.parentNode.childNodes.indexOf(this);
+                return index >= 0 ? this.parentNode.childNodes[index + 1] || null : null;
+            },
+            focus() {},
+            blur() {},
+            remove() { this.parentNode?.removeChild(this); },
+        });
+
+        const win = {
+            addEventListener() {},
+            removeEventListener() {},
+            setTimeout,
+            clearTimeout,
+            setInterval: () => 0,
+            clearInterval() {},
+            HTMLIFrameElement: function HTMLIFrameElement() {},
+            HTMLElement: function HTMLElement() {},
+            SVGElement: function SVGElement() {},
+            Node: function Node() {},
+        };
+        const doc = {
+            nodeType: 9,
+            hidden: true,
+            cookie: '',
+            defaultView: win,
+            documentElement: null,
+            body: null,
+            activeElement: null,
+            createElement(tag) { return makeNode(tag, doc); },
+            createElementNS(ns, tag) {
+                const node = makeNode(tag, doc);
+                node.namespaceURI = ns;
+                return node;
+            },
+            createTextNode(text) {
+                const node = makeNode('#text', doc);
+                node.nodeValue = String(text);
+                return node;
+            },
+            createComment(text) {
+                const node = makeNode('#comment', doc);
+                node.nodeValue = String(text);
+                return node;
+            },
+            addEventListener() {},
+            removeEventListener() {},
+        };
+        win.document = doc;
+        doc.documentElement = makeNode('html', doc);
+        doc.body = makeNode('body', doc);
+        doc.documentElement.appendChild(doc.body);
+
+        globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+        globalThis.document = doc;
+        globalThis.window = win;
+        globalThis.HTMLElement = win.HTMLElement;
+        globalThis.SVGElement = win.SVGElement;
+        globalThis.fetch = fetchHandler;
+
+        const container = doc.createElement('div');
+        doc.body.appendChild(container);
+        const root = createRoot(container);
+        const flush = async () => {
+            await act(async () => {
+                await Promise.resolve();
+                await Promise.resolve();
+            });
+        };
+
+        try {
+            await run({ root, doc, flush });
+        } finally {
+            await act(async () => {
+                root.unmount();
+            });
+            globalThis.IS_REACT_ACT_ENVIRONMENT = prevAct;
+            globalThis.document = prevDoc;
+            globalThis.window = prevWin;
+            globalThis.HTMLElement = prevHtml;
+            globalThis.SVGElement = prevSvg;
+            globalThis.fetch = prevFetch;
+        }
+    }
+
+    test('initialAction="create" opens the Create API key modal once and stays closed after dismissing', async (t) => {
+        const fetchedUrls = [];
+        await withApiKeysDom(
+            t,
+            async (url) => {
+                fetchedUrls.push(url);
+                return Response.json({ items: [] });
+            },
+            async ({ root, doc, flush }) => {
+                await act(async () => {
+                    root.render(createElement(
+                        AuthContext.Provider,
+                        { value: { principal: { userId: 'u-1' }, can: () => true } },
+                        createElement(ApiKeysPage, { initialAction: 'create' }),
+                    ));
+                });
+                await flush();
+
+                assert.ok(fetchedUrls.includes('/api/v1/model-service/tokens'));
+                assert.match(doc.body.textContent, /Create API key/);
+
+                const cancelButton = collectDom(doc.body, (el) => el.tagName === 'BUTTON' && el.textContent.trim() === 'Cancel')[0];
+                assert.ok(cancelButton);
+                await act(async () => {
+                    getProps(cancelButton).onClick?.();
+                });
+                await flush();
+                assert.doesNotMatch(doc.body.textContent, /Create API key/);
+
+                // Re-rendering with initialAction still "create" must not re-open the modal
+                await act(async () => {
+                    root.render(createElement(
+                        AuthContext.Provider,
+                        { value: { principal: { userId: 'u-1' }, can: () => true } },
+                        createElement(ApiKeysPage, { initialAction: 'create' }),
+                    ));
+                });
+                await flush();
+                assert.doesNotMatch(doc.body.textContent, /Create API key/);
+            },
+        );
+    });
+
+    test('auth-disabled mode skips token fetch, suppresses auto-open modal, and shows notice', async (t) => {
+        const fetchedUrls = [];
+        await withApiKeysDom(
+            t,
+            async (url) => {
+                fetchedUrls.push(url);
+                return Response.json({ items: [] });
+            },
+            async ({ root, doc, flush }) => {
+                await act(async () => {
+                    root.render(createElement(
+                        AuthContext.Provider,
+                        { value: { principal: { userId: 'system' }, can: () => true } },
+                        createElement(ApiKeysPage, { initialAction: 'create' }),
+                    ));
+                });
+                await flush();
+                assert.equal(fetchedUrls.length, 0);
+                assert.doesNotMatch(doc.body.textContent, /Create API key/);
+                assert.match(doc.body.textContent, /PRISM_AUTH_MODE=local/);
+            },
+        );
     });
 });

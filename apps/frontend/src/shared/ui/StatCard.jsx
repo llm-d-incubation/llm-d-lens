@@ -14,6 +14,7 @@
 
 import React from 'react';
 import { cn } from '../lib/cn';
+import { HelpTooltip } from './FormControls';
 
 const TONES = {
     neutral: {
@@ -51,15 +52,17 @@ export function StatCardRow({ children, actions }) {
 // summary cards. Pass onClick + active to use it as a filter toggle. Dark mode
 // uses the translucent well-lit "glass" surface (matches old common/Card
 // brightness while letting the page background bleed through).
-export function StatCard({ icon, title, value, details, onClick, active = false, className, children, compact = false, aside, tone = 'neutral' }) {
+export function StatCard({ icon, title, value, details, onClick, active = false, className, children, compact = false, aside, tone = 'neutral', help, helpFormula, helpAlign = 'start' }) {
     const Root = onClick ? 'button' : 'div';
     const toneStyles = TONES[tone] || TONES.neutral;
+    const hasHelp = Boolean(help || helpFormula);
     return (
         <Root
             onClick={onClick}
             type={onClick ? 'button' : undefined}
             aria-pressed={onClick ? active : undefined}
             className={cn(
+                'relative hover:z-30 focus-within:z-30',
                 'bg-theme-card dark:bg-slate-800/60 border border-theme-border dark:border-slate-700/60',
                 'backdrop-blur-xl rounded-xl shadow-lg flex items-start text-left transition-all',
                 compact ? 'p-4 gap-3' : 'p-6 gap-4',
@@ -73,16 +76,49 @@ export function StatCard({ icon, title, value, details, onClick, active = false,
                 <div className={cn('rounded-lg shrink-0', toneStyles.icon, compact ? 'p-2' : 'p-3 mt-1')}>{icon}</div>
             )}
             <div className="flex-1 min-w-0">
-                <p className={cn('text-slate-500 dark:text-slate-400 font-medium', compact ? 'text-xs mb-0.5' : 'text-sm mb-1')}>{title}</p>
+                {hasHelp ? (
+                    <div className={cn('flex items-center gap-1.5', compact ? 'mb-0.5' : 'mb-1')}>
+                        <p className={cn('text-slate-500 dark:text-slate-400 font-medium', compact ? 'text-xs' : 'text-sm')}>{title}</p>
+                        <HelpTooltip
+                            label={`${typeof title === 'string' ? title : 'Metric'} help`}
+                            align={helpAlign}
+                            iconSize={13}
+                            asSpan={Boolean(onClick)}
+                            formula={helpFormula}
+                        >
+                            {help}
+                        </HelpTooltip>
+                    </div>
+                ) : (
+                    <p className={cn('text-slate-500 dark:text-slate-400 font-medium', compact ? 'text-xs mb-0.5' : 'text-sm mb-1')}>{title}</p>
+                )}
                 <h3 className={cn('font-bold', toneStyles.value, compact ? 'text-lg mb-1' : 'text-2xl mb-2')}>{value}</h3>
                 {details && (
                     <div className="space-y-1">
-                        {details.map((detail, idx) => (
-                            <div key={idx} className="text-xs text-slate-500 dark:text-slate-400 flex justify-between gap-4">
-                                <span>{detail.label}:</span>
-                                <span className="font-mono text-slate-800 dark:text-slate-200">{detail.value}</span>
-                            </div>
-                        ))}
+                        {details.map((detail, idx) => {
+                            const detailHasHelp = Boolean(detail.help || detail.formula || detail.helpFormula);
+                            return (
+                                <div key={idx} className="text-xs text-slate-500 dark:text-slate-400 flex justify-between gap-4">
+                                    {detailHasHelp ? (
+                                        <span className="inline-flex items-center gap-1">
+                                            <span>{detail.label}:</span>
+                                            <HelpTooltip
+                                                label={`${typeof detail.label === 'string' ? detail.label : 'Detail'} help`}
+                                                align={helpAlign}
+                                                iconSize={12}
+                                                asSpan={Boolean(onClick)}
+                                                formula={detail.formula ?? detail.helpFormula}
+                                            >
+                                                {detail.help}
+                                            </HelpTooltip>
+                                        </span>
+                                    ) : (
+                                        <span>{detail.label}:</span>
+                                    )}
+                                    <span className="font-mono text-slate-800 dark:text-slate-200">{detail.value}</span>
+                                </div>
+                            );
+                        })}
                     </div>
                 )}
                 {children}

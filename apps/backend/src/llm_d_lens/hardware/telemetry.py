@@ -80,6 +80,7 @@ def combined_device_query(
 DEVICE_RESULT_KEYS = {
     "utilization": "gpu_utilization_percent",
     "framebuffer_used": "gpu_framebuffer_used_bytes",
+    "framebuffer_free": "gpu_framebuffer_free_bytes",
     "vram": "gpu_memory_total_bytes",
     "power": "gpu_power_watts",
     "temperature": "gpu_temperature_celsius",
@@ -153,7 +154,8 @@ def parse_device_metrics(payload: str | None, profile: HardwareProfile | None) -
                 else sum(values) / len(values)
             )
             if semantic in {"utilization", "memory_utilization", "memory_bandwidth_utilization"}:
-                device[semantic + "_ratio"] = value / 100 if source.output_unit == "percent" else value
+                ratio = value / 100 if source.output_unit == "percent" else value
+                device[semantic + "_ratio"] = min(1.0, max(0.0, ratio))
             else:
                 device[fields.get(semantic, semantic)] = value
         results.append(device)

@@ -17,6 +17,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 TOKEN_PREFIX = "lens-mk-"  # noqa: S105 - public token prefix, not a secret
+DELEGATED_TOKEN_PREFIX = "lens-mk-sel."  # noqa: S105 - public delegated token prefix, not a secret
 MAX_BACKEND_WEIGHT = 1_000_000
 BackendWeight = Annotated[int, Field(strict=True, ge=0, le=MAX_BACKEND_WEIGHT)]
 

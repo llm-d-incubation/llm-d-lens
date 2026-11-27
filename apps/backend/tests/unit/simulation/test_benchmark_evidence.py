@@ -412,67 +412,57 @@ async def test_running_snapshot_roundtrips_without_a_result(task, monkeypatch, t
     service.reset_service_state()
 
 
-@pytest.mark.parametrize("backend", ["aiperf", "trace-replayer"])
-def test_real_saved_backend_artifact_shapes_are_normalized(task, backend):
+def test_real_saved_backend_artifact_shapes_are_normalized(task):
     rows = task.result.per_request
     task.result.per_request = []
-    task.simulation = task.simulation.model_copy(update={"backend": backend})
-    task.result.backend = backend
+    task.simulation = task.simulation.model_copy(update={"backend": "aiperf"})
+    task.result.backend = "aiperf"
     task.benchmark_evidence["simulation"] = task.simulation.model_dump(mode="json")
-    directory = Path(task.task_dir) / "artifacts" / backend
+    directory = Path(task.task_dir) / "artifacts" / "aiperf"
     directory.mkdir(parents=True)
-    if backend == "aiperf":
-        filename = "profile_export.jsonl"
-        raw = [
-            {
-                "request_id": row.request_id,
-                "metadata": {
-                    "benchmark_phase": "profiling",
-                    "request_start_ns": 0,
-                    "request_end_ns": int(row.completed_at_seconds * 1e9),
-                },
-                "metrics": {
-                    key: {"value": value}
-                    for key, value in {
-                        "input_sequence_length": row.input_tokens,
-                        "output_sequence_length": row.output_tokens,
-                        "request_latency": row.latency_ms,
-                        "time_to_first_token": row.ttft_ms,
-                        "inter_token_latency": row.tpot_ms,
-                    }.items()
-                },
-            }
-            for row in rows
-        ]
-    else:
-        filename = "requests.jsonl"
-        raw = [
-            {
-                "request_id": row.request_id,
-                "s_time": 0,
-                "e_time": row.completed_at_seconds * 1000,
-                "status": 200,
-                "input_length": row.input_tokens,
-                "output_length": row.output_tokens,
-                "first_token_time": row.ttft_ms,
-                "avg_time_between_tokens": row.tpot_ms,
-            }
-            for row in rows
-        ]
-    (directory / filename).write_text("".join(json.dumps(row) + "\n" for row in raw))
+    raw = [
+        {
+            "request_id": row.request_id,
+            "metadata": {
+                "benchmark_phase": "profiling",
+                "request_start_ns": 0,
+                "request_end_ns": int(row.completed_at_seconds * 1e9),
+            },
+            "metrics": {
+                key: {"value": value}
+                for key, value in {
+                    "input_sequence_length": row.input_tokens,
+                    "output_sequence_length": row.output_tokens,
+                    "request_latency": row.latency_ms,
+                    "time_to_first_token": row.ttft_ms,
+                    "inter_token_latency": row.tpot_ms,
+                }.items()
+            },
+        }
+        for row in rows
+    ]
+    (directory / "profile_export.jsonl").write_text("".join(json.dumps(row) + "\n" for row in raw))
     records, issues = evidence.normalize_simulation_task(task)
     assert not issues
     assert records[0].metrics.ttft_p95_ms == 90
     assert records[0].metrics.tpot_p95_ms == 4
     assert records[0].workload.mean_input_tokens == 150
-    if backend == "trace-replayer":
-        for row in raw:
-            row.pop("avg_time_between_tokens")
-            row["total_time"] = 1000
-        (directory / filename).write_text("".join(json.dumps(row) + "\n" for row in raw))
-        records, issues = evidence.normalize_simulation_task(task)
-        assert not issues
-        assert records[0].metrics.tpot_p95_ms is None
+
+
+def test_historical_trace_replayer_without_per_request_is_skipped_cleanly(task):
+    task.result.per_request = []
+    task.simulation = task.simulation.model_copy(update={"backend": "trace-replayer"})
+    task.result.backend = "trace-replayer"
+    task.benchmark_evidence["simulation"] = task.simulation.model_dump(mode="json")
+    directory = Path(task.task_dir) / "artifacts" / "trace-replayer"
+    directory.mkdir(parents=True)
+    (directory / "requests.jsonl").write_text(
+        json.dumps({"request_id": "a", "s_time": 0, "e_time": 1000, "status": 200}) + "\n",
+        encoding="utf-8",
+    )
+    records, issues = evidence.normalize_simulation_task(task)
+    assert records == []
+    assert issues and issues[0]["reason"]
 
 
 @pytest.mark.asyncio

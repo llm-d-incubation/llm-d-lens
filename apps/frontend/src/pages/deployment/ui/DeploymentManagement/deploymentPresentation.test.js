@@ -1,4 +1,14 @@
-import { deploymentBenchmarkRequest, derivePodStatusGroup, effectiveStatusGroup, effectiveStatusLabel, expectedModelPodCount, successfulPagePods, summarizeStatuses } from './deploymentPresentation.js';
+import {
+    deploymentBenchmarkRequest,
+    derivePodStatusGroup,
+    effectiveStatusGroup,
+    effectiveStatusLabel,
+    expectedModelPodCount,
+    formatPodStatusLabel,
+    isFailingPod,
+    successfulPagePods,
+    summarizeStatuses,
+} from './deploymentPresentation.js';
 
 test('summary receives only successful results from the currently polled page', () => {
     const cached = { current: [], failed: [], stale: [] };
@@ -11,6 +21,7 @@ import test from 'node:test';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { DeleteDeploymentModal, executeDeploymentDeleteAction } from './DeleteDeploymentModal.jsx';
+import { PodStatusBadge } from './PodStatusBadge.jsx';
 
 
 test('benchmark requests target the execution with a preset sweep and optional P95 targets', () => {
@@ -248,4 +259,88 @@ test('DeleteDeploymentModal intercepts 409 deployment_cleanup_permission_denied 
     });
     assert.equal(errOutcome.status, 'error');
     assert.equal(genericError, 'Cluster unreachable');
+});
+
+test('isFailingPod handles Init:-prefixed failure reasons and ignores startup/terminal states', () => {
+    for (const status_reason of ['Init:0/1', 'Init:1/2', 'PodInitializing', 'ContainerCreating', 'Starting', 'Running', 'Completed', 'Terminating']) {
+        const candidate = pod({ phase: 'Pending', ready: false, status_reason, restarts: 5 });
+        assert.equal(isFailingPod(candidate), false, `${status_reason} should not be failing`);
+        assert.equal(effectiveStatusGroup({ status: 'deploying' }, [candidate]), 'In progress');
+    }
+
+    for (const status_reason of ['Init:ImagePullBackOff', 'Init:OOMKilled', 'Init:ErrImagePull']) {
+        const candidate = pod({ phase: 'Pending', ready: false, status_reason, restarts: 0 });
+        assert.equal(isFailingPod(candidate), true, `${status_reason} should fail immediately`);
+        assert.equal(effectiveStatusGroup({ status: 'deploying' }, [candidate]), 'Failed');
+    }
+
+    for (const status_reason of ['Init:CrashLoopBackOff', 'Init:Error', 'Init:ExitCode:1', 'Init:Signal:9']) {
+        const belowThreshold = pod({ phase: 'Pending', ready: false, status_reason, restarts: 2 });
+        assert.equal(isFailingPod(belowThreshold), false, `${status_reason} below threshold`);
+        assert.equal(effectiveStatusGroup({ status: 'deploying' }, [belowThreshold]), 'In progress');
+
+        const atThreshold = pod({ phase: 'Pending', ready: false, status_reason, restarts: 3 });
+        assert.equal(isFailingPod(atThreshold), true, `${status_reason} at threshold`);
+        assert.equal(effectiveStatusGroup({ status: 'deploying' }, [atThreshold]), 'Failed');
+    }
+});
+
+test('formatPodStatusLabel shows Starting only for Running non-ready pods without a distinct reason', () => {
+    assert.equal(formatPodStatusLabel({ phase: 'Running', ready: false, status_reason: 'Running' }), 'Starting');
+    assert.equal(formatPodStatusLabel({ phase: 'Running', ready: false, reason: 'Running' }), 'Starting');
+    assert.equal(formatPodStatusLabel({ phase: 'Running', ready: false, status_reason: '' }), 'Starting');
+    assert.equal(formatPodStatusLabel({ phase: 'Running', ready: true, status_reason: 'Running' }), 'Running');
+    assert.equal(formatPodStatusLabel({ phase: 'Pending', ready: false, status_reason: 'Init:0/1' }), 'Init:0/1');
+    assert.equal(formatPodStatusLabel({ phase: 'Pending', ready: false, status_reason: 'ContainerCreating' }), 'ContainerCreating');
+    assert.equal(formatPodStatusLabel({ phase: 'Succeeded', ready: false, status_reason: 'Completed' }), 'Completed');
+    assert.equal(formatPodStatusLabel({ phase: 'Running', ready: false, status_reason: 'Terminating' }), 'Terminating');
+    assert.equal(formatPodStatusLabel({ phase: 'Running', ready: false, status_reason: 'CrashLoopBackOff' }), 'CrashLoopBackOff');
+});
+
+test('PodStatusBadge renders accurate colors, precedence, and Starting tooltip', () => {
+    const renderBadge = (props) => renderToStaticMarkup(React.createElement(PodStatusBadge, props));
+
+    const startingHtml = renderBadge({ phase: 'Running', reason: 'Running', ready: false });
+    assert.match(startingHtml, /bg-sky-400 animate-pulse/);
+    assert.match(startingHtml, /ring-sky-500\/30/);
+    assert.doesNotMatch(startingHtml, /bg-amber-400/);
+    assert.match(startingHtml, /title="Status: Starting"/);
+    assert.match(startingHtml, />Starting</);
+
+    for (const reason of ['CrashLoopBackOff', 'OOMKilled', 'ImagePullBackOff', 'Error']) {
+        const runningFailureHtml = renderBadge({ phase: 'Running', reason, ready: false });
+        assert.match(runningFailureHtml, /bg-rose-500/, `${reason} in Running phase should render rose`);
+        assert.match(runningFailureHtml, /ring-rose-500\/30/);
+        assert.doesNotMatch(runningFailureHtml, /bg-amber-400/);
+        assert.match(runningFailureHtml, new RegExp(`title="Status: ${reason}"`));
+    }
+
+    for (const reason of ['Init:0/1', 'ContainerCreating', 'PodInitializing']) {
+        const pendingHtml = renderBadge({ phase: 'Pending', reason, ready: false });
+        assert.match(pendingHtml, /bg-cyan-400 animate-pulse/, `${reason} should render pulsing cyan`);
+        assert.match(pendingHtml, /ring-cyan-500\/30/);
+    }
+
+    for (const reason of ['Init:ImagePullBackOff', 'Init:OOMKilled', 'Init:CrashLoopBackOff', 'Init:ExitCode:1', 'Init:Signal:9']) {
+        const initFailureHtml = renderBadge({ phase: 'Pending', reason, ready: false });
+        assert.match(initFailureHtml, /bg-rose-500/, `${reason} should render rose`);
+        assert.match(initFailureHtml, /ring-rose-500\/30/);
+    }
+
+    const terminatingHtml = renderBadge({ phase: 'Running', reason: 'Terminating', ready: false });
+    assert.match(terminatingHtml, /bg-slate-400 animate-pulse/);
+    assert.match(terminatingHtml, /ring-slate-400\/30/);
+
+    const completedHtml = renderBadge({ phase: 'Succeeded', reason: 'Completed', ready: false });
+    assert.match(completedHtml, /bg-slate-400 /);
+    assert.doesNotMatch(completedHtml, /animate-pulse/);
+    assert.doesNotMatch(completedHtml, /bg-amber-400/);
+    assert.match(completedHtml, /ring-slate-400\/30/);
+    assert.match(completedHtml, />Completed</);
+
+    const readyHtml = renderBadge({ phase: 'Running', reason: 'Running', ready: true });
+    assert.match(readyHtml, /bg-emerald-400/);
+    assert.match(readyHtml, /ring-emerald-500\/30/);
+    assert.match(readyHtml, /title="Status: Running \(Ready\)"/);
+    assert.match(readyHtml, />Running \(Ready\)</);
 });

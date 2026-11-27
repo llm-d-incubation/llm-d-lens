@@ -29,6 +29,7 @@ from llm_d_lens.deploy.executions import DeploymentExecutionNotFoundError, get_e
 from llm_d_lens.infrastructure.kubernetes import scoped_runner
 
 from .backends import get_backend
+from .errors import SimulationConfigurationError
 from .models import ArtifactRecord, SimulationTask
 
 logger = logging.getLogger(__name__)
@@ -247,7 +248,10 @@ def _requests(task: SimulationTask) -> list[ArtifactRecord]:
     if task.result is None:
         raise ValueError("Simulation has no measured result")
     if not task.result.per_request:
-        return get_backend(task.result.backend).artifact_records(task, tolerate_incomplete=False)
+        try:
+            return get_backend(task.result.backend).artifact_records(task, tolerate_incomplete=False)
+        except SimulationConfigurationError as error:
+            raise ValueError(str(error)) from error
     records = []
     for item in task.result.per_request:
         if item.successful is None:
