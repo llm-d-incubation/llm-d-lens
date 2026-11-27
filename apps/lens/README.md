@@ -107,6 +107,45 @@ router), as `helm install --set` would. `NAMESPACE` comes from `-n`, and
 
 Gateway Mode needs a cluster Gateway, so `llmd` follows Standalone Mode.
 
+## Model files on a PVC
+
+To serve a model directory already downloaded into a PVC, pass the claim and its
+relative directory to both `plan` and `standup`:
+
+```sh
+llmd plan optimized-baseline -n <namespace> \
+  --model-pvc-claim-name model-weights \
+  --model-subpath models/Qwen3-0.6B --offline
+llmd standup optimized-baseline -n <namespace> \
+  --model-pvc-claim-name model-weights \
+  --model-subpath models/Qwen3-0.6B --wait
+```
+
+`llmd` mounts the existing claim at `/model-cache`, loads the relative directory
+from there, and configures the model server for offline Hugging Face access. The
+claim must already exist; it remains a prerequisite and is not owned or deleted
+by `llmd teardown`.
+
+By default, the PVC is applied to containers named `modelserver`,
+`modelserver-leader`, or `modelserver-worker`, including templates inside
+LeaderWorkerSets and DisaggregatedSets. For other names, pass
+`--model-container inference`; repeat the option to select several names.
+An explicit selection replaces the defaults, and every selected name must
+exist somewhere in the rendered stack. These choices persist through scale
+and migration. Pass the same options again for standup and rollout updates.
+
+Supported commands are direct `vllm serve`, `sglang serve`, and Python module
+invocations of `vllm.entrypoints.openai.api_server` or `sglang.launch_server`.
+Images with a server entrypoint may also supply only model arguments in `args`.
+The model identifier becomes the API name via `--served-model-name`, replacing
+any name already set in the container. For guides, pass it with
+`--var MODEL=...`; otherwise the rendered guide model identifier is used.
+Shell scripts, wrappers, and commands without an identifiable model argument
+are rejected rather than rewritten. Worker processes without a model argument
+need a custom overlay.
+Existing mounts at `/model-cache` must match the requested model-cache mount.
+Offline settings do not remove any Secret prerequisites in the source files.
+
 ## Inference endpoints
 
 Lens automatically discovers endpoints from the stack's rendered resources. No
