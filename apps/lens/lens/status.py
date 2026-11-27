@@ -24,6 +24,8 @@ from typing import Any
 from . import health, inventory
 from .errors import CommandError, NotReadyError
 from .kube import Kube
+from .model import object_ref
+from .plan import discover_endpoints, preferred_inference_endpoint, revalidate_endpoint
 from .policy import pod_templates, template_accelerators
 
 
@@ -37,6 +39,7 @@ def _denied(error: CommandError) -> str:
 def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]:
     record = inventory.require(kube, namespace, instance)
     objects, problems, endpoints, seen, unreadable = [], [], [], [], []
+    live_documents, available_objects = [], set()
     pods_ready = pods_total = 0
     kube.progress(f"reading {len(record.get('objects') or [])} object(s) of {instance}")
     kube.prefetch([(item["resource"], item["name"]) for item in record.get("objects") or []], namespace)
@@ -68,6 +71,9 @@ def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]
                 problems.append({"pod": "*", "reason": "PodsUnreadable", "message": _denied(error)})
         state, detail = health.evaluate(live, pods)
         objects.append({"object": ref, "state": state, "detail": detail})
+        if live and (item["kind"] == "Service" or state == "ready" or any(health.pod_ready(pod) for pod in pods)):
+            live_documents.append(live)
+            available_objects.add(object_ref(live))
         if selector:
             pods_total += sum(1 for pod in pods if not (pod.get("metadata") or {}).get("deletionTimestamp"))
             pods_ready += sum(1 for pod in pods if health.pod_ready(pod))
@@ -77,7 +83,22 @@ def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]
             seen += pods
         if live and item["kind"] == "Service":
             for port in (live.get("spec") or {}).get("ports") or []:
-                endpoints.append(f"http://{item['name']}.{namespace}.svc.cluster.local:{port.get('port')}")
+                url = f"http://{item['name']}.{namespace}.svc.cluster.local:{port.get('port')}"
+                endpoints.append(url)
+    endpoint_details, endpoint_findings = discover_endpoints(live_documents, namespace, available_pods=seen)
+    selected = preferred_inference_endpoint(endpoint_details) if not endpoint_findings else None
+    stack_record = record.get("stack") or {}
+    recorded = (
+        preferred_inference_endpoint(stack_record.get("endpoints", []))
+        if stack_record.get("endpointDiscovery") == "auto"
+        else None
+    )
+    if recorded:
+        verified, findings = revalidate_endpoint(recorded, endpoint_details, available_objects)
+        endpoint_findings.extend(findings)
+        selected = verified if not endpoint_findings else None
+    for endpoint in endpoint_details:
+        endpoint["preferred"] = endpoint is selected
     problems += _pending_warnings(kube, namespace, seen, problems)
     kube.forget()
     return {
@@ -91,6 +112,9 @@ def instance_status(kube: Kube, namespace: str, instance: str) -> dict[str, Any]
         "objects": objects,
         "pods": {"ready": pods_ready, "total": pods_total, "problems": problems},
         "endpoints": endpoints,
+        "endpointDetails": endpoint_details,
+        "inferenceEndpoint": selected,
+        "endpointFindings": [finding.as_dict() for finding in endpoint_findings],
         "unreadable": unreadable,
         "overrides": dict(record.get("overrides") or {}),
     }

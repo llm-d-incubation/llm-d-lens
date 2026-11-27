@@ -1,14 +1,14 @@
 # Lens CLI design
 
-| | |
-| --- | --- |
-| Status | Proposed (November 2026). The lifecycle described here is implemented by #107; the [proposed changes](#11-proposed-changes) are not. |
-| Owner | Lens maintainers |
-| Reviewers | TBD |
-| Roadmap | [Revised roadmap after v0.1.0](https://github.com/llm-d-incubation/llm-d-lens/issues/15#issuecomment-6349264601) |
-| Related | #107 (implementation), #73, #74, #76, #79 |
-| Usage | [`apps/lens/README.md`](../../apps/lens/README.md) |
-| Package boundary | [Repository layout](repository-layout.md) |
+|                  |                                                                                                                                      |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Status           | Proposed (November 2026). The lifecycle described here is implemented by #107; the [proposed changes](#11-proposed-changes) are not. |
+| Owner            | Lens maintainers                                                                                                                     |
+| Reviewers        | TBD                                                                                                                                  |
+| Roadmap          | [Revised roadmap after v0.1.0](https://github.com/llm-d-incubation/llm-d-lens/issues/15#issuecomment-6349264601)                     |
+| Related          | #107 (implementation), #73, #74, #76, #79                                                                                            |
+| Usage            | [`apps/lens/README.md`](../../apps/lens/README.md)                                                                                   |
+| Package boundary | [Repository layout](repository-layout.md)                                                                                            |
 
 ## 1. Summary
 
@@ -84,11 +84,11 @@ so the record's shape is only documented by reading them.
 
 ## 4. Personas
 
-| Persona | Rights | Coverage today |
-| --- | --- | --- |
+| Persona                   | Rights                     | Coverage today                                                |
+| ------------------------- | -------------------------- | ------------------------------------------------------------- |
 | A, bare namespace install | Edit role in one namespace | `plan`, `standup`, `status`, `import`, `rollouts`, `teardown` |
-| B, cluster administrator | Cluster-wide | Receives `--admin-yaml` output; no `prepare` or gateway yet |
-| C, performance engineer | Namespace | Not covered until `benchmark` lands |
+| B, cluster administrator  | Cluster-wide               | Receives `--admin-yaml` output; no `prepare` or gateway yet   |
+| C, performance engineer   | Namespace                  | Not covered until `benchmark` lands                           |
 
 ## 5. Architecture
 
@@ -132,15 +132,15 @@ through one runner: `kubectl` (or `oc` with `--kube-cli oc`), `helm`, `git` and
 (`when:` filters, `skip_in`, `env.static`, `env.source`) and follows its
 `deploy` steps without a shell:
 
-| Guide step | What `llmd` does | Plan status |
-| --- | --- | --- |
-| `export NAME=...` | sets a variable; `--var NAME=VALUE` overrides it | — |
-| `helm install` | `helm template` of the same chart, version and values; `--set` adds values | `followed` |
-| `kubectl apply -k` / `-f` | `kustomize build`, or a read of the files | `followed` |
-| namespace or Secret creation | left to the user; the plan checks the Secret exists | `yours` |
-| CRDs from the network, operators | left to an administrator | `administrator` |
-| a directory this checkout lacks for these variables | skipped | `other variant` |
-| a pipe through `sed`/`envsubst`, a script | blocks, unless the guide's CI also skips it (`skip_in: [ci]`) | `not followed` |
+| Guide step                                          | What `llmd` does                                                           | Plan status     |
+| --------------------------------------------------- | -------------------------------------------------------------------------- | --------------- |
+| `export NAME=...`                                   | sets a variable; `--var NAME=VALUE` overrides it                           | —               |
+| `helm install`                                      | `helm template` of the same chart, version and values; `--set` adds values | `followed`      |
+| `kubectl apply -k` / `-f`                           | `kustomize build`, or a read of the files                                  | `followed`      |
+| namespace or Secret creation                        | left to the user; the plan checks the Secret exists                        | `yours`         |
+| CRDs from the network, operators                    | left to an administrator                                                   | `administrator` |
+| a directory this checkout lacks for these variables | skipped                                                                    | `other variant` |
+| a pipe through `sed`/`envsubst`, a script           | blocks, unless the guide's CI also skips it (`skip_in: [ci]`)              | `not followed`  |
 
 Only Standalone Mode is followed. Against llm-d `595e7700`, 18 of 28 guides
 follow without a blocking finding.
@@ -149,16 +149,54 @@ follow without a blocking finding.
 
 `policy.py` turns rendered objects into what may be applied to one namespace:
 
-- Every object is namespaced and lands in the target namespace. References to the
-  namespace the stack was written for are rewritten.
-- Cluster-scoped objects and SCC RoleBindings become *administrator parts*:
-  never applied, written by `--admin-yaml FILE`, skipped by `--skip-admin-parts`.
+- Every object is namespaced and lands in the target namespace. References to
+  the namespace the stack was written for are rewritten.
+- Cluster-scoped objects and SCC RoleBindings become _administrator parts_:
+  never applied, written by `--admin-yaml FILE`, skipped by
+  `--skip-admin-parts`.
 - Privileged containers, host namespaces and hostPath volumes block until
   `--allow-privileged`.
 
 `preflight.py` then checks the plan against the cluster, read-only: the APIs
 exist, SelfSubjectAccessReviews allow every verb, prerequisites exist, no object
 belongs to someone else, and a server-side dry run accepts the rest.
+
+### 5.3 Automatic endpoint discovery
+
+After namespace policy, the plan discovers inference endpoints by matching
+Service selectors to pod templates and resolving TCP target ports against
+recognized Envoy/agentgateway proxies or vLLM/SGLang model containers. Model
+containers without declared ports use `--port`, defaulting to 8000 only when the
+option is absent. Templates include LeaderWorkerSets and DisaggregatedSets with
+their controller identity and role labels. No endpoint declarations or
+additional metadata files are read. Routers outrank direct model endpoints;
+decode outranks ordinary model access, and prefill is excluded. Within a
+category, non-headless Services outrank headless ones. Internal ports are
+excluded. Missing or equally eligible inference endpoints produce warnings and
+no selected URL, not an arbitrary first port or a deployment-blocking error.
+
+`Plan.summary()` adds `endpointDetails` and `inferenceEndpoint`. Discovery
+results are covered by the digest and persisted as `stack.endpoints` by standup,
+import and rollouts. Each resolved endpoint contains `purpose`, `service`,
+`namespace`, `port`, `portName`, `portSelector`, `scheme`, `preferred` and
+`url`, plus `discoverySource` and `reason`. Inferred endpoints include
+`endpointType` and `backends` with the workload, template, container and target
+port. `stack.endpointDiscovery: auto` distinguishes these records from older
+declaration-based records. The selector preserves the Service port name or
+number independently of its resolved number.
+
+`instance_status()` revalidates against live, UID-matching recorded resources
+without needing the source checkout. It adds `endpointDetails`,
+`inferenceEndpoint` and `endpointFindings`; any endpoint validation failure
+suppresses the preferred inference endpoint. Only available workloads and their
+Ready, Running pods contribute live discovery evidence. Recorded Service
+selectors and backend targets are revalidated; missing, replaced or unreadable
+resources do not trigger a switch to another Service. The old `endpoints` URL
+list remains unchanged. Unrecognized ports have purpose `unknown`. Older records
+discover from their own inventory, not namespace-wide scans. This is resource
+and availability validation, not an HTTP probe. Consumers use
+`inferenceEndpoint.url`, never the first legacy URL. Updating an external
+workflow is a separate integration change.
 
 ## 6. Core datatypes
 
@@ -245,50 +283,50 @@ Six of the eight types are already typed in code; the two persisted ones
 (`InstanceRecord`, `RolloutRecord`) are `dict[str, Any]`. Everything below is
 read from `apps/lens/lens/` as merged.
 
-| Type | Defined in | Form today | Lifetime | Key fields |
-| --- | --- | --- | --- | --- |
-| `Source` | `sources.py` | frozen dataclass | one command | `name`, `location`, `root: Path`, `kind: local\|git`, `ref`, `revision`, `dirty: bool` |
-| `Stack` | `catalog.py` | frozen dataclass | one command | `id` (path in source, e.g. `guides/optimized-baseline`), `kind: guide\|kustomize\|manifests`, `source: Source` |
-| `Options` | `plan.py` | dataclass | one command | `namespace`, `instance`, `allow_privileged`, `skip_admin_parts`, `switch_stack`, `variables: dict[str,str]`, `sets: list[str]` |
-| `Plan` | `plan.py` | dataclass | one command | `stack`, `options`, `command`, `policy: PolicyResult`, `cluster`, `steps`, `variables`; derived `digest`, `blocking` |
-| `PolicyResult` | `policy.py` | dataclass | inside `Plan` | `documents`, `findings`, `prerequisites`, `workloads`, `admin_parts`, `source_namespaces`, `accelerators: dict[str,int]` |
-| `Finding` | `model.py` | frozen dataclass | inside `Plan` | `severity: error\|warning\|info`, `code`, `message`, `object`, `hint` |
-| `InstanceRecord` | `inventory.py` (built in `lifecycle.py`, `importing.py`) | `dict` | persisted, until teardown | see [the field table](#instancerecord-fields) |
-| `RolloutRecord` | `rollouts/engine.py` | `dict` inside the record | persisted, per rollout | see [the field table](#rolloutrecord-fields) |
+| Type             | Defined in                                               | Form today               | Lifetime                  | Key fields                                                                                                                     |
+| ---------------- | -------------------------------------------------------- | ------------------------ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `Source`         | `sources.py`                                             | frozen dataclass         | one command               | `name`, `location`, `root: Path`, `kind: local\|git`, `ref`, `revision`, `dirty: bool`                                         |
+| `Stack`          | `catalog.py`                                             | frozen dataclass         | one command               | `id` (path in source, e.g. `guides/optimized-baseline`), `kind: guide\|kustomize\|manifests`, `source: Source`                 |
+| `Options`        | `plan.py`                                                | dataclass                | one command               | `namespace`, `instance`, `allow_privileged`, `skip_admin_parts`, `switch_stack`, `variables: dict[str,str]`, `sets: list[str]` |
+| `Plan`           | `plan.py`                                                | dataclass                | one command               | `stack`, `options`, `command`, `policy: PolicyResult`, `cluster`, `steps`, `variables`; derived `digest`, `blocking`           |
+| `PolicyResult`   | `policy.py`                                              | dataclass                | inside `Plan`             | `documents`, `findings`, `prerequisites`, `workloads`, `admin_parts`, `source_namespaces`, `accelerators: dict[str,int]`       |
+| `Finding`        | `model.py`                                               | frozen dataclass         | inside `Plan`             | `severity: error\|warning\|info`, `code`, `message`, `object`, `hint`                                                          |
+| `InstanceRecord` | `inventory.py` (built in `lifecycle.py`, `importing.py`) | `dict`                   | persisted, until teardown | see [the field table](#instancerecord-fields)                                                                                  |
+| `RolloutRecord`  | `rollouts/engine.py`                                     | `dict` inside the record | persisted, per rollout    | see [the field table](#rolloutrecord-fields)                                                                                   |
 
-The rollout planner has its own in-memory types, all dataclasses:
-`RolloutPlan` (`rollouts/plan.py`) holds a `Plan`, the record, a `Change` and
-the `Progress` before the rollout. `Change`, `SetChange` and `RoleChange`
+The rollout planner has its own in-memory types, all dataclasses: `RolloutPlan`
+(`rollouts/plan.py`) holds a `Plan`, the record, a `Change` and the `Progress`
+before the rollout. `Change`, `SetChange` and `RoleChange`
 (`rollouts/change.py`) describe what differs per DisaggregatedSet and role
 (`kind: roll | scale | strategy | none`). `Drainer` (`rollouts/drainers.py`) is
 one local drain process per role.
 
 Derived views are computed on each read and never stored:
-`status.instance_status` (health), `rollouts.progress.Progress` /
-`RoleProgress` / `Group` (per DisaggregatedSet), and `Plan.summary()` (the
-`llmd plan -o json` output).
+`status.instance_status` (health), `rollouts.progress.Progress` / `RoleProgress`
+/ `Group` (per DisaggregatedSet), and `Plan.summary()` (the `llmd plan -o json`
+output).
 
 ### `InstanceRecord` fields
 
 Stored as JSON under key `inventory.json` in ConfigMap
 `lens-instance-<instance>`, in the instance's namespace.
 
-| Field | Type | Set by | Invariant |
-| --- | --- | --- | --- |
-| `schema` | `"lens.llm-d.ai/inventory/v1"` | all writers | Must match, or the record is refused (`ConflictError`) |
-| `instance` | `str` | standup, import | DNS label, at most 40 characters; equals the ConfigMap's instance label |
-| `namespace` | `str` | standup, import | Equals the ConfigMap's namespace |
-| `management` | `{mode: "llmd"\|"imported", manager?: str}` | standup, import | `imported` instances are never stood up or labelled |
-| `phase` | `Applying\|Applied\|Imported\|Deleting\|Removed` | lifecycle ops | See [Instance lifecycle](#7-instance-lifecycle) |
-| `stack` | `{id, source: Source.describe(), variables?, sets?}` | standup, import, rollout start | Changes only with `--switch-stack` or a rollout |
-| `previousStack` | same shape as `stack` | standup or rollout start with `--switch-stack` | Kept across later standups |
-| `planDigest` | `str` (hex) | standup, rollout start | Digest of namespace + instance + rendered objects |
-| `objects` | `list[ObjectEntry]` | standup, import, rollout | Written before the first apply; teardown deletes newest first |
-| `rollout` | `RolloutRecord` | rollout ops | At most one; see below |
-| `createdAt`, `updatedAt` | ISO 8601 UTC (`Z`) | all writers | `updatedAt` set on every write |
-| `updatedBy` | `str` | standup, import, scale | The kube user from `kubectl auth whoami` during the plan's cluster check |
-| `overrides` | `{workload: int}` | scale, migrate | Replica counts set with `llmd scale`; every later plan sets them on the render. Absent when none differ from the files |
-| `migration` | `MigrationRecord` | migrate | On both the source and the target record while a migration runs; see below |
+| Field                    | Type                                                 | Set by                                         | Invariant                                                                                                              |
+| ------------------------ | ---------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| `schema`                 | `"lens.llm-d.ai/inventory/v1"`                       | all writers                                    | Must match, or the record is refused (`ConflictError`)                                                                 |
+| `instance`               | `str`                                                | standup, import                                | DNS label, at most 40 characters; equals the ConfigMap's instance label                                                |
+| `namespace`              | `str`                                                | standup, import                                | Equals the ConfigMap's namespace                                                                                       |
+| `management`             | `{mode: "llmd"\|"imported", manager?: str}`          | standup, import                                | `imported` instances are never stood up or labelled                                                                    |
+| `phase`                  | `Applying\|Applied\|Imported\|Deleting\|Removed`     | lifecycle ops                                  | See [Instance lifecycle](#7-instance-lifecycle)                                                                        |
+| `stack`                  | `{id, source: Source.describe(), variables?, sets?}` | standup, import, rollout start                 | Changes only with `--switch-stack` or a rollout                                                                        |
+| `previousStack`          | same shape as `stack`                                | standup or rollout start with `--switch-stack` | Kept across later standups                                                                                             |
+| `planDigest`             | `str` (hex)                                          | standup, rollout start                         | Digest of namespace + instance + rendered objects                                                                      |
+| `objects`                | `list[ObjectEntry]`                                  | standup, import, rollout                       | Written before the first apply; teardown deletes newest first                                                          |
+| `rollout`                | `RolloutRecord`                                      | rollout ops                                    | At most one; see below                                                                                                 |
+| `createdAt`, `updatedAt` | ISO 8601 UTC (`Z`)                                   | all writers                                    | `updatedAt` set on every write                                                                                         |
+| `updatedBy`              | `str`                                                | standup, import, scale                         | The kube user from `kubectl auth whoami` during the plan's cluster check                                               |
+| `overrides`              | `{workload: int}`                                    | scale, migrate                                 | Replica counts set with `llmd scale`; every later plan sets them on the render. Absent when none differ from the files |
+| `migration`              | `MigrationRecord`                                    | migrate                                        | On both the source and the target record while a migration runs; see below                                             |
 
 `ObjectEntry` = `{apiVersion, kind, name, resource, uid?}`. `resource` is
 `plural.group`; `uid` is set after apply and checked before any delete.
@@ -297,59 +335,65 @@ Example, after a `standup`:
 
 ```json
 {
-  "schema": "lens.llm-d.ai/inventory/v1",
-  "instance": "baseline",
-  "namespace": "team-a",
-  "management": {"mode": "llmd"},
-  "phase": "Applied",
-  "stack": {
-    "id": "guides/optimized-baseline",
-    "source": {
-      "name": "llm-d",
-      "location": "https://github.com/llm-d/llm-d.git",
-      "kind": "git",
-      "ref": "main",
-      "revision": "595e7700…",
-      "dirty": false
+    "schema": "lens.llm-d.ai/inventory/v1",
+    "instance": "baseline",
+    "namespace": "team-a",
+    "management": { "mode": "llmd" },
+    "phase": "Applied",
+    "stack": {
+        "id": "guides/optimized-baseline",
+        "source": {
+            "name": "llm-d",
+            "location": "https://github.com/llm-d/llm-d.git",
+            "kind": "git",
+            "ref": "main",
+            "revision": "595e7700…",
+            "dirty": false
+        },
+        "variables": { "INFRA_PROVIDER": "ocp" },
+        "sets": ["router.monitoring.prometheus.auth.enabled=false"]
     },
-    "variables": {"INFRA_PROVIDER": "ocp"},
-    "sets": ["router.monitoring.prometheus.auth.enabled=false"]
-  },
-  "planDigest": "…",
-  "objects": [
-    {"apiVersion": "apps/v1", "kind": "Deployment", "name": "…", "resource": "deployments.apps", "uid": "…"}
-  ],
-  "createdAt": "2026-11-04T10:00:00Z",
-  "updatedAt": "2026-11-04T10:01:12Z",
-  "updatedBy": "jane@example.com"
+    "planDigest": "…",
+    "objects": [
+        {
+            "apiVersion": "apps/v1",
+            "kind": "Deployment",
+            "name": "…",
+            "resource": "deployments.apps",
+            "uid": "…"
+        }
+    ],
+    "createdAt": "2026-11-04T10:00:00Z",
+    "updatedAt": "2026-11-04T10:01:12Z",
+    "updatedBy": "jane@example.com"
 }
 ```
 
 ### `RolloutRecord` fields
 
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `phase` | `Rolling\|Paused\|Aborting\|Finished\|Aborted` | `Rolling`, `Paused`, `Aborting` count as in progress |
-| `startedAt`, `startedBy`, `pausedAt`, `abortedAt`, `finishedAt` | ISO 8601 / `str` | Audit times |
-| `from`, `to` | `Source.describe()` | The source ref before and after |
-| `digest` | `str` | The rollout plan's digest |
-| `set`, `fromRevision` | `str` | The DisaggregatedSet that rolls and its old revision |
-| `objects` | `list[str]` (`Kind/name`) | What the rollout changes |
-| `previous` | `list[{resource, document}]` | Bodies before the change; what `abort` re-applies. Never Secrets: a rollout that would change one is refused |
-| `drain` | `str` | The `--drain` command template, or empty |
-| `poolLabel` | `str` | The pod label a group must carry as `true` to count as serving; recorded so later rollout commands judge groups the same way. Absent when none |
-| `steps` | `list` | Written as an empty list and never filled; see [Proposed changes](#11-proposed-changes) |
+| Field                                                           | Type                                           | Meaning                                                                                                                                        |
+| --------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `phase`                                                         | `Rolling\|Paused\|Aborting\|Finished\|Aborted` | `Rolling`, `Paused`, `Aborting` count as in progress                                                                                           |
+| `startedAt`, `startedBy`, `pausedAt`, `abortedAt`, `finishedAt` | ISO 8601 / `str`                               | Audit times                                                                                                                                    |
+| `from`, `to`                                                    | `Source.describe()`                            | The source ref before and after                                                                                                                |
+| `digest`                                                        | `str`                                          | The rollout plan's digest                                                                                                                      |
+| `set`, `fromRevision`                                           | `str`                                          | The DisaggregatedSet that rolls and its old revision                                                                                           |
+| `objects`                                                       | `list[str]` (`Kind/name`)                      | What the rollout changes                                                                                                                       |
+| `previous`                                                      | `list[{resource, document}]`                   | Bodies before the change; what `abort` re-applies. Never Secrets: a rollout that would change one is refused                                   |
+| `drain`                                                         | `str`                                          | The `--drain` command template, or empty                                                                                                       |
+| `poolLabel`                                                     | `str`                                          | The pod label a group must carry as `true` to count as serving; recorded so later rollout commands judge groups the same way. Absent when none |
+| `steps`                                                         | `list`                                         | Written as an empty list and never filled; see [Proposed changes](#11-proposed-changes)                                                        |
 
 ### `MigrationRecord` fields
 
-| Field | Type | Meaning |
-| --- | --- | --- |
-| `role` | `source\|target` | Which side this record is |
-| `workload` | `str` | The workload that moves a replica at a time (`NAME` or `SET/ROLE`) |
-| `replicas` | `int` | The count the source had at `start` |
-| `from`, `to` | `{namespace, instance, context}` | Both sides |
-| `startedAt` | ISO 8601 | Audit time |
-| `steps` | `list[{at, to, from}]` | Each step's counts after it: target `to`, source `from` |
+| Field        | Type                             | Meaning                                                            |
+| ------------ | -------------------------------- | ------------------------------------------------------------------ |
+| `role`       | `source\|target`                 | Which side this record is                                          |
+| `workload`   | `str`                            | The workload that moves a replica at a time (`NAME` or `SET/ROLE`) |
+| `replicas`   | `int`                            | The count the source had at `start`                                |
+| `from`, `to` | `{namespace, instance, context}` | Both sides                                                         |
+| `startedAt`  | ISO 8601                         | Audit time                                                         |
+| `steps`      | `list[{at, to, from}]`           | Each step's counts after it: target `to`, source `from`            |
 
 ## 7. Instance lifecycle
 
@@ -360,8 +404,8 @@ may run on an `Applied` or `Imported` instance. `Rolling`, `Paused` and
 second rollout.
 
 `InstancePhase` (`record.phase`). `llmd teardown --forget` deletes the record
-from any state and leaves the objects running. `Invalid` is not stored: `llmd
-list` shows it for a ConfigMap that fails `inventory.parse`.
+from any state and leaves the objects running. `Invalid` is not stored:
+`llmd list` shows it for a ConfigMap that fails `inventory.parse`.
 
 ```mermaid
 stateDiagram-v2
@@ -401,12 +445,12 @@ State is persisted in exactly two places, and only the in-cluster record is
 needed for correctness. Losing the laptop loses registered source names and
 drainer logs, never the knowledge of what an instance owns.
 
-| Store | Path / object | Format | Written by | Needed for correctness |
-| --- | --- | --- | --- | --- |
-| Instance record | ConfigMap `lens-instance-<name>`, key `inventory.json`, labels `app.kubernetes.io/managed-by=llm-d-lens`, `lens.llm-d.ai/instance`, `lens.llm-d.ai/role=inventory` | JSON, sorted keys | `inventory.write` (server-side apply) | Yes |
-| Source registry | `$LLMD_STATE_DIR` or `$LENS_DATA_DIR/llmd/sources.yaml`, with each source's layout (`stacks`, `exclude`, `companions`, `poolLabel`) | YAML, atomic write | `SourceRegistry` | No |
-| Drainer logs | `$LENS_DATA_DIR/llmd/rollouts/<ns>/<instance>/drain-<role>.log` | text | `rollouts.drainers` | No |
-| Repo cache | `$LENS_CACHE_DIR/repos` | Git checkouts | `sources.resolve_source` | No |
+| Store           | Path / object                                                                                                                                                      | Format             | Written by                            | Needed for correctness |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------ | ------------------------------------- | ---------------------- |
+| Instance record | ConfigMap `lens-instance-<name>`, key `inventory.json`, labels `app.kubernetes.io/managed-by=llm-d-lens`, `lens.llm-d.ai/instance`, `lens.llm-d.ai/role=inventory` | JSON, sorted keys  | `inventory.write` (server-side apply) | Yes                    |
+| Source registry | `$LLMD_STATE_DIR` or `$LENS_DATA_DIR/llmd/sources.yaml`, with each source's layout (`stacks`, `exclude`, `companions`, `poolLabel`)                                | YAML, atomic write | `SourceRegistry`                      | No                     |
+| Drainer logs    | `$LENS_DATA_DIR/llmd/rollouts/<ns>/<instance>/drain-<role>.log`                                                                                                    | text               | `rollouts.drainers`                   | No                     |
+| Repo cache      | `$LENS_CACHE_DIR/repos`                                                                                                                                            | Git checkouts      | `sources.resolve_source`              | No                     |
 
 Local paths follow the [storage layout](storage-layout.md).
 
@@ -422,48 +466,49 @@ Local paths follow the [storage layout](storage-layout.md).
   `--delete-volumes` is passed; the record then stays with `phase: Removed`.
 - A plan's digest is SHA-256 over sorted JSON of namespace, instance and
   rendered objects. `--expected-digest` takes the full value or a prefix of at
-  least 16 characters, and `standup` and `rollouts start` refuse any other render.
-- A DisaggregatedSet body in `rollout.previous` is tens of kilobytes, well inside
-  a ConfigMap's 1 MiB.
+  least 16 characters, and `standup` and `rollouts start` refuse any other
+  render.
+- A DisaggregatedSet body in `rollout.previous` is tens of kilobytes, well
+  inside a ConfigMap's 1 MiB.
 
 **Versioning.** The schema string `lens.llm-d.ai/inventory/v1` is the version.
 Proposed rule: adding an optional field stays `v1`; renaming, removing or
 changing a field's type, or changing the ConfigMap name or labels, makes `v2`.
-Readers accept `v1` and `v2` for one release, and a write always uses the newest.
-The labels and field manager (`llm-d-lens`) are part of the contract: `teardown`
-and the ownership checks depend on them.
+Readers accept `v1` and `v2` for one release, and a write always uses the
+newest. The labels and field manager (`llm-d-lens`) are part of the contract:
+`teardown` and the ownership checks depend on them.
 
 ## 9. Command contracts
 
-| Command | Reads | Writes | Refuses when |
-| --- | --- | --- | --- |
-| `sources add/list/remove` | `sources.yaml` | `sources.yaml` | the name or path is invalid |
-| `stacks`, `render` | the source and its layout | nothing | the stack is not found; a short name that ends several listed stacks |
-| `plan` | source, cluster (unless `--offline`) | nothing; `--admin-yaml` file | — (reports findings and the digest) |
-| `standup` | plan, record | record, then objects | blocking findings; digest mismatch; objects owned by another tool |
-| `import` | plan, live objects | record only | the instance is already recorded; an object of the stack is missing (`--dry-run` also shows drift) |
-| `status`, `list` | record, live objects | nothing | the instance is not found |
-| `rollouts plan` | record, plan of the new ref, live sets | nothing | — (reports refusals) |
-| `rollouts start` | rollout plan | record, objects, drainer processes | blocking findings (a claim being deleted is one); digest mismatch; a rollout in progress; a Secret would change; another stack path without `--switch-stack` |
-| `rollouts pause/resume/abort/finish` | record, progress | record, drainers, objects (`abort`) | no rollout in progress; `finish` before the roll completes |
-| `scale` | record, plan, live workload | the scaled object, record (`overrides`) | blocking findings; a rollout in progress; lowering a DisaggregatedSet role without `--drain` or `--no-drain`; a failed drain command |
-| `migrate plan` | both records, both plans | nothing | — (reports refusals) |
-| `migrate start/step/finish` | both records, both plans, live workloads | target objects, both records, scaled objects; `finish` tears the source down | an unsettled source; another instance of that name in the target; a target not Ready before a step lowers the source; `finish` before the source is at 0 |
-| `teardown` | record, live objects | deletes objects and record | a delete permission is missing (nothing is removed) |
+| Command                              | Reads                                    | Writes                                                                       | Refuses when                                                                                                                                                 |
+| ------------------------------------ | ---------------------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `sources add/list/remove`            | `sources.yaml`                           | `sources.yaml`                                                               | the name or path is invalid                                                                                                                                  |
+| `stacks`, `render`                   | the source and its layout                | nothing                                                                      | the stack is not found; a short name that ends several listed stacks                                                                                         |
+| `plan`                               | source, cluster (unless `--offline`)     | nothing; `--admin-yaml` file                                                 | — (reports findings and the digest)                                                                                                                          |
+| `standup`                            | plan, record                             | record, then objects                                                         | blocking findings; digest mismatch; objects owned by another tool                                                                                            |
+| `import`                             | plan, live objects                       | record only                                                                  | the instance is already recorded; an object of the stack is missing (`--dry-run` also shows drift)                                                           |
+| `status`, `list`                     | record, live objects                     | nothing                                                                      | the instance is not found                                                                                                                                    |
+| `rollouts plan`                      | record, plan of the new ref, live sets   | nothing                                                                      | — (reports refusals)                                                                                                                                         |
+| `rollouts start`                     | rollout plan                             | record, objects, drainer processes                                           | blocking findings (a claim being deleted is one); digest mismatch; a rollout in progress; a Secret would change; another stack path without `--switch-stack` |
+| `rollouts pause/resume/abort/finish` | record, progress                         | record, drainers, objects (`abort`)                                          | no rollout in progress; `finish` before the roll completes                                                                                                   |
+| `scale`                              | record, plan, live workload              | the scaled object, record (`overrides`)                                      | blocking findings; a rollout in progress; lowering a DisaggregatedSet role without `--drain` or `--no-drain`; a failed drain command                         |
+| `migrate plan`                       | both records, both plans                 | nothing                                                                      | — (reports refusals)                                                                                                                                         |
+| `migrate start/step/finish`          | both records, both plans, live workloads | target objects, both records, scaled objects; `finish` tears the source down | an unsettled source; another instance of that name in the target; a target not Ready before a step lowers the source; `finish` before the source is at 0     |
+| `teardown`                           | record, live objects                     | deletes objects and record                                                   | a delete permission is missing (nothing is removed)                                                                                                          |
 
 **One JSON contract.** Every operation returns a JSON-serializable `dict`;
 `llmd -o json` prints it, and `serve` would return it as the response body.
 Failures map one-to-one (`lens/errors.py`):
 
-| Error class | `code` | Exit code | HTTP status |
-| --- | --- | --- | --- |
-| `LlmdError` (base) | `error` | 1 | 500 |
-| `UsageError` | `invalid_request` | 2 | 400 |
-| `PolicyError` | `plan_blocked` | 3 | 422 |
-| `ConflictError` | `conflict` | 4 | 409 |
-| `CommandError` | `command_failed` | 5 | 502 |
-| `NotFoundError` | `not_found` | 6 | 404 |
-| `NotReadyError` | `not_ready` | 7 | 504 |
+| Error class        | `code`            | Exit code | HTTP status |
+| ------------------ | ----------------- | --------- | ----------- |
+| `LlmdError` (base) | `error`           | 1         | 500         |
+| `UsageError`       | `invalid_request` | 2         | 400         |
+| `PolicyError`      | `plan_blocked`    | 3         | 422         |
+| `ConflictError`    | `conflict`        | 4         | 409         |
+| `CommandError`     | `command_failed`  | 5         | 502         |
+| `NotFoundError`    | `not_found`       | 6         | 404         |
+| `NotReadyError`    | `not_ready`       | 7         | 504         |
 
 Gap: with `-o json`, the CLI still prints errors as text on stderr.
 `LlmdError.as_problem()` exists but no command emits it.
@@ -480,9 +525,9 @@ Gap: with `-o json`, the CLI still prints errors as text on stderr.
 
 ## 11. Proposed changes
 
-Six changes, all inside `apps/lens` and all standard library, so the
-PyYAML-only dependency rule holds. None changes the record's JSON on disk;
-existing `v1` records stay readable.
+Six changes, all inside `apps/lens` and all standard library, so the PyYAML-only
+dependency rule holds. None changes the record's JSON on disk; existing `v1`
+records stay readable.
 
 1. **Type the persisted record.** Add `lens/records.py` with frozen dataclasses
    `InstanceRecord`, `ObjectEntry`, `Management`, `StackRef` and
@@ -501,7 +546,8 @@ existing `v1` records stay readable.
    and keep the exit code. The CLI and `serve` then return the same error body.
 5. **Type operation results.** Give each op's return value a small dataclass
    (`StandupResult`, `TeardownResult`, `InstanceStatus`, …) with `to_dict()`, so
-   the `-o json` output is a documented contract, not whatever the handler built.
+   the `-o json` output is a documented contract, not whatever the handler
+   built.
 6. **Remove or fill `rollout.steps`.** It is written empty and never filled;
    either record each step (time, groups replaced per role) or drop the field.
 
@@ -557,42 +603,42 @@ class InstanceRecord:
 
 ### Where the record lives
 
-| Option | Why not |
-| --- | --- |
-| State on the workstation | Lost with the machine; a second operator or CI cannot see it. |
-| Helm releases as the record | Guides mix Helm and kustomize; imported stacks would change owner. |
-| A CustomResourceDefinition | Server-side validation and `kubectl get lensinstances`, but installing a CRD needs cluster-admin, which the engine is built to avoid. |
-| Labels on objects only | Imported objects are never labelled, and UIDs and rollout history need somewhere to live. |
+| Option                      | Why not                                                                                                                               |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| State on the workstation    | Lost with the machine; a second operator or CI cannot see it.                                                                         |
+| Helm releases as the record | Guides mix Helm and kustomize; imported stacks would change owner.                                                                    |
+| A CustomResourceDefinition  | Server-side validation and `kubectl get lensinstances`, but installing a CRD needs cluster-admin, which the engine is built to avoid. |
+| Labels on objects only      | Imported objects are never labelled, and UIDs and rollout history need somewhere to live.                                             |
 
 ### How the record is typed
 
-| Option | For | Against | Verdict |
-| --- | --- | --- | --- |
-| Stdlib dataclasses + hand-written JSON Schema (proposed) | No new runtime dependency; matches the existing frozen dataclasses | Validation code written by hand; schema can drift (a test guards it) | Recommended |
-| Pydantic models | Validation and JSON Schema for free; FastAPI already speaks it | Adds a runtime dependency to an engine meant to install with PyYAML only, including in-cluster Jobs | Reconsider if `serve` adopts FastAPI |
-| `TypedDict` only | Zero runtime cost; types the existing `dict`s in place | No runtime validation; records edited by hand in the cluster pass silently | Too weak for a record the cluster can change |
-| Protobuf / gRPC types | Strong cross-language contract | New toolchain; no non-Python consumer today | Rejected |
+| Option                                                   | For                                                                | Against                                                                                             | Verdict                                      |
+| -------------------------------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| Stdlib dataclasses + hand-written JSON Schema (proposed) | No new runtime dependency; matches the existing frozen dataclasses | Validation code written by hand; schema can drift (a test guards it)                                | Recommended                                  |
+| Pydantic models                                          | Validation and JSON Schema for free; FastAPI already speaks it     | Adds a runtime dependency to an engine meant to install with PyYAML only, including in-cluster Jobs | Reconsider if `serve` adopts FastAPI         |
+| `TypedDict` only                                         | Zero runtime cost; types the existing `dict`s in place             | No runtime validation; records edited by hand in the cluster pass silently                          | Too weak for a record the cluster can change |
+| Protobuf / gRPC types                                    | Strong cross-language contract                                     | New toolchain; no non-Python consumer today                                                         | Rejected                                     |
 
 ## 13. Roadmap status
 
 "Done" means merged in #107; "partial" means part of the scope exists, possibly
 under another command.
 
-| Release | Roadmap scope | Status in `llmd` |
-| --- | --- | --- |
-| v0.1.1 | Engine library, command structure, JSON output | Done: the `lens` package, `llmd` subcommands, `-o json\|yaml` (errors still text; [§9](#9-command-contracts)) |
-| v0.1.1 | CI on kind with llm-d-inference-sim | Not started: tests use an in-memory cluster (`tests/fakes.py`) with real git, Helm and kustomize |
-| v0.1.2 | Stack record in the cluster | Done: [§6](#6-core-datatypes); typing it is [proposed change 1](#11-proposed-changes) |
-| v0.1.2 | `check`, admin and non-admin | Partial: the non-admin checks run inside `plan`; no separate `check`, no quota check, no admin mode |
-| v0.1.3 | `plan` for optimized-baseline from `guide.yaml` | Done, with a digest and `--offline`; verified against llm-d `595e7700`, not yet the v1.0.0 tag |
-| v0.1.4 | `standup`, `teardown` in standalone mode | Done |
-| v0.1.4 | `validate` (smoke test through the router) | Not started: `status` reports workload health, not request success |
-| v0.2.0 | `prepare`, admin and non-admin | Partial: `--admin-yaml` writes what an administrator must apply |
-| v0.2.0 | `serve`, the dashboard on the CLI backend | Not started: `apps/backend` still reads guides itself (`deploy/guide_bundle.py`, `configuration/guide_settings.py`) |
-| v0.3.0 | `update` with rolling updates and snapshots | Partial: `rollouts` rolls DisaggregatedSets in place and `abort` restores `rollout.previous` |
-| v0.3.0 | More well-lit paths and accelerators | Partial: 18 of 28 guides follow; the rest block on unsupported steps |
-| Later | Gateway mode, blue-green updates | Not started |
-| Later | `benchmark`, BLIS in `plan`, in-cluster Job | Not started |
+| Release | Roadmap scope                                   | Status in `llmd`                                                                                                    |
+| ------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| v0.1.1  | Engine library, command structure, JSON output  | Done: the `lens` package, `llmd` subcommands, `-o json\|yaml` (errors still text; [§9](#9-command-contracts))       |
+| v0.1.1  | CI on kind with llm-d-inference-sim             | Not started: tests use an in-memory cluster (`tests/fakes.py`) with real git, Helm and kustomize                    |
+| v0.1.2  | Stack record in the cluster                     | Done: [§6](#6-core-datatypes); typing it is [proposed change 1](#11-proposed-changes)                               |
+| v0.1.2  | `check`, admin and non-admin                    | Partial: the non-admin checks run inside `plan`; no separate `check`, no quota check, no admin mode                 |
+| v0.1.3  | `plan` for optimized-baseline from `guide.yaml` | Done, with a digest and `--offline`; verified against llm-d `595e7700`, not yet the v1.0.0 tag                      |
+| v0.1.4  | `standup`, `teardown` in standalone mode        | Done                                                                                                                |
+| v0.1.4  | `validate` (smoke test through the router)      | Not started: `status` reports workload health, not request success                                                  |
+| v0.2.0  | `prepare`, admin and non-admin                  | Partial: `--admin-yaml` writes what an administrator must apply                                                     |
+| v0.2.0  | `serve`, the dashboard on the CLI backend       | Not started: `apps/backend` still reads guides itself (`deploy/guide_bundle.py`, `configuration/guide_settings.py`) |
+| v0.3.0  | `update` with rolling updates and snapshots     | Partial: `rollouts` rolls DisaggregatedSets in place and `abort` restores `rollout.previous`                        |
+| v0.3.0  | More well-lit paths and accelerators            | Partial: 18 of 28 guides follow; the rest block on unsupported steps                                                |
+| Later   | Gateway mode, blue-green updates                | Not started                                                                                                         |
+| Later   | `benchmark`, BLIS in `plan`, in-cluster Job     | Not started                                                                                                         |
 
 `sources`, `import`, PR-ref rollouts, `--switch-stack`, `scale`, `migrate` and
 companions go beyond the roadmap's operation list. They serve teams that already

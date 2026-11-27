@@ -471,21 +471,63 @@ class DeploymentRunWorker:
         case = next(item for item in run.cases if item.id == case_id)
         case.status = DeploymentCaseStatus.CLEANED
         self._store.save_run(run)
-        asyncio.create_task(self._execute_retry(run_id, retry.id, model_token))
+        retry_task = asyncio.create_task(self._execute_retry(run_id, retry.id, model_token))
+        retry_tasks = getattr(self, "_retry_tasks", None)
+        if retry_tasks is None:
+            retry_tasks = {}
+            self._retry_tasks = retry_tasks
+        retry_tasks.setdefault(run_id, set()).add(retry_task)
+        self._active_tasks.setdefault(run_id, set()).add(retry_task)
+
+        def _on_retry_done(completed: asyncio.Task[object], rid: str = run_id) -> None:
+            for task_map in (self._active_tasks, getattr(self, "_retry_tasks", None)):
+                if isinstance(task_map, dict):
+                    active = task_map.get(rid)
+                    if active is not None:
+                        active.discard(completed)
+                        if not active:
+                            task_map.pop(rid, None)
+            if completed.cancelled():
+                current_run = self._store.get_run(rid)
+                if current_run is not None and current_run.status in {
+                    DeploymentRunStatus.QUEUED,
+                    DeploymentRunStatus.RUNNING,
+                    DeploymentRunStatus.CANCELLING,
+                }:
+                    self._cancel_pending(current_run)
+            else:
+                exc = completed.exception()
+                if exc is not None:
+                    logger.exception("Retry task for run %s failed", rid, exc_info=exc)
+                    current_run = self._store.get_run(rid)
+                    if current_run is not None and current_run.status == DeploymentRunStatus.CANCELLING:
+                        self._cancel_pending(current_run)
+
+        retry_task.add_done_callback(_on_retry_done)
         return retry
 
     async def _execute_retry(self, run_id: str, case_id: str, model_token: str | None) -> None:
-        if model_token:
-            run = self._store.get_run(run_id)
-            case = next((item for item in run.cases if item.id == case_id), None) if run else None
-            if case is None:
+        try:
+            if model_token:
+                run = self._store.get_run(run_id)
+                case = next((item for item in run.cases if item.id == case_id), None) if run else None
+                if case is None:
+                    return
+                case.status = DeploymentCaseStatus.RENDERING
+                self._store.save_run(run)
+                await self._execute_case(run, case, model_token=model_token)
+                self._aggregate(run)
                 return
-            case.status = DeploymentCaseStatus.RENDERING
-            self._store.save_run(run)
-            await self._execute_case(run, case, model_token=model_token)
-            self._aggregate(run)
-            return
-        await self.execute_run(run_id)
+            await self.execute_run(run_id)
+        except asyncio.CancelledError:
+            run = self._store.get_run(run_id)
+            if run is not None and run.status in {
+                DeploymentRunStatus.QUEUED,
+                DeploymentRunStatus.RUNNING,
+                DeploymentRunStatus.CANCELLING,
+            }:
+                self._cancel_pending(run)
+            raise
 
     @staticmethod
     def _revoke_execution_shares(execution_ids: list[str | None]) -> None:

@@ -617,6 +617,57 @@ async def test_deleting_the_last_deployment_revokes_run_and_execution_shares(dep
 
 
 @pytest.mark.asyncio
+async def test_deleting_runless_execution_revokes_user_and_group_shares(deployment_store, monkeypatch):
+    from llm_d_lens.deploy import orphans
+
+    role = RoleDao().create(RoleRecord(name="dep-runless-share-role"))
+    service, add = _resource_bindings(role_id=role.id)
+
+    for exec_id, namespace in [
+        ("execution-runless-delete", "ns-runless-delete"),
+        ("execution-runless-verify-no-ns", ""),
+        ("execution-runless-verify-ns", "ns-runless-verify"),
+    ]:
+        deployment_store.save_execution(_execution(exec_id, DeploymentStatus.READY, namespace))
+        add("user", "deployment_execution", exec_id)
+        add("group", "deployment_execution", exec_id)
+    add("user", "deployment_execution", "execution-ready")
+
+    await executions.delete_execution("execution-runless-delete", delete_namespace=False)
+    assert deployment_store.get_execution("execution-runless-delete") is None
+    assert service.list_resource_shares("deployment_execution", "execution-runless-delete") == []
+
+    no_ns_result = await executions.verify_execution_cleanup(
+        "execution-runless-verify-no-ns", delete_record_on_verify=True
+    )
+    assert no_ns_result["deleted"] is True
+    assert deployment_store.get_execution("execution-runless-verify-no-ns") is None
+    assert service.list_resource_shares("deployment_execution", "execution-runless-verify-no-ns") == []
+
+    verify_calls: list[str] = []
+
+    async def verified_cleanup(**kwargs):
+        verify_calls.append(kwargs["execution_id"])
+        return {
+            "verified": True,
+            "status": "verified",
+            "message": "cleaned",
+            "remainingOperations": [],
+            "marker": {"namespace": "lens-edit", "name": "m", "status": "verified", "verified": True},
+            "canVerifyMarker": True,
+            "warnings": [],
+        }
+
+    monkeypatch.setattr(orphans, "verify_deployment_cleanup", verified_cleanup)
+    ns_result = await executions.verify_execution_cleanup("execution-runless-verify-ns", delete_record_on_verify=True)
+    assert verify_calls == ["execution-runless-verify-ns"]
+    assert ns_result["deleted"] is True
+    assert deployment_store.get_execution("execution-runless-verify-ns") is None
+    assert service.list_resource_shares("deployment_execution", "execution-runless-verify-ns") == []
+    assert len(service.list_resource_shares("deployment_execution", "execution-ready")) == 1
+
+
+@pytest.mark.asyncio
 async def test_failed_cleanup_keeps_the_deployment_records(deployment_store, worker_factory):
     worker_factory(FakeDeploymentService(fail=True))
 
@@ -1556,3 +1607,715 @@ async def test_cleanup_verify_enforces_stored_digest_and_marker_requirement(depl
     monkeypatch.setattr(orphans, "verify_deployment_cleanup", auth_401)
     with pytest.raises(DeploymentClusterAuthError):
         await deploy_executions.verify_execution_cleanup("exec-dig")
+
+
+@pytest.mark.asyncio
+async def test_rebind_cluster_session_rejects_foreign_cluster_session(deployment_store, monkeypatch):
+    from fastapi import HTTPException
+
+    from llm_d_lens.deploy import application
+
+    manager = application.DeploymentRunManager(deployment_store)
+    run = deployment_store.get_run("run-1")
+    original_session_id = str(uuid4())
+    run.provenance = {"cluster_server_id": "cluster-a", "cluster_session_id": original_session_id}
+    deployment_store.save_run(run)
+
+    foreign_session_id = str(uuid4())
+    monkeypatch.setattr(
+        application,
+        "require_active_session",
+        lambda sid: SimpleNamespace(id=sid, server_id="cluster-b"),
+    )
+    monkeypatch.setattr(router, "_store", deployment_store)
+    monkeypatch.setattr(router, "deployment_run_manager", manager)
+
+    with pytest.raises(
+        ValueError,
+        match="active cluster session is not connected to this deployment's original cluster",
+    ):
+        manager.rebind_cluster_session("run-1", foreign_session_id)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await router.rebind_cluster_session(
+            "run-1",
+            router.RebindClusterSessionRequest(cluster_session_id=foreign_session_id),
+        )
+    assert exc_info.value.status_code == 409
+    assert "active cluster session is not connected to this deployment's original cluster" in exc_info.value.detail
+    persisted = deployment_store.get_run("run-1")
+    assert persisted.provenance["cluster_server_id"] == "cluster-a"
+    assert persisted.provenance["cluster_session_id"] == original_session_id
+
+
+@pytest.mark.asyncio
+async def test_delete_execution_recovers_stale_or_missing_session_from_registered_cluster(
+    deployment_store, tmp_path, monkeypatch
+):
+    from pathlib import Path
+
+    from llm_d_lens.cluster import registry as cluster_registry
+    from llm_d_lens.cluster import sessions as cluster_sessions
+    from llm_d_lens.deploy import application
+
+    monkeypatch.setattr(cluster_sessions, "_sessions", {})
+    monkeypatch.setattr(cluster_sessions, "_SESSION_DIRECTORY", tmp_path / "sessions")
+    monkeypatch.setattr(
+        cluster_registry,
+        "cluster_settings",
+        SimpleNamespace(
+            session_directory=tmp_path / "sessions",
+            namespace_prefix=cluster_registry.cluster_settings.namespace_prefix,
+            data_directory=tmp_path / "cluster_data",
+        ),
+    )
+
+    cluster = ClusterDao().create("registered-cluster", "", "apiVersion: v1\nkind: Config")
+    repo_dir = tmp_path / "llm-d"
+    (repo_dir / "guides").mkdir(parents=True)
+
+    for label, stale_session_id in [("stale", str(uuid4())), ("missing", None)]:
+        run_id = f"run-restart-{label}"
+        exec_id = f"exec-restart-{label}"
+        prov = {
+            "cluster_server_id": cluster.id,
+            "deployment_source": {"resolved_repository": str(repo_dir)},
+        }
+        if stale_session_id is not None:
+            prov["cluster_session_id"] = stale_session_id
+        case = _case(run_id, 0, exec_id, DeploymentCaseStatus.READY).model_copy(update={"id": f"case-{run_id}"})
+        run = DeploymentRun(
+            id=run_id,
+            status=DeploymentRunStatus.SUCCEEDED,
+            cases=[case],
+            source_configurations=[
+                DeployableConfiguration(
+                    type="optimized-baseline", format="helm", provider_ref="optimized-baseline", checksum="checksum"
+                )
+            ],
+            provenance=prov,
+        )
+        deployment_store.create_run(run)
+        exec_rec = _execution(exec_id, DeploymentStatus.READY, f"ns-{label}").model_copy(
+            update={"provenance": dict(prov)}
+        )
+        deployment_store.save_execution(exec_rec)
+
+        captured_envs: list[dict[str, str] | None] = []
+        service = FakeDeploymentService()
+
+        def build_service(env, _captured=captured_envs, _svc=service):
+            _captured.append(env)
+            return (_svc, None)
+
+        manager = application.DeploymentRunManager(deployment_store)
+        # Seed a stale cached worker with a lifecycle_error to prove worker_for_run refreshes it.
+        manager._run_workers[run_id] = SimpleNamespace(_lifecycle_error="cluster session is no longer active")
+        monkeypatch.setattr(application, "build_deployment_service_from_environment", build_service)
+        monkeypatch.setattr(executions, "deployment_run_manager", manager)
+        monkeypatch.setattr("llm_d_lens.cluster.service.resolve_proxy_env", lambda _cid: {})
+
+        response = await router.delete_execution(exec_id)
+
+        assert response.status_code == 204
+        assert service.cleaned == [exec_id]
+        assert deployment_store.get_execution(exec_id) is None
+        assert deployment_store.get_run(run_id) is None
+        assert len(captured_envs) == 1
+        kubeconfig_path = Path(captured_envs[0]["KUBECONFIG"])
+        assert kubeconfig_path.is_file()
+        assert kubeconfig_path.parent == (tmp_path / "sessions").resolve()
+        assert captured_envs[0]["LLM_D_ROOT"] == str(repo_dir)
+
+
+@pytest.mark.asyncio
+async def test_delete_execution_refuses_when_cluster_unregistered_and_session_is_gone(
+    deployment_store, tmp_path, monkeypatch
+):
+    from llm_d_lens.cluster import registry as cluster_registry
+    from llm_d_lens.cluster import sessions as cluster_sessions
+    from llm_d_lens.deploy import application
+    from llm_d_lens.deploy.executions import DeploymentExecutionConflictError
+
+    monkeypatch.setattr(cluster_sessions, "_sessions", {})
+    monkeypatch.setattr(cluster_sessions, "_SESSION_DIRECTORY", tmp_path / "sessions")
+    monkeypatch.setattr(
+        cluster_registry,
+        "cluster_settings",
+        SimpleNamespace(
+            session_directory=tmp_path / "sessions",
+            namespace_prefix=cluster_registry.cluster_settings.namespace_prefix,
+            data_directory=tmp_path / "cluster_data",
+        ),
+    )
+
+    repo_dir = tmp_path / "llm-d"
+    (repo_dir / "guides").mkdir(parents=True)
+
+    run_id = "run-unregistered"
+    exec_id = "exec-unregistered"
+    prov = {
+        "cluster_server_id": "cluster-missing",
+        "cluster_session_id": str(uuid4()),
+        "deployment_source": {"resolved_repository": str(repo_dir)},
+    }
+    case = _case(run_id, 0, exec_id, DeploymentCaseStatus.READY).model_copy(update={"id": f"case-{run_id}"})
+    run = DeploymentRun(
+        id=run_id,
+        status=DeploymentRunStatus.SUCCEEDED,
+        cases=[case],
+        source_configurations=[
+            DeployableConfiguration(
+                type="optimized-baseline", format="helm", provider_ref="optimized-baseline", checksum="checksum"
+            )
+        ],
+        provenance=prov,
+    )
+    deployment_store.create_run(run)
+    deployment_store.save_execution(
+        _execution(exec_id, DeploymentStatus.READY, "ns-unreg").model_copy(update={"provenance": dict(prov)})
+    )
+
+    service = FakeDeploymentService()
+    manager = application.DeploymentRunManager(deployment_store)
+    monkeypatch.setattr(application, "build_deployment_service_from_environment", lambda _env: (service, None))
+    monkeypatch.setattr(executions, "deployment_run_manager", manager)
+    monkeypatch.setattr("llm_d_lens.cluster.service.resolve_proxy_env", lambda _cid: {})
+
+    with pytest.raises(DeploymentExecutionConflictError, match="cluster session is no longer active"):
+        await executions.delete_execution(exec_id)
+
+    response = await router.delete_execution(exec_id)
+    assert response.status_code == 409
+    body = _payload(response)
+    assert body["code"] == "deployment_conflict"
+    assert "cluster session is no longer active" in body["detail"]
+    assert service.cleaned == []
+    assert deployment_store.get_execution(exec_id) is not None
+    assert deployment_store.get_run(run_id) is not None
+
+    # Dropping only the Prism record (delete_namespace=False) still succeeds without an active cluster session
+    keep_ns_response = await router.delete_execution(exec_id, delete_namespace=False)
+    assert keep_ns_response.status_code == 204
+    assert service.cleaned == []
+    assert deployment_store.get_execution(exec_id) is None
+    assert deployment_store.get_run(run_id) is None
+
+
+@pytest.mark.asyncio
+async def test_unsafe_kubeconfig_permissions_not_swallowed_on_recovery_or_cached_worker(
+    deployment_store, tmp_path, monkeypatch
+):
+    from llm_d_lens.cluster import registry as cluster_registry
+    from llm_d_lens.cluster import sessions as cluster_sessions
+    from llm_d_lens.deploy import application
+    from llm_d_lens.deploy.executions import DeploymentExecutionConflictError
+
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setattr(cluster_sessions, "_sessions", {})
+    monkeypatch.setattr(cluster_sessions, "_SESSION_DIRECTORY", sessions_dir)
+    monkeypatch.setattr(
+        cluster_registry,
+        "cluster_settings",
+        SimpleNamespace(
+            session_directory=sessions_dir,
+            namespace_prefix=cluster_registry.cluster_settings.namespace_prefix,
+            data_directory=tmp_path / "cluster_data",
+        ),
+    )
+
+    kubeconfig_text = "apiVersion: v1\nkind: Config"
+    cluster = ClusterDao().create("unsafe-perm-cluster", "", kubeconfig_text)
+    repo_dir = tmp_path / "llm-d"
+    (repo_dir / "guides").mkdir(parents=True)
+
+    # Durable session file on disk with unsafe 0o644 permissions
+    durable_session_id = str(uuid4())
+    durable_kubeconfig = cluster_sessions.session_kubeconfig_path(durable_session_id)
+    durable_kubeconfig.write_text(kubeconfig_text)
+    durable_kubeconfig.chmod(0o644)
+
+    run_id = "run-unsafe"
+    exec_id = "exec-unsafe"
+    prov = {
+        "cluster_server_id": cluster.id,
+        "cluster_session_id": str(uuid4()),
+        "deployment_source": {"resolved_repository": str(repo_dir)},
+    }
+    case = _case(run_id, 0, exec_id, DeploymentCaseStatus.READY).model_copy(update={"id": f"case-{run_id}"})
+    deployment_store.create_run(
+        DeploymentRun(
+            id=run_id,
+            status=DeploymentRunStatus.SUCCEEDED,
+            cases=[case],
+            source_configurations=[
+                DeployableConfiguration(
+                    type="optimized-baseline", format="helm", provider_ref="optimized-baseline", checksum="checksum"
+                )
+            ],
+            provenance=prov,
+        )
+    )
+    deployment_store.save_execution(
+        _execution(exec_id, DeploymentStatus.READY, "ns-unsafe").model_copy(update={"provenance": dict(prov)})
+    )
+
+    manager = application.DeploymentRunManager(deployment_store)
+    monkeypatch.setattr(executions, "deployment_run_manager", manager)
+    monkeypatch.setattr("llm_d_lens.cluster.service.resolve_proxy_env", lambda _cid: {})
+
+    # 1. Registered-cluster recovery must surface unsafe permissions instead of bypassing chmod checks
+    with pytest.raises(DeploymentExecutionConflictError, match="unsafe permissions"):
+        await executions.delete_execution(exec_id)
+
+    # 2. Cached worker check must also surface unsafe permissions when the cached session file becomes 0o644
+    run = deployment_store.get_run(run_id)
+    run.provenance["cluster_session_id"] = durable_session_id
+    deployment_store.save_run(run)
+    manager._run_workers[run_id] = SimpleNamespace(_lifecycle_error=None)
+    with pytest.raises(ValueError, match="unsafe permissions"):
+        manager.worker_for_run(run_id)
+
+
+@pytest.mark.asyncio
+async def test_worker_for_run_preserves_active_inflight_worker_and_delete_handles_disabled_runtime(
+    deployment_store, tmp_path, monkeypatch
+):
+    import asyncio
+
+    from llm_d_lens.cluster import sessions as cluster_sessions
+    from llm_d_lens.deploy import application
+
+    monkeypatch.setattr(cluster_sessions, "_sessions", {})
+    monkeypatch.setattr(cluster_sessions, "_SESSION_DIRECTORY", tmp_path / "sessions")
+
+    run_id = "run-inflight"
+    exec_id = "exec-inflight"
+    prov = {
+        "cluster_server_id": "cluster-missing",
+        "cluster_session_id": str(uuid4()),
+    }
+    case = _case(run_id, 0, exec_id, DeploymentCaseStatus.READY).model_copy(update={"id": f"case-{run_id}"})
+    deployment_store.create_run(
+        DeploymentRun(
+            id=run_id,
+            status=DeploymentRunStatus.SUCCEEDED,
+            cases=[case],
+            source_configurations=[
+                DeployableConfiguration(
+                    type="optimized-baseline", format="helm", provider_ref="optimized-baseline", checksum="checksum"
+                )
+            ],
+            provenance=prov,
+        )
+    )
+    deployment_store.save_execution(
+        _execution(exec_id, DeploymentStatus.READY, "ns-inflight").model_copy(update={"provenance": dict(prov)})
+    )
+
+    manager = application.DeploymentRunManager(deployment_store)
+    inflight_worker = SimpleNamespace(_lifecycle_error=None)
+    manager._run_workers[run_id] = inflight_worker
+    gate = asyncio.Event()
+    task = asyncio.create_task(gate.wait())
+    manager._run_tasks[run_id] = task
+    try:
+        # Session is inactive, but the run is actively executing -> keep the in-flight worker instance
+        assert manager.worker_for_run(run_id) is inflight_worker
+    finally:
+        gate.set()
+        await task
+
+    # With runtime disabled (build_deployment_service_from_environment -> None),
+    # delete_namespace=False still drops Prism records via the RuntimeConfigurationError fallback.
+    manager._run_workers.clear()
+    monkeypatch.setattr(application, "build_deployment_service_from_environment", lambda _env: None)
+    monkeypatch.setattr(executions, "deployment_run_manager", manager)
+    monkeypatch.setattr("llm_d_lens.cluster.service.resolve_proxy_env", lambda _cid: {})
+
+    response = await router.delete_execution(exec_id, delete_namespace=False)
+    assert response.status_code == 204
+    assert deployment_store.get_execution(exec_id) is None
+    assert deployment_store.get_run(run_id) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model_token", [None, "hf_test_token"])
+@pytest.mark.parametrize("scenario", ["immediate_cancel", "midflight_cancel", "complete_then_evict"])
+async def test_restart_case_preserves_active_worker_across_session_invalidation_and_cancels_on_delete(
+    deployment_store, tmp_path, monkeypatch, model_token, scenario
+):
+    import asyncio
+
+    from llm_d_lens.cluster import sessions as cluster_sessions
+    from llm_d_lens.deploy import application
+    from llm_d_lens.deploy.worker import DeploymentRunWorker
+
+    monkeypatch.setattr(cluster_sessions, "_sessions", {})
+    monkeypatch.setattr(cluster_sessions, "_SESSION_DIRECTORY", tmp_path / "sessions")
+
+    run_id = f"run-restart-{scenario}-{bool(model_token)}"
+    orig_exec_id = f"exec-orig-{scenario}-{bool(model_token)}"
+    retry_exec_id = f"exec-retry-{scenario}-{bool(model_token)}"
+    session_id = str(uuid4())
+    prov = {"cluster_server_id": "cluster-missing", "cluster_session_id": session_id}
+    failed_case = _case(run_id, 0, orig_exec_id, DeploymentCaseStatus.FAILED).model_copy(
+        update={"id": f"case-{run_id}"}
+    )
+    deployment_store.create_run(
+        DeploymentRun(
+            id=run_id,
+            status=DeploymentRunStatus.FAILED,
+            cases=[failed_case],
+            source_configurations=[
+                DeployableConfiguration(
+                    type="optimized-baseline", format="helm", provider_ref="optimized-baseline", checksum="checksum"
+                )
+            ],
+            provenance=dict(prov),
+        )
+    )
+    deployment_store.save_execution(
+        _execution(orig_exec_id, DeploymentStatus.ROLLED_BACK, f"ns-{scenario}").model_copy(
+            update={"provenance": dict(prov)}
+        )
+    )
+
+    create_started = asyncio.Event()
+    release_create = asyncio.Event()
+    state = {"session_active": True, "cancelled": False, "killed": [], "cleaned": []}
+
+    class ControlledRestartService:
+        async def clean(self, execution, *, preserve_rendered_overlay: bool = False):
+            state["cleaned"].append(execution.execution_id)
+            return execution.model_copy(update={"status": DeploymentStatus.CLEANED, "endpoint": None})
+
+        async def create(self, request, *, model_token=None, on_initial_execution=None):
+            initial = _execution(retry_exec_id, DeploymentStatus.DEPLOYING, f"ns-{scenario}").model_copy(
+                update={"provenance": dict(prov)}
+            )
+            if on_initial_execution is not None:
+                on_initial_execution(initial)
+            create_started.set()
+            try:
+                await release_create.wait()
+            except asyncio.CancelledError:
+                state["cancelled"] = True
+                raise
+            return initial.model_copy(update={"status": DeploymentStatus.FAILED, "endpoint": None})
+
+        async def kill(self, request, execution):
+            state["killed"].append(execution.execution_id)
+            return execution.model_copy(update={"status": DeploymentStatus.CLEANED, "endpoint": None})
+
+    def fake_runtime_overrides(sid):
+        if sid == session_id and state["session_active"]:
+            return {"KUBECONFIG": str(tmp_path / "kubeconfig")}
+        raise ValueError("cluster session is no longer active")
+
+    monkeypatch.setattr(application, "deployment_runtime_overrides", fake_runtime_overrides)
+    monkeypatch.setattr("llm_d_lens.cluster.service.resolve_proxy_env", lambda _cid: {})
+
+    manager = application.DeploymentRunManager(deployment_store)
+    worker = DeploymentRunWorker(deployment_store, ControlledRestartService())
+    manager._run_workers[run_id] = worker
+    monkeypatch.setattr(executions, "deployment_run_manager", manager)
+
+    retry = await worker.restart_case(run_id, failed_case.id, model_token=model_token)
+
+    # Invalidate the cluster session immediately after restart_case() returns,
+    # before the event loop even starts _execute_retry.
+    state["session_active"] = False
+    assert manager.is_run_active(run_id) is True
+    assert manager.worker_for_run(run_id) is worker
+
+    if scenario == "immediate_cancel":
+        # Cancelling immediately via delete_execution must cancel the scheduled retry task
+        # and settle without waiting for the 5s _cancel_and_wait timeout.
+        await asyncio.wait_for(
+            executions.delete_execution(f"pending:{run_id}:{retry.id}", delete_namespace=True),
+            timeout=2.0,
+        )
+        assert manager.is_run_active(run_id) is False
+        assert deployment_store.get_case(run_id, retry.id) is None
+        return
+
+    await asyncio.wait_for(create_started.wait(), timeout=2.0)
+    # Mid-flight: session is still invalid, but cached worker owns active tasks.
+    assert manager.is_run_active(run_id) is True
+    assert manager.worker_for_run(run_id) is worker
+
+    # Even if _active_tasks for run_id is cleared while retry_task is still running,
+    # _retry_tasks keeps is_run_active(run_id) True until retry_task finishes.
+    saved_active = worker._active_tasks.pop(run_id, None)
+    try:
+        assert manager.is_run_active(run_id) is True
+    finally:
+        if saved_active is not None:
+            worker._active_tasks[run_id] = saved_active
+
+    if scenario == "midflight_cancel":
+        await asyncio.wait_for(
+            executions.delete_execution(retry_exec_id, delete_namespace=True),
+            timeout=2.0,
+        )
+        assert state["cancelled"] is True
+        assert retry_exec_id in state["killed"]
+        assert manager.is_run_active(run_id) is False
+        assert deployment_store.get_execution(retry_exec_id) is None
+    else:
+        retry_tasks = list(worker._retry_tasks.get(run_id, ()))
+        assert retry_tasks
+        release_create.set()
+        await asyncio.wait_for(asyncio.gather(*retry_tasks), timeout=2.0)
+        assert manager.is_run_active(run_id) is False
+        # Once active restart tasks finish, worker_for_run evicts the stale cached worker.
+        monkeypatch.setattr(
+            application,
+            "build_deployment_service_from_environment",
+            lambda _env: (ControlledRestartService(), None),
+        )
+        rebound = manager.worker_for_run(run_id)
+        assert rebound is not worker
+        assert rebound._lifecycle_error is not None
+
+
+@pytest.mark.asyncio
+async def test_retry_done_callback_retrieves_exception_and_settles_cancelling_run(
+    deployment_store, caplog, monkeypatch
+):
+    import asyncio
+    import logging
+
+    from llm_d_lens.deploy import application
+    from llm_d_lens.deploy.worker import DeploymentRunWorker
+
+    run_id = "run-retry-exc"
+    orig_exec_id = "exec-orig-exc"
+    retry_exec_id = "exec-retry-exc"
+    prov = {"cluster_server_id": "cluster-1", "cluster_session_id": "session-1"}
+    failed_case = _case(run_id, 0, orig_exec_id, DeploymentCaseStatus.FAILED).model_copy(
+        update={"id": f"case-{run_id}"}
+    )
+    deployment_store.create_run(
+        DeploymentRun(
+            id=run_id,
+            status=DeploymentRunStatus.FAILED,
+            cases=[failed_case],
+            source_configurations=[
+                DeployableConfiguration(
+                    type="optimized-baseline", format="helm", provider_ref="optimized-baseline", checksum="checksum"
+                )
+            ],
+            provenance=dict(prov),
+        )
+    )
+    deployment_store.save_execution(
+        _execution(orig_exec_id, DeploymentStatus.ROLLED_BACK, "ns-exc").model_copy(update={"provenance": dict(prov)})
+    )
+
+    create_started = asyncio.Event()
+    release_create = asyncio.Event()
+
+    class KillFailingRestartService:
+        async def clean(self, execution, *, preserve_rendered_overlay: bool = False):
+            return execution.model_copy(update={"status": DeploymentStatus.CLEANED, "endpoint": None})
+
+        async def create(self, request, *, model_token=None, on_initial_execution=None):
+            initial = _execution(retry_exec_id, DeploymentStatus.DEPLOYING, "ns-exc").model_copy(
+                update={"provenance": dict(prov)}
+            )
+            if on_initial_execution is not None:
+                on_initial_execution(initial)
+            create_started.set()
+            await release_create.wait()
+            return initial
+
+        async def kill(self, request, execution):
+            raise RuntimeError("kill failed during cancellation")
+
+    manager = application.DeploymentRunManager(deployment_store)
+    worker = DeploymentRunWorker(deployment_store, KillFailingRestartService())
+    manager._run_workers[run_id] = worker
+    monkeypatch.setattr(executions, "deployment_run_manager", manager)
+
+    retry = await worker.restart_case(run_id, failed_case.id, model_token="hf_test_token")  # noqa: S106
+    await asyncio.wait_for(create_started.wait(), timeout=2.0)
+
+    with caplog.at_level(logging.ERROR, logger="llm_d_lens.deploy.worker"):
+        await asyncio.wait_for(worker._cancel_and_wait(run_id, timeout=5.0), timeout=1.5)
+
+    assert any("Retry task for run run-retry-exc failed" in record.message for record in caplog.records)
+    assert "hf_test_token" not in caplog.text
+    assert manager.is_run_active(run_id) is False
+    settled = deployment_store.get_run(run_id)
+    assert settled.status == DeploymentRunStatus.CANCELLED
+    assert deployment_store.get_case(run_id, retry.id).status == DeploymentCaseStatus.CANCELLED
+
+
+@pytest.mark.asyncio
+async def test_local_delete_guards_store_mismatch_and_fake_manager_without_local_delete(
+    deployment_store, tmp_path, monkeypatch
+):
+    from llm_d_lens.deploy import application
+    from llm_d_lens.deploy.worker import DeploymentRunWorker
+
+    other_store = JsonDeploymentRunStore(tmp_path / "other")
+    manager = application.DeploymentRunManager(other_store)
+    stale_worker = DeploymentRunWorker(other_store, FakeDeploymentService())
+    manager._run_workers["run-1"] = stale_worker
+
+    # Store-mismatch guard rejects cached worker belonging to a different store.
+    resolved = manager.worker_for_local_delete("run-1", store=deployment_store)
+    assert resolved is not stale_worker
+    assert resolved._store is deployment_store
+
+    # Fake manager lacking worker_for_local_delete still succeeds on delete_namespace=False.
+    monkeypatch.setattr(
+        executions,
+        "deployment_run_manager",
+        SimpleNamespace(worker_for_run=lambda _rid: stale_worker),
+    )
+    await executions.delete_execution("execution-ready", delete_namespace=False)
+    assert deployment_store.get_execution("execution-ready") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("with_cached_worker", [True, False])
+@pytest.mark.parametrize("mode", ["delete_exec", "verify_cleanup"])
+async def test_local_only_delete_ignores_unsafe_kubeconfig_while_namespace_delete_rejects(
+    deployment_store, tmp_path, monkeypatch, with_cached_worker, mode
+):
+    import asyncio
+
+    from llm_d_lens.cluster import registry as cluster_registry
+    from llm_d_lens.cluster import sessions as cluster_sessions
+    from llm_d_lens.deploy import application, orphans
+    from llm_d_lens.deploy.executions import DeploymentExecutionConflictError
+    from llm_d_lens.deploy.worker import DeploymentRunWorker
+
+    sessions_dir = tmp_path / "sessions"
+    sessions_dir.mkdir(parents=True)
+    monkeypatch.setattr(cluster_sessions, "_sessions", {})
+    monkeypatch.setattr(cluster_sessions, "_SESSION_DIRECTORY", sessions_dir)
+    monkeypatch.setattr(
+        cluster_registry,
+        "cluster_settings",
+        SimpleNamespace(
+            session_directory=sessions_dir,
+            namespace_prefix=cluster_registry.cluster_settings.namespace_prefix,
+            data_directory=tmp_path / "cluster_data",
+        ),
+    )
+
+    kubeconfig_text = "apiVersion: v1\nkind: Config"
+    cluster = ClusterDao().create(f"unsafe-local-del-{with_cached_worker}-{mode}", "", kubeconfig_text)
+    repo_dir = tmp_path / "llm-d"
+    (repo_dir / "guides").mkdir(parents=True)
+
+    session_id = str(uuid4())
+    kubeconfig_path = cluster_sessions.session_kubeconfig_path(session_id)
+    kubeconfig_path.write_text(kubeconfig_text)
+    kubeconfig_path.chmod(0o644)
+
+    role = RoleDao().create(RoleRecord(name=f"dep-unsafe-role-{with_cached_worker}-{mode}"))
+    auth_service, add_share = _resource_bindings(role_id=role.id)
+
+    run_id = f"run-unsafe-{with_cached_worker}-{mode}"
+    exec_id = f"exec-unsafe-{with_cached_worker}-{mode}"
+    prov = {
+        "cluster_server_id": cluster.id,
+        "cluster_session_id": session_id,
+        "deployment_source": {"resolved_repository": str(repo_dir)},
+    }
+    case = _case(run_id, 0, exec_id, DeploymentCaseStatus.READY).model_copy(update={"id": f"case-{run_id}"})
+    deployment_store.create_run(
+        DeploymentRun(
+            id=run_id,
+            status=(
+                DeploymentRunStatus.RUNNING
+                if (with_cached_worker and mode == "delete_exec")
+                else DeploymentRunStatus.SUCCEEDED
+            ),
+            cases=[case],
+            source_configurations=[
+                DeployableConfiguration(
+                    type="optimized-baseline", format="helm", provider_ref="optimized-baseline", checksum="checksum"
+                )
+            ],
+            provenance=dict(prov),
+        )
+    )
+    deployment_store.save_execution(
+        _execution(exec_id, DeploymentStatus.READY, f"ns-{mode}").model_copy(update={"provenance": dict(prov)})
+    )
+    add_share("user", "deployment_execution", exec_id)
+    add_share("group", "deployment_run", run_id)
+
+    manager = application.DeploymentRunManager(deployment_store)
+    monkeypatch.setattr(executions, "deployment_run_manager", manager)
+    monkeypatch.setattr("llm_d_lens.cluster.service.resolve_proxy_env", lambda _cid: {})
+
+    cancelled_flag = False
+    inflight_task = None
+    if with_cached_worker:
+        cached_worker = DeploymentRunWorker(deployment_store, FakeDeploymentService())
+        if mode == "delete_exec":
+            gate = asyncio.Event()
+            inflight_started = asyncio.Event()
+
+            async def inflight():
+                nonlocal cancelled_flag
+                inflight_started.set()
+                try:
+                    await gate.wait()
+                except asyncio.CancelledError:
+                    cancelled_flag = True
+                    raise
+
+            inflight_task = asyncio.create_task(inflight())
+            await inflight_started.wait()
+            cached_worker._active_tasks[run_id] = {inflight_task}
+        manager._run_workers[run_id] = cached_worker
+
+    # Strict delete_namespace=True still fails on unsafe kubeconfig permissions even with an active cached worker.
+    with pytest.raises(DeploymentExecutionConflictError, match="unsafe permissions"):
+        await executions.delete_execution(exec_id, delete_namespace=True)
+    assert cancelled_flag is False
+
+    # Active usage check is still enforced for local-only deletion.
+    usage.register_usage_probe("evaluate", lambda eid: "active benchmark" if eid == exec_id else None)
+    with pytest.raises(DeploymentExecutionConflictError, match="active benchmark"):
+        await executions.delete_execution(exec_id, delete_namespace=False)
+    assert deployment_store.get_execution(exec_id) is not None
+    assert len(auth_service.list_resource_shares("deployment_execution", exec_id)) == 1
+    assert cancelled_flag is False
+
+    monkeypatch.setattr(usage, "_probes", {})
+    if mode == "delete_exec":
+        await executions.delete_execution(exec_id, delete_namespace=False)
+        if inflight_task is not None:
+            assert inflight_task.done()
+            assert cancelled_flag is True
+    else:
+
+        async def verified_cleanup(**_kwargs):
+            return {
+                "verified": True,
+                "status": "verified",
+                "message": "cleaned",
+                "remainingOperations": [],
+                "marker": {"namespace": "lens-edit", "name": "m", "status": "verified", "verified": True},
+                "canVerifyMarker": True,
+                "warnings": [],
+            }
+
+        monkeypatch.setattr(orphans, "verify_deployment_cleanup", verified_cleanup)
+        result = await executions.verify_execution_cleanup(exec_id, delete_record_on_verify=True)
+        assert result["deleted"] is True
+
+    assert deployment_store.get_execution(exec_id) is None
+    assert deployment_store.get_run(run_id) is None
+    assert auth_service.list_resource_shares("deployment_execution", exec_id) == []
+    assert auth_service.list_resource_shares("deployment_run", run_id) == []

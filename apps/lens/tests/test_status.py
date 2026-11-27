@@ -4,6 +4,7 @@ import pytest
 
 from lens import health, lifecycle
 from lens.cli import main
+from lens.commands.status import print_status
 from lens.errors import NotReadyError
 from lens.kube import Kube
 from lens.status import instance_status, list_instances, wait_ready
@@ -36,6 +37,143 @@ def test_status_finds_pods_through_the_workload_selector(llmrepo, cluster):
     assert status["endpoints"] == ["http://model-a.team-a.svc.cluster.local:8000"]
     pod = cluster.get("team-a", "pods", "model-a-0")
     assert "lens.llm-d.ai/instance" not in pod["metadata"]["labels"]
+
+
+def test_status_discovers_inference_without_guessing_metrics(llmrepo, cluster, capsys):
+    kube = stood_up(llmrepo, cluster)
+    service = cluster.get("team-a", "services", "model-a")
+    service["spec"]["ports"].insert(0, {"name": "metrics", "port": 9090})
+    status = instance_status(kube, "team-a", "r1")
+    assert status["inferenceEndpoint"]["url"] == "http://model-a.team-a.svc.cluster.local:8000"
+    assert status["inferenceEndpoint"]["portName"] == "http"
+    assert status["endpointDetails"][0]["purpose"] == "metrics"
+    assert status["endpointDetails"][1]["purpose"] == "inference"
+    assert not status["endpointFindings"]
+    print_status(status)
+    output = capsys.readouterr().out
+    assert "inference http://model-a.team-a.svc.cluster.local:8000 (Service/model-a, port http)" in output
+    service["spec"]["ports"][1]["targetPort"] = 8000
+    service["spec"]["ports"][1]["port"] = 8080
+    assert instance_status(kube, "team-a", "r1")["inferenceEndpoint"]["port"] == 8080
+    service["spec"]["ports"].pop()
+    status = instance_status(kube, "team-a", "r1")
+    assert status["inferenceEndpoint"] is None
+    assert any(finding["code"] == "endpoint-unresolved" for finding in status["endpointFindings"])
+    print_status(status)
+    assert "endpoint-unresolved" in capsys.readouterr().out
+
+
+def test_status_does_not_select_an_endpoint_when_the_workload_has_no_pods(llmrepo, cluster):
+    kube = stood_up(llmrepo, cluster)
+    deployment = cluster.get("team-a", "deployments.apps", "model-a")
+    deployment["spec"]["replicas"] = 0
+    deployment["status"] = {"replicas": 0, "readyReplicas": 0, "updatedReplicas": 0}
+    del cluster.objects[("team-a", "pods", "model-a-0")]
+
+    status = instance_status(kube, "team-a", "r1")
+
+    assert status["inferenceEndpoint"] is None
+    assert status["endpointFindings"]
+
+
+@pytest.mark.parametrize("ready_role", ["prefill", "decode"])
+def test_status_requires_the_service_selected_role_to_have_ready_pods(llmrepo, cluster, ready_role):
+    from lens import inventory
+
+    kube = stood_up(llmrepo, cluster)
+    cluster.controllers = False
+    template = cluster.get("team-a", "deployments.apps", "model-a")["spec"]["template"]
+    workload = cluster.put(
+        "team-a",
+        {
+            "apiVersion": "disaggregatedset.x-k8s.io/v1",
+            "kind": "DisaggregatedSet",
+            "metadata": {"name": "model-a"},
+            "spec": {
+                "roles": [
+                    {"name": role, "spec": {"replicas": 1, "leaderWorkerTemplate": {"workerTemplate": template}}}
+                    for role in ("prefill", "decode")
+                ]
+            },
+        },
+    )
+    service = cluster.get("team-a", "services", "model-a")
+    service["spec"]["selector"] = {
+        health.DS_NAME_LABEL: "model-a",
+        health.DS_ROLE_LABEL: "decode",
+    }
+    pod = cluster.get("team-a", "pods", "model-a-0")
+    pod["metadata"]["labels"].update({health.DS_NAME_LABEL: "model-a", health.DS_ROLE_LABEL: ready_role})
+    record = inventory.require(kube, "team-a", "r1")
+    record["stack"].pop("endpointDiscovery")
+    record["objects"] = [item for item in record["objects"] if item["kind"] != "Deployment"]
+    record["objects"].append(
+        inventory.object_entry(workload, "disaggregatedsets.disaggregatedset.x-k8s.io", workload["metadata"]["uid"])
+    )
+    inventory.write(kube, record)
+
+    status = instance_status(kube, "team-a", "r1")
+
+    if ready_role == "decode":
+        assert status["inferenceEndpoint"] is not None
+        assert not status["endpointFindings"]
+    else:
+        assert status["inferenceEndpoint"] is None
+        assert status["endpointFindings"]
+
+
+@pytest.mark.parametrize(
+    "change", ["replaced", "missing", "unreadable", "backend_replaced", "backend_unavailable", "retargeted"]
+)
+def test_status_never_returns_an_unverified_inference_endpoint(llmrepo, cluster, change):
+    kube = stood_up(llmrepo, cluster)
+    if change == "replaced":
+        cluster.get("team-a", "services", "model-a")["metadata"]["uid"] = "replacement"
+    elif change == "missing":
+        del cluster.objects[("team-a", "services", "model-a")]
+    elif change == "unreadable":
+        cluster.denied.add(("get", "services"))
+    elif change == "backend_replaced":
+        cluster.get("team-a", "deployments.apps", "model-a")["metadata"]["uid"] = "replacement"
+    elif change == "retargeted":
+        cluster.get("team-a", "services", "model-a")["spec"]["ports"][0]["targetPort"] = 9090
+    else:
+        cluster.get("team-a", "deployments.apps", "model-a")["status"] = {}
+        pod = cluster.get("team-a", "pods", "model-a-0")
+        pod["status"] = {"phase": "Pending"}
+    status = instance_status(kube, "team-a", "r1")
+    assert status["inferenceEndpoint"] is None
+    assert status["endpointFindings"]
+
+
+def test_legacy_instances_discover_from_their_own_inventory(llmrepo, cluster):
+    from lens import inventory
+
+    kube = stood_up(llmrepo, cluster)
+    record = inventory.require(kube, "team-a", "r1")
+    record["stack"].pop("endpointDiscovery")
+    record["stack"].pop("endpoints")
+    inventory.write(kube, record)
+    status = instance_status(kube, "team-a", "r1")
+    assert status["inferenceEndpoint"]["service"] == "model-a"
+
+
+def test_status_does_not_switch_to_an_unrelated_service(llmrepo, cluster):
+    kube = stood_up(llmrepo, cluster)
+    cluster.put(
+        "team-a",
+        {
+            "apiVersion": "v1",
+            "kind": "Service",
+            "metadata": {"name": "other-model"},
+            "spec": {"selector": {"app": "model-a"}, "ports": [{"name": "http", "port": 8000}]},
+        },
+    )
+    del cluster.objects[("team-a", "services", "model-a")]
+    status = instance_status(kube, "team-a", "r1")
+    assert status["inferenceEndpoint"] is None
+    assert not status["endpoints"]
+    assert status["endpointFindings"]
 
 
 def test_pod_problems_and_replaced_objects(llmrepo, cluster):

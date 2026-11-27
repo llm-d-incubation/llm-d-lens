@@ -18,7 +18,7 @@ test('DS plans require review and execution preserves the reviewed digest', asyn
     assert.equal(calls[1][1].acknowledge_unknown, true);
     assert.deepEqual(calls[1][1].configurations, request.configurations);
 });
-import { listDeploymentExecutions, getDeploymentExecutions, listDeploymentNodeLabels, startLocalDeployment, stopLocalDeploymentCase, deleteDeploymentExecution } from './remoteDeployBackend.js';
+import { listDeploymentExecutions, getDeploymentExecutions, listDeploymentNodeLabels, startLocalDeployment, stopLocalDeploymentCase, deleteDeploymentExecution, prepareDeploymentRestart } from './remoteDeployBackend.js';
 
 test('Advanced deployment binds placement and loads labels for the selected cluster', async (t) => {
     const calls = [];
@@ -133,4 +133,342 @@ test('executePreparedDeployment preserves 403 deployment_admin_setup_required st
         ),
         (error) => error.status === 403 && error.code === 'deployment_admin_setup_required' && error.body?.namespace === 'llmd-ds-1',
     );
+});
+
+function mockSessionStorage(t, initial = {}) {
+    const original = globalThis.sessionStorage;
+    const store = new Map(Object.entries(initial));
+    const setCalls = [];
+    globalThis.sessionStorage = {
+        getItem: (key) => (store.has(key) ? store.get(key) : null),
+        setItem: (key, value) => {
+            setCalls.push([key, value]);
+            store.set(key, String(value));
+        },
+        removeItem: (key) => store.delete(key),
+    };
+    t.after(() => {
+        if (original === undefined) delete globalThis.sessionStorage;
+        else globalThis.sessionStorage = original;
+    });
+    return { store, setCalls };
+}
+
+test('delete acquires target cluster session when sessionStorage points to another cluster without clobbering it', async (t) => {
+    const { store, setCalls } = mockSessionStorage(t, {
+        prism_cluster_session_id: 'session-b',
+        prism_cluster_server_id: 'cluster-b',
+    });
+    const calls = [];
+    t.mock.method(globalThis, 'fetch', async (url, options = {}) => {
+        calls.push([url, options.method || 'GET', options.body ? JSON.parse(options.body) : null]);
+        if (url === '/api/cluster/session?clusterId=cluster-a') {
+            return Response.json({ sessionId: 'session-a' });
+        }
+        if (url === '/api/v1/deployments/runs/run-1/cluster-session') {
+            return new Response(null, { status: 204 });
+        }
+        if (url === '/api/v1/deployments/executions/exec-1') {
+            return new Response(null, { status: 204 });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    await deleteDeploymentExecution('exec-1', { runId: 'run-1', clusterId: 'cluster-a' });
+
+    assert.deepEqual(calls, [
+        ['/api/cluster/session?clusterId=cluster-a', 'GET', null],
+        ['/api/v1/deployments/runs/run-1/cluster-session', 'POST', { cluster_session_id: 'session-a' }],
+        ['/api/v1/deployments/executions/exec-1', 'DELETE', null],
+    ]);
+    assert.deepEqual(setCalls, []);
+    assert.equal(store.get('prism_cluster_session_id'), 'session-b');
+    assert.equal(store.get('prism_cluster_server_id'), 'cluster-b');
+});
+
+test('delete falls back once to fresh cluster session when stored session is stale', async (t) => {
+    mockSessionStorage(t, {
+        prism_cluster_session_id: 'session-stale',
+        prism_cluster_server_id: 'cluster-a',
+    });
+    const calls = [];
+    t.mock.method(globalThis, 'fetch', async (url, options = {}) => {
+        const body = options.body ? JSON.parse(options.body) : null;
+        calls.push([url, options.method || 'GET', body]);
+        if (url === '/api/v1/deployments/runs/run-1/cluster-session' && body?.cluster_session_id === 'session-stale') {
+            return Response.json({ detail: 'cluster session is no longer active' }, { status: 409 });
+        }
+        if (url === '/api/cluster/session?clusterId=cluster-a') {
+            return Response.json({ session_id: 'session-fresh' });
+        }
+        if (url === '/api/v1/deployments/runs/run-1/cluster-session' && body?.cluster_session_id === 'session-fresh') {
+            return new Response(null, { status: 204 });
+        }
+        if (url === '/api/v1/deployments/executions/exec-1') {
+            return new Response(null, { status: 204 });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    await deleteDeploymentExecution('exec-1', { runId: 'run-1', clusterId: 'cluster-a' });
+
+    assert.deepEqual(calls, [
+        ['/api/v1/deployments/runs/run-1/cluster-session', 'POST', { cluster_session_id: 'session-stale' }],
+        ['/api/cluster/session?clusterId=cluster-a', 'GET', null],
+        ['/api/v1/deployments/runs/run-1/cluster-session', 'POST', { cluster_session_id: 'session-fresh' }],
+        ['/api/v1/deployments/executions/exec-1', 'DELETE', null],
+    ]);
+});
+
+test('stop without clusterId resolves run provenance cluster on 409 mismatch and retries once', async (t) => {
+    mockSessionStorage(t, {
+        prism_cluster_session_id: 'session-b',
+        prism_cluster_server_id: 'cluster-b',
+    });
+    const calls = [];
+    t.mock.method(globalThis, 'fetch', async (url, options = {}) => {
+        const body = options.body ? JSON.parse(options.body) : null;
+        calls.push([url, options.method || 'GET', body]);
+        if (url === '/api/v1/deployments/runs/run%2Fa/cluster-session' && body?.cluster_session_id === 'session-b') {
+            return Response.json(
+                { detail: "active cluster session is not connected to this deployment's original cluster" },
+                { status: 409 },
+            );
+        }
+        if (url === '/api/v1/deployments/runs/run%2Fa') {
+            return Response.json({ id: 'run/a', provenance: { cluster_server_id: 'cluster-a' } });
+        }
+        if (url === '/api/cluster/session?clusterId=cluster-a') {
+            return Response.json({ sessionId: 'session-a' });
+        }
+        if (url === '/api/v1/deployments/runs/run%2Fa/cluster-session' && body?.cluster_session_id === 'session-a') {
+            return new Response(null, { status: 204 });
+        }
+        if (url === '/api/v1/deployments/runs/run%2Fa/cases/case%2Fb/stop') {
+            return Response.json({ status: 'stopped' });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    await stopLocalDeploymentCase('run/a', 'case/b');
+
+    assert.deepEqual(calls, [
+        ['/api/v1/deployments/runs/run%2Fa/cluster-session', 'POST', { cluster_session_id: 'session-b' }],
+        ['/api/v1/deployments/runs/run%2Fa', 'GET', null],
+        ['/api/cluster/session?clusterId=cluster-a', 'GET', null],
+        ['/api/v1/deployments/runs/run%2Fa/cluster-session', 'POST', { cluster_session_id: 'session-a' }],
+        ['/api/v1/deployments/runs/run%2Fa/cases/case%2Fb/stop', 'POST', {}],
+    ]);
+});
+
+test('prepareDeploymentRestart acquires target cluster session when sessionStorage is on another cluster', async (t) => {
+    const { store, setCalls } = mockSessionStorage(t, {
+        prism_cluster_session_id: 'session-b',
+        prism_cluster_server_id: 'cluster-b',
+    });
+    const calls = [];
+    t.mock.method(globalThis, 'fetch', async (url, options = {}) => {
+        const body = options.body ? JSON.parse(options.body) : null;
+        calls.push([url, options.method || 'GET', body]);
+        if (url === '/api/cluster/session?clusterId=cluster-a') {
+            return Response.json({ sessionId: 'session-a' });
+        }
+        if (url === '/api/v1/deployments/executions/exec-1/restart-plan') {
+            return Response.json({ status: 'awaiting_review' });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const result = await prepareDeploymentRestart('exec-1', { clusterId: 'cluster-a' });
+
+    assert.deepEqual(result, { status: 'awaiting_review' });
+    assert.deepEqual(calls, [
+        ['/api/cluster/session?clusterId=cluster-a', 'GET', null],
+        ['/api/v1/deployments/executions/exec-1/restart-plan', 'POST', { cluster_session_id: 'session-a' }],
+    ]);
+    assert.deepEqual(setCalls, []);
+    assert.equal(store.get('prism_cluster_session_id'), 'session-b');
+});
+
+test('rebind does not swallow 403 permission errors or loop when retry fails', async (t) => {
+    mockSessionStorage(t, {
+        prism_cluster_session_id: 'session-a',
+        prism_cluster_server_id: 'cluster-a',
+    });
+    let calls = 0;
+    t.mock.method(globalThis, 'fetch', async () => {
+        calls += 1;
+        return Response.json({ detail: 'Forbidden' }, { status: 403 });
+    });
+    await assert.rejects(
+        deleteDeploymentExecution('exec-1', { runId: 'run-1', clusterId: 'cluster-a' }),
+        (error) => error.status === 403,
+    );
+    assert.equal(calls, 1);
+
+    let retryCalls = 0;
+    t.mock.method(globalThis, 'fetch', async (url) => {
+        retryCalls += 1;
+        if (url === '/api/cluster/session?clusterId=cluster-a') {
+            return Response.json({ sessionId: 'session-fresh' });
+        }
+        return Response.json({ detail: 'cluster session is no longer active' }, { status: 409 });
+    });
+    await assert.rejects(
+        deleteDeploymentExecution('exec-1', { runId: 'run-1', clusterId: 'cluster-a' }),
+        (error) => error.status === 409,
+    );
+    assert.equal(retryCalls, 3);
+});
+
+test('unrelated 404/409 errors do not trigger cluster session acquisition or retry', async (t) => {
+    mockSessionStorage(t, {
+        prism_cluster_session_id: 'session-a',
+        prism_cluster_server_id: 'cluster-a',
+    });
+    for (const [status, body] of [
+        [404, { detail: 'deployment run not found' }],
+        [409, { code: 'deployment_in_use', detail: 'deployment is in use by active evaluation' }],
+        [409, { detail: 'deployment run is no longer active' }],
+    ]) {
+        const urls = [];
+        t.mock.method(globalThis, 'fetch', async (url) => {
+            urls.push(url);
+            return Response.json(body, { status });
+        });
+        await assert.rejects(
+            deleteDeploymentExecution('exec-1', { runId: 'run-1', clusterId: 'cluster-a' }),
+            (error) => error.status === status,
+        );
+        assert.deepEqual(urls, ['/api/v1/deployments/runs/run-1/cluster-session']);
+    }
+});
+
+test('prepareDeploymentRestart without clusterId recovers via execution lookup for foreign and empty sessionStorage', async (t) => {
+    const { store } = mockSessionStorage(t, {
+        prism_cluster_session_id: 'session-b',
+        prism_cluster_server_id: 'cluster-b',
+    });
+    const foreignCalls = [];
+    t.mock.method(globalThis, 'fetch', async (url, options = {}) => {
+        const body = options.body ? JSON.parse(options.body) : null;
+        foreignCalls.push([url, options.method || 'GET', body]);
+        if (url === '/api/v1/deployments/executions/exec-1/restart-plan' && body?.cluster_session_id === 'session-b') {
+            return Response.json(
+                { detail: "active cluster session is not connected to this deployment's original cluster" },
+                { status: 409 },
+            );
+        }
+        if (url === '/api/v1/deployments/executions/exec-1') {
+            return Response.json({ execution_id: 'exec-1', cluster_id: 'cluster-a' });
+        }
+        if (url === '/api/cluster/session?clusterId=cluster-a') {
+            return Response.json({ sessionId: 'session-a' });
+        }
+        if (url === '/api/v1/deployments/executions/exec-1/restart-plan' && body?.cluster_session_id === 'session-a') {
+            return Response.json({ status: 'awaiting_review' });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+    });
+    assert.deepEqual(await prepareDeploymentRestart('exec-1'), { status: 'awaiting_review' });
+    assert.deepEqual(foreignCalls, [
+        ['/api/v1/deployments/executions/exec-1/restart-plan', 'POST', { cluster_session_id: 'session-b' }],
+        ['/api/v1/deployments/executions/exec-1', 'GET', null],
+        ['/api/cluster/session?clusterId=cluster-a', 'GET', null],
+        ['/api/v1/deployments/executions/exec-1/restart-plan', 'POST', { cluster_session_id: 'session-a' }],
+    ]);
+
+    store.clear();
+    const emptyCalls = [];
+    t.mock.method(globalThis, 'fetch', async (url, options = {}) => {
+        const body = options.body ? JSON.parse(options.body) : null;
+        emptyCalls.push([url, options.method || 'GET', body]);
+        if (url === '/api/v1/deployments/executions/exec-1/restart-plan' && body === null) {
+            return Response.json({ detail: 'cluster session is no longer active' }, { status: 409 });
+        }
+        if (url === '/api/v1/deployments/executions/exec-1') {
+            return Response.json({ execution_id: 'exec-1', cluster_id: 'cluster-a' });
+        }
+        if (url === '/api/cluster/session?clusterId=cluster-a') {
+            return Response.json({ sessionId: 'session-a' });
+        }
+        if (url === '/api/v1/deployments/executions/exec-1/restart-plan' && body?.cluster_session_id === 'session-a') {
+            return Response.json({ status: 'awaiting_review' });
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+    });
+    assert.deepEqual(await prepareDeploymentRestart('exec-1'), { status: 'awaiting_review' });
+    assert.deepEqual(emptyCalls, [
+        ['/api/v1/deployments/executions/exec-1/restart-plan', 'POST', null],
+        ['/api/v1/deployments/executions/exec-1', 'GET', null],
+        ['/api/cluster/session?clusterId=cluster-a', 'GET', null],
+        ['/api/v1/deployments/executions/exec-1/restart-plan', 'POST', { cluster_session_id: 'session-a' }],
+    ]);
+});
+
+test('deleteDeploymentExecution with deleteNamespace=false skips cluster session rebind', async (t) => {
+    mockSessionStorage(t, {
+        prism_cluster_session_id: 'session-b',
+        prism_cluster_server_id: 'cluster-b',
+    });
+    const calls = [];
+    t.mock.method(globalThis, 'fetch', async (url, options = {}) => {
+        calls.push([url, options.method || 'GET']);
+        return new Response(null, { status: 204 });
+    });
+
+    await deleteDeploymentExecution('exec-1', { deleteNamespace: false, runId: 'run-1', clusterId: 'cluster-a' });
+
+    assert.deepEqual(calls, [['/api/v1/deployments/executions/exec-1?delete_namespace=false', 'DELETE']]);
+});
+
+test('delete with empty sessionStorage acquires session proactively, skips rebind on empty payload, and skips duplicate retry', async (t) => {
+    const { store } = mockSessionStorage(t, {});
+    const proactiveCalls = [];
+    t.mock.method(globalThis, 'fetch', async (url, options = {}) => {
+        proactiveCalls.push([url, options.method || 'GET', options.body ? JSON.parse(options.body) : null]);
+        if (url === '/api/cluster/session?clusterId=cluster-a') {
+            return Response.json({ sessionId: 'session-a' });
+        }
+        return new Response(null, { status: 204 });
+    });
+    await deleteDeploymentExecution('exec-1', { runId: 'run-1', clusterId: 'cluster-a' });
+    assert.deepEqual(proactiveCalls, [
+        ['/api/cluster/session?clusterId=cluster-a', 'GET', null],
+        ['/api/v1/deployments/runs/run-1/cluster-session', 'POST', { cluster_session_id: 'session-a' }],
+        ['/api/v1/deployments/executions/exec-1', 'DELETE', null],
+    ]);
+
+    const emptySessionCalls = [];
+    t.mock.method(globalThis, 'fetch', async (url, options = {}) => {
+        emptySessionCalls.push([url, options.method || 'GET']);
+        if (url === '/api/cluster/session?clusterId=cluster-a') {
+            return Response.json({});
+        }
+        return new Response(null, { status: 204 });
+    });
+    await deleteDeploymentExecution('exec-1', { runId: 'run-1', clusterId: 'cluster-a' });
+    assert.deepEqual(emptySessionCalls, [
+        ['/api/cluster/session?clusterId=cluster-a', 'GET'],
+        ['/api/v1/deployments/executions/exec-1', 'DELETE'],
+    ]);
+
+    store.set('prism_cluster_session_id', 'session-a');
+    store.set('prism_cluster_server_id', 'cluster-a');
+    const sameSessionCalls = [];
+    t.mock.method(globalThis, 'fetch', async (url) => {
+        sameSessionCalls.push(url);
+        if (url === '/api/cluster/session?clusterId=cluster-a') {
+            return Response.json({ sessionId: 'session-a' });
+        }
+        return Response.json({ detail: 'cluster session is no longer active' }, { status: 409 });
+    });
+    await assert.rejects(
+        deleteDeploymentExecution('exec-1', { runId: 'run-1', clusterId: 'cluster-a' }),
+        (error) => error.status === 409,
+    );
+    assert.deepEqual(sameSessionCalls, [
+        '/api/v1/deployments/runs/run-1/cluster-session',
+        '/api/cluster/session?clusterId=cluster-a',
+    ]);
 });

@@ -1,25 +1,30 @@
 # `llmd`
 
-`llmd` plans, stands up, rolls out, and removes [llm-d](https://github.com/llm-d/llm-d) guides inside one
-existing Kubernetes or OpenShift namespace. It does not need cluster-admin rights, and it does not create
-namespaces, CRDs, cluster roles, PersistentVolumes, SCCs or network attachments: it reports those for an
-administrator.
+`llmd` plans, stands up, rolls out, and removes
+[llm-d](https://github.com/llm-d/llm-d) guides inside one existing Kubernetes or
+OpenShift namespace. It does not need cluster-admin rights, and it does not
+create namespaces, CRDs, cluster roles, PersistentVolumes, SCCs or network
+attachments: it reports those for an administrator.
 
-A *stack* is what a team deploys into one namespace:
+A _stack_ is what a team deploys into one namespace:
 
-- an llm-d guide, such as `guides/optimized-baseline`. `llmd` reads the guide's `guide.yaml`, the file the
-  guide's README commands are generated from, and follows its `deploy` steps without running a shell. It
-  renders the router chart with `helm template`, using the same chart, version and values as the guide's
-  `helm install`, and renders each model server overlay with `kustomize build`;
+- an llm-d guide, such as `guides/optimized-baseline`. `llmd` reads the guide's
+  `guide.yaml`, the file the guide's README commands are generated from, and
+  follows its `deploy` steps without running a shell. It renders the router
+  chart with `helm template`, using the same chart, version and values as the
+  guide's `helm install`, and renders each model server overlay with
+  `kustomize build`;
 - one kustomize directory, such as one model server overlay of a guide;
 - manifest files, read as they are.
 
-An *instance* is a stack running in a namespace. It is recorded in a ConfigMap `lens-instance-<name>` in that
-namespace, so every command works from any machine. The record's fields and phases, and how `llmd` maps onto the
-Lens roadmap, are described in the [Lens CLI design](../../docs/design/lens-cli-design.md).
+An _instance_ is a stack running in a namespace. It is recorded in a ConfigMap
+`lens-instance-<name>` in that namespace, so every command works from any
+machine. The record's fields and phases, and how `llmd` maps onto the Lens
+roadmap, are described in the
+[Lens CLI design](../../docs/design/lens-cli-design.md).
 
-`llmd` is part of the Lens engine package (`apps/lens`). It is pure Python and depends only on PyYAML. It
-does not need the Lens service, its database or Node.
+`llmd` is part of the Lens engine package (`apps/lens`). It is pure Python and
+depends only on PyYAML. It does not need the Lens service, its database or Node.
 
 ## Install
 
@@ -31,8 +36,9 @@ python3 -m venv .venv
 .venv/bin/llmd --version
 ```
 
-`llmd` runs `kubectl` (or `oc`, with `--kube-cli oc`), `helm`, `git`, and `kustomize` (or `kubectl kustomize`
-when kustomize is not installed). Install them on the `PATH`.
+`llmd` runs `kubectl` (or `oc`, with `--kube-cli oc`), `helm`, `git`, and
+`kustomize` (or `kubectl kustomize` when kustomize is not installed). Install
+them on the `PATH`.
 
 ## Sources
 
@@ -44,48 +50,60 @@ llmd stacks                           # the guides, then the other kustomize dir
 llmd stacks optimized-baseline        # one guide's variables, support matrix and steps
 ```
 
-`llmd stacks` lists two groups: the guides (directories with a `guide.yaml`), and the kustomize directories that
-no other directory includes, outside the guides, Helm charts and kustomize Components. A stack is named by its
-path, or by the end of its path when only one listed stack ends that way: `optimized-baseline` and
-`models/deepseek-v4` are enough for `guides/optimized-baseline` and `guides/models/deepseek-v4`.
+`llmd stacks` lists two groups: the guides (directories with a `guide.yaml`),
+and the kustomize directories that no other directory includes, outside the
+guides, Helm charts and kustomize Components. A stack is named by its path, or
+by the end of its path when only one listed stack ends that way:
+`optimized-baseline` and `models/deepseek-v4` are enough for
+`guides/optimized-baseline` and `guides/models/deepseek-v4`.
 
-A checkout of your own team's stacks is a source too. Say which of its kustomize directories are stacks when you
-register it, so the listing and the short names cover those only:
+A checkout of your own team's stacks is a source too. Say which of its kustomize
+directories are stacks when you register it, so the listing and the short names
+cover those only:
 
 ```sh
 llmd sources add team ~/src/team-stacks --stacks 'deploy/*/*' --exclude 'deploy/**/base'
 ```
 
-`*` and `?` match within one path segment, and `**` matches any number of segments. The patterns are kept with
-the source in `sources.yaml`. Guides are always listed.
+`*` and `?` match within one path segment, and `**` matches any number of
+segments. The patterns are kept with the source in `sources.yaml`. Guides are
+always listed.
 
-`--source` takes a registered name, a local path, or `URL#REF`. REF can be a branch, a tag, a commit, or any
-ref the remote serves, so a pull request can be planned before it merges:
-`--source https://github.com/llm-d/llm-d.git#refs/pull/<N>/head`. With exactly one registered source,
-`--source` may be left out. A remote checkout is cached; `--refresh` fetches it again.
+`--source` takes a registered name, a local path, or `URL#REF`. REF can be a
+branch, a tag, a commit, or any ref the remote serves, so a pull request can be
+planned before it merges:
+`--source https://github.com/llm-d/llm-d.git#refs/pull/<N>/head`. With exactly
+one registered source, `--source` may be left out. A remote checkout is cached;
+`--refresh` fetches it again.
 
 The namespace comes from `-n`, else `$LLMD_NAMESPACE`, else the kube context.
 
 ## Guide variables
 
-A guide's README sets variables with `export` lines (`ACCELERATOR_TYPE`, `MODEL_SERVER`, `INFRA_PROVIDER`, and
-the guide's own). `--var NAME=VALUE` sets them for `llmd`. The guide's `when:` filters then pick the same steps
-the README would run:
+A guide's README sets variables with `export` lines (`ACCELERATOR_TYPE`,
+`MODEL_SERVER`, `INFRA_PROVIDER`, and the guide's own). `--var NAME=VALUE` sets
+them for `llmd`. The guide's `when:` filters then pick the same steps the README
+would run:
 
 ```sh
 llmd plan optimized-baseline -n <namespace> --var INFRA_PROVIDER=ocp --offline
 ```
 
-`--set KEY=VALUE` passes a value to the Helm charts the guide installs (the router), as `helm install --set`
-would. `NAMESPACE` comes from `-n`, and `REPO_ROOT` is the source checkout. The plan lists each guide step and
-what `llmd` did with it:
+`--set KEY=VALUE` passes a value to the Helm charts the guide installs (the
+router), as `helm install --set` would. `NAMESPACE` comes from `-n`, and
+`REPO_ROOT` is the source checkout. The plan lists each guide step and what
+`llmd` did with it:
 
 - `followed`: the step's `helm install` or `kubectl apply -k|-f` is rendered.
-- `yours`: creating the namespace or a Secret is left to you. The plan checks that the Secret exists.
-- `administrator`: a cluster-wide prerequisite (CRDs from the network, an operator).
-- `other variant`: the step applies a directory this checkout does not have for these variables.
-- `not followed`: `llmd` cannot reproduce the step (a pipe through `sed` or `envsubst`, a script). The plan is
-  blocked, unless the guide's own CI skips that step too (`skip_in: [ci]`).
+- `yours`: creating the namespace or a Secret is left to you. The plan checks
+  that the Secret exists.
+- `administrator`: a cluster-wide prerequisite (CRDs from the network, an
+  operator).
+- `other variant`: the step applies a directory this checkout does not have for
+  these variables.
+- `not followed`: `llmd` cannot reproduce the step (a pipe through `sed` or
+  `envsubst`, a script). The plan is blocked, unless the guide's own CI skips
+  that step too (`skip_in: [ci]`).
 
 Gateway Mode needs a cluster Gateway, so `llmd` follows Standalone Mode.
 
@@ -128,6 +146,56 @@ need a custom overlay.
 Existing mounts at `/model-cache` must match the requested model-cache mount.
 Offline settings do not remove any Secret prerequisites in the source files.
 
+## Inference endpoints
+
+Lens automatically discovers endpoints from the stack's rendered resources. No
+endpoint declarations or additional metadata files are needed for guides,
+kustomize stacks or manifest stacks. Service selectors are matched to workload
+pod templates, including LeaderWorkerSets and DisaggregatedSets, and TCP
+`targetPort` values are resolved against serving containers. Model containers
+without declared ports use their `--port` argument, or 8000 when absent. Envoy
+and agentgateway proxies are recognized as routers; vLLM and SGLang are
+recognized as model servers. Metrics, health, admin and EPP gRPC ports are not
+inference endpoints.
+
+A unique router endpoint wins over direct model access. Without a router, decode
+endpoints win over ordinary model endpoints; prefill-only endpoints are
+excluded. Within each category, non-headless Services are preferred. Equally
+eligible endpoints are ambiguous: Lens never selects the first Service or port
+as a fallback. Missing or ambiguous inference endpoints produce warnings and a
+null `inferenceEndpoint`, rather than blocking deployment. Port names alone do
+not prove inference semantics.
+
+The Python `Plan.summary()` and `instance_status()` results, and
+`llmd -o json plan` / `status`, expose `endpointDetails` and a structured
+`inferenceEndpoint` (or `null`). Each endpoint contains `purpose`, `service`,
+`namespace`, `port`, `portName`, `portSelector`, `scheme`, `preferred` and
+`url`. `discoverySource` and `reason` explain discovery; inferred endpoints also
+include `endpointType` and `backends` identifying the workload, template,
+container and target port. Discovery evidence is covered by the plan digest and
+persisted with the instance. Named Service ports follow changes to their numeric
+port; numeric selectors must still match the original number. Status checks
+live, UID-matching recorded resources and available backing workloads, using
+their own pods where needed. A missing, replaced or unreadable Service or
+backend, or a changed target port, suppresses the recorded inference endpoint
+and produces `endpointFindings`; it does not silently switch to another Service.
+This is resource and availability validation, not an HTTP probe.
+
+The existing status `endpoints` URL list remains compatible. Unrecognized live
+ports have purpose `unknown` in `endpointDetails`. Older instances discover from
+their own inventory, never from unrelated Services in the namespace. Explicit
+endpoint declarations are no longer read. Consumers must reject a missing
+inference endpoint, not fall back to the first URL:
+
+```sh
+llmd -o json status my-instance -n my-namespace > status.json
+INFERENCE_URL=$(jq -er '.inferenceEndpoint.url // empty' status.json) || exit 1
+# Pass "$INFERENCE_URL" to the benchmark's endpoint option.
+```
+
+The URL uses cluster-local Service DNS; the benchmark must have network access
+to that Service.
+
 ## An empty namespace
 
 ```sh
@@ -137,29 +205,36 @@ llmd status optimized-baseline -n <namespace>
 llmd teardown optimized-baseline -n <namespace>
 ```
 
-`plan` renders the guide, moves every object into the namespace, and reports what blocks a standup:
+`plan` renders the guide, moves every object into the namespace, and reports
+what blocks a standup:
 
-- objects only an administrator may apply. `--admin-yaml FILE` writes them; pass `--skip-admin-parts` once
-  they are applied;
-- privileged containers and hostPath volumes. Pass `--allow-privileged` once an administrator has granted them;
-- missing Secrets and claims, missing permissions, and objects another tool already deployed;
-- a claim that is being deleted, or Lost. Pods that already mount it keep running, but a new pod cannot
-  mount it, so it stays Pending. `scale` and `rollouts` refuse for the same reason.
+- objects only an administrator may apply. `--admin-yaml FILE` writes them; pass
+  `--skip-admin-parts` once they are applied;
+- privileged containers and hostPath volumes. Pass `--allow-privileged` once an
+  administrator has granted them;
+- missing Secrets and claims, missing permissions, and objects another tool
+  already deployed;
+- a claim that is being deleted, or Lost. Pods that already mount it keep
+  running, but a new pod cannot mount it, so it stays Pending. `scale` and
+  `rollouts` refuse for the same reason.
 
-The llm-d router chart creates a ClusterRole and ClusterRoleBinding so that the endpoint picker can check who
-scrapes its metrics. Without an administrator, `--set router.monitoring.prometheus.auth.enabled=false` turns
-that check off. The metrics are then served without authentication inside the cluster.
+The llm-d router chart creates a ClusterRole and ClusterRoleBinding so that the
+endpoint picker can check who scrapes its metrics. Without an administrator,
+`--set router.monitoring.prometheus.auth.enabled=false` turns that check off.
+The metrics are then served without authentication inside the cluster.
 
-`standup` records the instance before it applies anything, then applies with server-side apply. It also
-records the `--var` and `--set` values with the instance. `teardown` deletes exactly the recorded objects whose
-UID still matches. Claims are kept unless you pass `--delete-volumes`.
+`standup` records the instance before it applies anything, then applies with
+server-side apply. It also records the `--var` and `--set` values with the
+instance. `teardown` deletes exactly the recorded objects whose UID still
+matches. Claims are kept unless you pass `--delete-volumes`.
 
 ## Companions
 
-Some teams keep parts of a namespace apart from the model stack on purpose, so that tearing the model down
-leaves them: NetworkPolicies for the namespace, or a model-cache claim whose volume an administrator binds once.
-`llmd` calls each such part a *companion*. Say where a source keeps them when you register it, as path templates
-relative to the checkout:
+Some teams keep parts of a namespace apart from the model stack on purpose, so
+that tearing the model down leaves them: NetworkPolicies for the namespace, or a
+model-cache claim whose volume an administrator binds once. `llmd` calls each
+such part a _companion_. Say where a source keeps them when you register it, as
+path templates relative to the checkout:
 
 ```sh
 llmd sources add team ~/src/team-stacks \
@@ -168,14 +243,18 @@ llmd sources add team ~/src/team-stacks \
 llmd stacks deploy/model-a/cluster-a --companions <namespace>   # what the templates find
 ```
 
-`{stack}` is the stack's path, `{name}` its last segment and `{namespace}` the target namespace; `..` steps up a
-directory and `*` matches within one segment. A template that matches nothing is skipped, and one that matches
-several paths is reported with all of them. Each match is a kustomize directory or a manifest file.
+`{stack}` is the stack's path, `{name}` its last segment and `{namespace}` the
+target namespace; `..` steps up a directory and `*` matches within one segment.
+A template that matches nothing is skipped, and one that matches several paths
+is reported with all of them. Each match is a kustomize directory or a manifest
+file.
 
-`plan` reports each companion the namespace lacks. `standup --with-companions` stands those up first, in the
-order the templates were given, each as its own instance (`<last segment>-companion`). A teardown of the stack
-keeps them. For a claim that is missing or Pending, `plan` also names the file in the source that defines its
-PersistentVolume, for an administrator to apply; `llmd` neither reads nor writes PersistentVolumes.
+`plan` reports each companion the namespace lacks. `standup --with-companions`
+stands those up first, in the order the templates were given, each as its own
+instance (`<last segment>-companion`). A teardown of the stack keeps them. For a
+claim that is missing or Pending, `plan` also names the file in the source that
+defines its PersistentVolume, for an administrator to apply; `llmd` neither
+reads nor writes PersistentVolumes.
 
 ## A guide already deployed with its README's commands
 
@@ -184,10 +263,11 @@ llmd import optimized-baseline -n <namespace> --name <instance> --dry-run   # do
 llmd import optimized-baseline -n <namespace> --name <instance>
 ```
 
-`import` records the running objects by UID and changes nothing else: no labels, no apply, and no field
-ownership, so the team's own `kubectl apply -k` and `helm upgrade` keep working. `--dry-run` compares the
-running objects with the guide's render first. `llmd teardown <instance> --forget` stops managing the instance
-and leaves every object running.
+`import` records the running objects by UID and changes nothing else: no labels,
+no apply, and no field ownership, so the team's own `kubectl apply -k` and
+`helm upgrade` keep working. `--dry-run` compares the running objects with the
+guide's render first. `llmd teardown <instance> --forget` stops managing the
+instance and leaves every object running.
 
 ## Scaling
 
@@ -197,17 +277,21 @@ llmd scale <instance> -n <namespace> pd-disagg-vllm/decode=2 --no-drain     # a 
 llmd scale <instance> -n <namespace> optimized-baseline-nvidia-gpu-vllm-decode=--   # back to the files
 ```
 
-`llmd scale` sets the replicas of a Deployment, StatefulSet or LeaderWorkerSet, or of a DisaggregatedSet role
-(`SET/ROLE`). It applies only that object and keeps the count in the instance's record, so a later `standup` or
-`rollouts` keeps it rather than setting it back to what the guide says, which a plain `kubectl scale` would not
-survive. `plan` and `status` list each kept count. `WORKLOAD=--`, or the count the files say, clears it. A guide
-is rendered with the `--var` and `--set` values the instance was stood up with.
+`llmd scale` sets the replicas of a Deployment, StatefulSet or LeaderWorkerSet,
+or of a DisaggregatedSet role (`SET/ROLE`). It applies only that object and
+keeps the count in the instance's record, so a later `standup` or `rollouts`
+keeps it rather than setting it back to what the guide says, which a plain
+`kubectl scale` would not survive. `plan` and `status` list each kept count.
+`WORKLOAD=--`, or the count the files say, clears it. A guide is rendered with
+the `--var` and `--set` values the instance was stood up with.
 
-Lowering a DisaggregatedSet role removes its highest groups. `--no-drain` lowers it directly: the guides' vLLM
-pods drain as they stop. A stack that admits the lowering only from its own drain tool passes it with
-`--drain COMMAND` (`{role}`, `{set}`, `{count}`, `{namespace}`, `{source}`); llmd runs it, waits, and records the
-count once it exits 0. Scaling to 0 asks first (`-y` skips). `--dry-run` sends the change as a server dry run.
-A rollout in progress refuses a scale.
+Lowering a DisaggregatedSet role removes its highest groups. `--no-drain` lowers
+it directly: the guides' vLLM pods drain as they stop. A stack that admits the
+lowering only from its own drain tool passes it with `--drain COMMAND`
+(`{role}`, `{set}`, `{count}`, `{namespace}`, `{source}`); llmd runs it, waits,
+and records the count once it exits 0. Scaling to 0 asks first (`-y` skips).
+`--dry-run` sends the change as a server dry run. A rollout in progress refuses
+a scale.
 
 ## Moving an instance to another namespace or cluster
 
@@ -219,29 +303,37 @@ llmd migrate status <instance> --from <namespace-a> --to <namespace-b>
 llmd migrate finish <instance> --from <namespace-a> --to <namespace-b>     # tears the source down
 ```
 
-`migrate` moves one workload (by default the stack's only scalable one that asks for accelerators; else
-`--workload`) a replica at a time, so capacity does not drop:
+`migrate` moves one workload (by default the stack's only scalable one that asks
+for accelerators; else `--workload`) a replica at a time, so capacity does not
+drop:
 
-- `plan` checks both sides, read-only: the source is settled and not rolling, the target's plan (with its
-  companions), and that the target has no other instance of that name.
-- `start` stands the stack up in the target with the workload at 1 (a `scale` count; `--with-companions` first)
-  and marks the migration in both records. The target is rendered with the source's guide variables (`--var`,
-  `--set`), and `--stack` gives it another stack path.
-- `step` raises the target by one, waits until its new replica is Ready (`--timeout`), and only then lowers the
-  source by one, through `--no-drain` or `--drain` for a DisaggregatedSet role, as for `scale`. A step that
-  times out leaves the source as it was.
+- `plan` checks both sides, read-only: the source is settled and not rolling,
+  the target's plan (with its companions), and that the target has no other
+  instance of that name.
+- `start` stands the stack up in the target with the workload at 1 (a `scale`
+  count; `--with-companions` first) and marks the migration in both records. The
+  target is rendered with the source's guide variables (`--var`, `--set`), and
+  `--stack` gives it another stack path.
+- `step` raises the target by one, waits until its new replica is Ready
+  (`--timeout`), and only then lowers the source by one, through `--no-drain` or
+  `--drain` for a DisaggregatedSet role, as for `scale`. A step that times out
+  leaves the source as it was.
 - `finish` tears the source down once it is at 0, keeping its claims.
 
-Traffic is moved by hand between steps (a gateway's route weights, or the like); `llmd` does not change it. Each
-side has its own `--from-context`/`--to-context`, `--from-kubeconfig`/`--to-kubeconfig` and
-`--from-source`/`--to-source`, so the same steps move an instance to another cluster.
+Traffic is moved by hand between steps (a gateway's route weights, or the like);
+`llmd` does not change it. Each side has its own
+`--from-context`/`--to-context`, `--from-kubeconfig`/`--to-kubeconfig` and
+`--from-source`/`--to-source`, so the same steps move an instance to another
+cluster.
 
 ## Rollouts
 
-A rollout moves an instance to what another ref of the same stack renders, in place. In a guide whose model
-server is one DisaggregatedSet (`guides/pd-disaggregation`, `guides/wide-ep`), a change to the pod templates
-makes its controller (lws) replace every group. With `maxSurge: 0` and `maxUnavailable: N` per role, each step
-removes up to N old groups of every role and creates as many new ones.
+A rollout moves an instance to what another ref of the same stack renders, in
+place. In a guide whose model server is one DisaggregatedSet
+(`guides/pd-disaggregation`, `guides/wide-ep`), a change to the pod templates
+makes its controller (lws) replace every group. With `maxSurge: 0` and
+`maxUnavailable: N` per role, each step removes up to N old groups of every role
+and creates as many new ones.
 
 ```sh
 NEW=https://github.com/llm-d/llm-d.git#refs/pull/<N>/head
@@ -249,28 +341,35 @@ llmd rollouts plan pd-disaggregation -n <namespace> --name <instance> --source "
 llmd rollouts start pd-disaggregation -n <namespace> --name <instance> --source "$NEW" --no-drain --watch
 ```
 
-`rollouts plan` is read-only. It shows the objects that change, whether the DisaggregatedSet rolls or only
-scales, the steps, and the groups each role keeps serving during a step. It refuses a rollout in these cases:
+`rollouts plan` is read-only. It shows the objects that change, whether the
+DisaggregatedSet rolls or only scales, the steps, and the groups each role keeps
+serving during a step. It refuses a rollout in these cases:
 
 - a roll is in progress, or a group is not serving;
 - several DisaggregatedSets would roll at once;
 - roles are added or removed;
 - a step would leave a role below its `--floor`;
-- a step would leave a role with no group serving. `--allow-outage` accepts that outage;
-- the stack path differs from the one the instance runs. `--switch-stack` rolls it to that path instead,
-  for example from the overlay a team runs to the copy it prepared a change in. The record then follows
-  the new path, and keeps the old one as `previousStack`.
+- a step would leave a role with no group serving. `--allow-outage` accepts that
+  outage;
+- the stack path differs from the one the instance runs. `--switch-stack` rolls
+  it to that path instead, for example from the overlay a team runs to the copy
+  it prepared a change in. The record then follows the new path, and keeps the
+  old one as `previousStack`.
 
-The llm-d guides' vLLM overlays drain each pod as it stops: a `preStop` sleep, then vLLM's
-`--shutdown-timeout`. `--no-drain` relies on that. A stack that holds the controller's scale-down until a drain
-tool takes a group out of the pool passes that tool with `--drain`. `llmd` runs it once per role, filling in
-`{role}`, `{source}`, `{namespace}`, `{set}`, `{old_revision}` and `{max_unavailable}`. Each drainer's output is
-under `$LENS_DATA_DIR/llmd/rollouts/<namespace>/<instance>/`.
+The llm-d guides' vLLM overlays drain each pod as it stops: a `preStop` sleep,
+then vLLM's `--shutdown-timeout`. `--no-drain` relies on that. A stack that
+holds the controller's scale-down until a drain tool takes a group out of the
+pool passes that tool with `--drain`. `llmd` runs it once per role, filling in
+`{role}`, `{source}`, `{namespace}`, `{set}`, `{old_revision}` and
+`{max_unavailable}`. Each drainer's output is under
+`$LENS_DATA_DIR/llmd/rollouts/<namespace>/<instance>/`.
 
-`--pool-label LABEL` names the pod label such a tool sets to `false` when it takes a group out of the pool; a
-group then counts as serving only while that label is `true`. Register it once with
-`llmd sources add NAME PATH --pool-label LABEL`. `rollouts start` records the label it used, so `status`,
-`--watch`, `abort` and `finish` judge groups the same way without the flag.
+`--pool-label LABEL` names the pod label such a tool sets to `false` when it
+takes a group out of the pool; a group then counts as serving only while that
+label is `true`. Register it once with
+`llmd sources add NAME PATH --pool-label LABEL`. `rollouts start` records the
+label it used, so `status`, `--watch`, `abort` and `finish` judge groups the
+same way without the flag.
 
 ```sh
 llmd rollouts status <instance> -n <namespace> [--watch]   # per role and revision; the drainers
@@ -291,6 +390,7 @@ python3 -m venv .venv
 .venv/bin/ruff format --check lens tests
 ```
 
-The tests use an in-memory cluster (`tests/fakes.py`). It answers the kubectl calls `llmd` makes and acts as
-the Deployment and lws controllers. Git, kustomize and Helm run for real, against a small checkout in llm-d's
-layout (`tests/data/llmd`).
+The tests use an in-memory cluster (`tests/fakes.py`). It answers the kubectl
+calls `llmd` makes and acts as the Deployment and lws controllers. Git,
+kustomize and Helm run for real, against a small checkout in llm-d's layout
+(`tests/data/llmd`).

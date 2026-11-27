@@ -1482,3 +1482,364 @@ async def test_router_render_manages_both_transport_and_proxy_after_user_overrid
         "--set",
         f"router.proxy.enabled={enabled}",
     ]
+
+
+def test_bind_model_strips_hf_secrets_across_non_modelserver_containers_and_syncs_probe_image():
+    serving = workload(
+        [
+            "--kv-events-config",
+            '{"enable_kv_cache_events":true,"publisher":"zmq","endpoint":"tcp://*:5556","topic":"kv@$(POD_IP):$(POD_PORT)@Qwen/Qwen3-32B"}',
+        ]
+    )
+    pod = serving["spec"]["template"]["spec"]
+    pod["containers"][0]["env"] = [
+        {"name": "HF_TOKEN", "valueFrom": {"secretKeyRef": {"name": "llm-d-hf-token", "key": "HF_TOKEN"}}},
+        {"name": "CUSTOM_SECRET", "valueFrom": {"secretKeyRef": {"name": "llm-d-hf-token", "key": "TOKEN"}}},
+        {"name": "VLLM_USE_V1", "value": "1"},
+    ]
+    pod["containers"].append({"name": "envoy-proxy"})
+    pod["initContainers"] = [
+        {
+            "name": "lens-kv-connector-check",
+            "image": "engine:pinned",
+            "env": [
+                {"name": "HF_TOKEN", "valueFrom": {"secretKeyRef": {"name": "llm-d-hf-token", "key": "HF_TOKEN"}}},
+                {"name": "HUGGING_FACE_HUB_TOKEN", "value": "legacy"},
+                {"name": "VLLM_USE_V1", "value": "1"},
+            ],
+        },
+        {"name": "plain-init"},
+    ]
+    router_deploy = {
+        "apiVersion": "apps/v1",
+        "kind": "Deployment",
+        "metadata": {"name": "router-epp", "namespace": "cache"},
+        "spec": {
+            "replicas": 1,
+            "template": {
+                "spec": {
+                    "containers": [
+                        {
+                            "name": "epp",
+                            "image": "router:pinned",
+                            "env": [
+                                {
+                                    "name": "HF_TOKEN",
+                                    "valueFrom": {"secretKeyRef": {"name": "llm-d-hf-token", "key": "HF_TOKEN"}},
+                                },
+                            ],
+                        },
+                        {
+                            "name": "vllm-render",
+                            "image": "engine:pinned",
+                            "env": [
+                                {"name": "OTHER_REF", "valueFrom": {"secretKeyRef": {"name": "llm-d-hf-token"}}},
+                                {"name": "DO_NOT_TRACK", "value": "1"},
+                            ],
+                        },
+                    ]
+                }
+            },
+        },
+    }
+    lws = {
+        "apiVersion": "leaderworkerset.x-k8s.io/v1",
+        "kind": "LeaderWorkerSet",
+        "metadata": {"name": "workers", "namespace": "cache"},
+        "spec": {
+            "replicas": 1,
+            "leaderWorkerTemplate": {
+                "size": 2,
+                "leaderTemplate": {
+                    "spec": {
+                        "containers": [
+                            {
+                                "name": "coordinator",
+                                "env": [
+                                    {
+                                        "name": "HF_TOKEN",
+                                        "valueFrom": {"secretKeyRef": {"name": "llm-d-hf-token", "key": "HF_TOKEN"}},
+                                    }
+                                ],
+                            }
+                        ],
+                        "initContainers": [
+                            {"name": "leader-init", "env": [{"name": "HUGGING_FACE_HUB_TOKEN", "value": "token"}]}
+                        ],
+                    }
+                },
+                "workerTemplate": deepcopy(serving["spec"]["template"]),
+            },
+        },
+    }
+    parsed = [serving, router_deploy, lws]
+
+    composition.bind_model(parsed, BINDING, image="registry.internal:5000/org/vllm:override")
+
+    # modelserver gets image override, /model-cache, offline env, updated kv-events topic, and stripped secrets.
+    ms = pod["containers"][0]
+    assert ms["image"] == "registry.internal:5000/org/vllm:override"
+    assert [item["name"] for item in ms["env"]] == ["VLLM_USE_V1", "HF_HOME", "HF_HUB_OFFLINE", "TRANSFORMERS_OFFLINE"]
+    assert any(m["mountPath"] == "/model-cache" for m in ms["volumeMounts"])
+    kv_arg_idx = ms["args"].index("--kv-events-config") + 1
+    assert json.loads(ms["args"][kv_arg_idx])["topic"] == "kv@$(POD_IP):$(POD_PORT)@example/model"
+
+    # initContainer lens-kv-connector-check keeps image synced and non-secret env, without /model-cache mount.
+    probe = pod["initContainers"][0]
+    assert probe["image"] == "registry.internal:5000/org/vllm:override"
+    assert probe["env"] == [{"name": "VLLM_USE_V1", "value": "1"}]
+    assert "volumeMounts" not in probe
+
+    # Unrelated containers without HF env remain untouched (no spurious empty env: []).
+    assert "env" not in pod["containers"][1]
+    assert "env" not in pod["initContainers"][1]
+
+    # Router epp and vllm-render strip HF secrets without mounting /model-cache.
+    epp, render = router_deploy["spec"]["template"]["spec"]["containers"]
+    assert "env" not in epp
+    assert "volumeMounts" not in epp
+    assert "volumes" not in router_deploy["spec"]["template"]["spec"]
+    assert render["env"] == [{"name": "DO_NOT_TRACK", "value": "1"}]
+    assert "volumeMounts" not in render
+
+    # Leader pod containers and initContainers also strip HF secrets.
+    leader_pod = lws["spec"]["leaderWorkerTemplate"]["leaderTemplate"]["spec"]
+    assert "env" not in leader_pod["containers"][0]
+    assert "env" not in leader_pod["initContainers"][0]
+
+    # No Secret/llm-d-hf-token remains referenced anywhere.
+    assert not any(
+        ref["kind"] == "Secret" and ref["name"] == "llm-d-hf-token" for ref in composition.resource_references(parsed)
+    )
+
+
+def test_bind_model_rewrites_embedded_configmap_model_identity_and_preserves_untouched():
+    untouched_envoy = "# keep comment\nstatic_resources:\n  clusters:\n    - name: ext_proc\n"
+    epp_plugins = (
+        "# header comment\n"
+        "apiVersion: llm-d.ai/v1\n"
+        "kind: EndpointPickerConfig\n"
+        "plugins:\n"
+        "  - type: token-producer\n"
+        "    parameters:\n"
+        "      modelName: Qwen/Qwen3-32B\n"
+    )
+    json_cfg = json.dumps({"modelName": "Qwen/Qwen3-32B", "other": 1})
+    parsed = [
+        workload(),
+        {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {"name": "epp-config", "namespace": "cache"},
+            "data": {
+                "precise-prefix-cache-routing-plugins.yaml": epp_plugins,
+                "envoy.yaml": untouched_envoy,
+                "extra.json": json_cfg,
+                "notes.txt": "modelName: Qwen/Qwen3-32B\n",
+                "invalid.yaml": "key: [unclosed",
+            },
+        },
+    ]
+
+    composition.bind_model(parsed, BINDING)
+    once = deepcopy(parsed)
+    composition.bind_model(parsed, BINDING)
+    assert parsed == once
+
+    data = parsed[1]["data"]
+    updated_epp = yaml.safe_load(data["precise-prefix-cache-routing-plugins.yaml"])
+    assert updated_epp["plugins"][0]["parameters"]["modelName"] == "example/model"
+    assert json.loads(data["extra.json"]) == {"modelName": "example/model", "other": 1}
+    assert data["envoy.yaml"] == untouched_envoy
+    assert data["notes.txt"] == "modelName: Qwen/Qwen3-32B\n"
+    assert data["invalid.yaml"] == "key: [unclosed"
+
+
+def test_compose_pd_disaggregation_native_cpu_cache_and_precise_router_clears_hf_secret(source_tree, monkeypatch):
+    (source_tree / "guides" / "pd-disaggregation").mkdir(parents=True, exist_ok=True)
+    (source_tree / "guides" / "pd-disaggregation" / "guide.yaml").write_text(
+        yaml.safe_dump({"name": "pd-disaggregation"}), encoding="utf-8"
+    )
+    (source_tree / "guides" / "tiered-prefix-cache").mkdir(parents=True, exist_ok=True)
+    (source_tree / "guides" / "tiered-prefix-cache" / "guide.yaml").write_text(
+        yaml.safe_dump({"name": "tiered-prefix-cache"}), encoding="utf-8"
+    )
+    pd_base = source_tree / "guides" / "pd-disaggregation" / "modelserver" / "xpu" / "vllm" / "base"
+    pd_base.mkdir(parents=True)
+    pd_docs = []
+    for role, kv_role in (("prefill", "kv_producer"), ("decode", "kv_consumer")):
+        doc = workload(
+            [
+                f"--kv-transfer-config={json.dumps({'kv_connector': 'NixlConnector', 'kv_role': kv_role, 'kv_buffer_device': 'cpu'})}",
+            ],
+            name=role,
+            role=role,
+        )
+        doc["spec"]["template"]["spec"]["containers"][0]["env"] = [
+            {"name": "HF_TOKEN", "valueFrom": {"secretKeyRef": {"name": "llm-d-hf-token", "key": "HF_TOKEN"}}},
+            {"name": "VLLM_USE_V1", "value": "1"},
+        ]
+        pd_docs.append(doc)
+    (pd_base / "deployment.yaml").write_text(composition.dump(pd_docs), encoding="utf-8")
+    (pd_base / "kustomization.yaml").write_text(
+        yaml.safe_dump(
+            {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "resources": ["deployment.yaml"]}
+        ),
+        encoding="utf-8",
+    )
+
+    cpu_donor = (
+        source_tree / "guides" / "tiered-prefix-cache" / "modelserver" / "xpu" / "vllm" / "native" / "cpu" / "base"
+    )
+    cpu_donor.mkdir(parents=True)
+    donor_doc = workload(
+        [
+            "--kv-transfer-config",
+            json.dumps(
+                {
+                    "kv_connector": "OffloadingConnector",
+                    "kv_role": "kv_both",
+                    "kv_connector_extra_config": {"cpu_bytes_to_use": 1024**3},
+                }
+            ),
+        ],
+        name="decode",
+        role="decode",
+    )
+    (cpu_donor / "deployment.yaml").write_text(composition.dump([donor_doc]), encoding="utf-8")
+    (cpu_donor / "kustomization.yaml").write_text(
+        yaml.safe_dump(
+            {"apiVersion": "kustomize.config.k8s.io/v1beta1", "kind": "Kustomization", "resources": ["deployment.yaml"]}
+        ),
+        encoding="utf-8",
+    )
+    shell.run_sync(["git", "-C", str(source_tree), "add", "."])
+    assert shell.run_sync(
+        [
+            "git",
+            "-C",
+            str(source_tree),
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+            "commit",
+            "-qm",
+            "add pd and native cpu donor",
+        ]
+    ).ok
+
+    async def authorized(request, body):
+        return source_tree, await catalog_module.inventory(source_tree)
+
+    async def binding(request, body):
+        return {**BINDING, "model": "Qwen/Qwen3-0.6B"}
+
+    async def fake_router(catalog, body):
+        return [
+            {
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {"name": "epp-router", "namespace": "cache"},
+                "spec": {
+                    "replicas": 1,
+                    "template": {
+                        "spec": {
+                            "volumes": [{"name": "plugins", "configMap": {"name": "epp-plugins"}}],
+                            "containers": [
+                                {
+                                    "name": "epp",
+                                    "image": "router:pinned",
+                                    "env": [
+                                        {
+                                            "name": "HF_TOKEN",
+                                            "valueFrom": {
+                                                "secretKeyRef": {"name": "llm-d-hf-token", "key": "HF_TOKEN"}
+                                            },
+                                        },
+                                        {"name": "NAMESPACE", "value": "cache"},
+                                    ],
+                                }
+                            ],
+                        }
+                    },
+                },
+            },
+            {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {"name": "epp-plugins", "namespace": "cache"},
+                "data": {
+                    "precise-prefix-cache-routing-plugins.yaml": yaml.safe_dump(
+                        {
+                            "apiVersion": "llm-d.ai/v1",
+                            "kind": "EndpointPickerConfig",
+                            "plugins": [
+                                {"type": "token-producer", "parameters": {"modelName": "Qwen/Qwen3-32B"}},
+                                {"type": "prefix-cache-affinity-filter"},
+                            ],
+                            "schedulingProfiles": [
+                                {"name": "default", "plugins": [{"pluginRef": "prefix-cache-affinity-filter"}]}
+                            ],
+                        },
+                        sort_keys=False,
+                    )
+                },
+            },
+        ]
+
+    async def target(request, body, parsed):
+        assert not any(
+            ref["kind"] == "Secret" and ref["name"] == "llm-d-hf-token"
+            for ref in composition.resource_references(parsed)
+        )
+        return {"warnings": [], "level": "device-count", "demand": {}, "available": {}}
+
+    monkeypatch.setattr(composition, "authorized_inventory", authorized)
+    monkeypatch.setattr(composition, "model_binding", binding)
+    monkeypatch.setattr(composition, "render_router", fake_router)
+    monkeypatch.setattr(composition, "check_target", target)
+    monkeypatch.setattr(
+        composition, "resolve_cluster_vllm_image", lambda _cid: "registry.internal:5000/org/vllm-xpu:cluster"
+    )
+
+    async def run():
+        catalog = await catalog_module.inventory(source_tree)
+        result = await composition.compose(
+            None,
+            {
+                "commit": catalog["commit"],
+                "clusterId": "fixture",
+                "namespace": "cache",
+                "units": [{"path": "guides/pd-disaggregation/modelserver/xpu/vllm/base"}],
+                "guideSelection": {"accelerator": "xpu"},
+                "nativeCpuCacheGiB": 4,
+                "validateCluster": False,
+            },
+        )
+        docs = list(yaml.safe_load_all(result["files"][0]["content"]))
+        assert not any(
+            ref["kind"] == "Secret" and ref["name"] == "llm-d-hf-token" for ref in composition.resource_references(docs)
+        )
+        for name in ("prefill", "decode"):
+            deploy = next(d for d in docs if d["kind"] == "Deployment" and d["metadata"]["name"] == name)
+            pod = deploy["spec"]["template"]["spec"]
+            ms = pod["containers"][0]
+            probe = pod["initContainers"][0]
+            assert ms["image"] == "registry.internal:5000/org/vllm-xpu:cluster"
+            assert probe["name"] == "lens-kv-connector-check"
+            assert probe["image"] == "registry.internal:5000/org/vllm-xpu:cluster"
+            assert probe["env"] == [{"name": "VLLM_USE_V1", "value": "1"}]
+            assert "volumeMounts" not in probe
+            kv_cfg = json.loads(ms["args"][ms["args"].index("--kv-transfer-config") + 1])
+            assert kv_cfg["kv_connector"] == "MultiConnector"
+            assert kv_cfg["kv_connector_extra_config"]["connectors"][1]["kv_connector"] == "OffloadingConnector"
+        epp_deploy = next(d for d in docs if d["kind"] == "Deployment" and d["metadata"]["name"] == "epp-router")
+        epp = epp_deploy["spec"]["template"]["spec"]["containers"][0]
+        assert epp["env"] == [{"name": "NAMESPACE", "value": "cache"}]
+        assert "volumeMounts" not in epp
+        cm = next(d for d in docs if d["kind"] == "ConfigMap" and d["metadata"]["name"] == "epp-plugins")
+        epp_cfg = yaml.safe_load(cm["data"]["precise-prefix-cache-routing-plugins.yaml"])
+        assert epp_cfg["plugins"][0]["parameters"]["modelName"] == "Qwen/Qwen3-0.6B"
+
+    asyncio.run(run())

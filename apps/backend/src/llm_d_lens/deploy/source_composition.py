@@ -559,6 +559,32 @@ async def model_binding(request, body: dict) -> dict:
     }
 
 
+def _is_hf_secret_env(item: object) -> bool:
+    if not isinstance(item, dict):
+        return False
+    if item.get("name") in {"HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"}:
+        return True
+    value_from = item.get("valueFrom")
+    if isinstance(value_from, dict):
+        secret_ref = value_from.get("secretKeyRef")
+        if isinstance(secret_ref, dict) and secret_ref.get("name") == "llm-d-hf-token":
+            return True
+    return False
+
+
+def _strip_hf_secret_env(container: object) -> None:
+    if not isinstance(container, dict):
+        return
+    env_items = container.get("env")
+    if not isinstance(env_items, list) or not any(_is_hf_secret_env(item) for item in env_items):
+        return
+    filtered = [item for item in env_items if not _is_hf_secret_env(item)]
+    if filtered:
+        container["env"] = filtered
+    else:
+        container.pop("env", None)
+
+
 def bind_model(parsed: list[dict], binding: dict, image: str | None = None) -> None:
     count = 0
     for workload in workload_roles(parsed):
@@ -566,12 +592,15 @@ def bind_model(parsed: list[dict], binding: dict, image: str | None = None) -> N
         if any(container.get("name") == "modelserver" for container in leader.get("containers", [])):
             raise GuideError("Model-serving leader templates require a dedicated cache and runtime adapter.")
         pod = workload["pod"]
+        has_modelserver = False
         for container in pod.get("containers", []):
             if container.get("name") != "modelserver":
+                _strip_hf_secret_env(container)
                 continue
+            has_modelserver = True
             if workload["document"]["metadata"].get("namespace") != binding["namespace"]:
                 raise GuideError("Model workloads and cache PVC must share a namespace.")
-            configure_model_server(container, binding["model"], 0, binding["model"], False)
+            configure_model_server(container, binding["model"], 0, binding["model"], True)
             apply_runtime_overrides(container, [{"kind": "argument", "name": "revision", "value": binding["revision"]}])
             if image:
                 container["image"] = image
@@ -593,12 +622,17 @@ def bind_model(parsed: list[dict], binding: dict, image: str | None = None) -> N
                 mounts.append(mount)
             env = {"HF_HOME": "/model-cache", "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1"}
             container["env"] = [
-                item
-                for item in container.get("env", [])
-                if item.get("name") not in {*env, "HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"}
+                item for item in container.get("env", []) if item.get("name") not in env and not _is_hf_secret_env(item)
             ]
             container["env"].extend({"name": key, "value": value} for key, value in env.items())
             count += 1
+        for init_container in pod.get("initContainers", []):
+            _strip_hf_secret_env(init_container)
+            if image and has_modelserver and init_container.get("name") == "lens-kv-connector-check":
+                init_container["image"] = image
+        if isinstance(leader, dict) and leader:
+            for leader_container in [*leader.get("containers", []), *leader.get("initContainers", [])]:
+                _strip_hf_secret_env(leader_container)
     if not count:
         raise GuideError("No supported modelserver workload was found for the cached model.")
 
@@ -624,6 +658,24 @@ def bind_model(parsed: list[dict], binding: dict, image: str | None = None) -> N
                 identity(child)
 
     identity(parsed)
+    for doc in parsed:
+        if doc.get("kind") != "ConfigMap":
+            continue
+        data = doc.get("data")
+        if not isinstance(data, dict):
+            continue
+        for name, text in data.items():
+            if not isinstance(text, str) or not re.search(r"\.ya?ml$|\.json$", name, re.IGNORECASE):
+                continue
+            try:
+                configs = documents(text)
+            except GuideError:
+                continue
+            original = deepcopy(configs)
+            identity(configs)
+            if configs != original:
+                is_json = name.lower().endswith(".json") and len(configs) == 1
+                data[name] = json.dumps(configs[0], indent=2) if is_json else dump(configs)
 
 
 def pod_claim_templates(parsed: list[dict], pod: dict, namespace: str) -> list[dict]:

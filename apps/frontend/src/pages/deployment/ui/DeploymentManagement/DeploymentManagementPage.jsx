@@ -347,7 +347,7 @@ export function DeploymentManagementPage({ onNavigate, initialSearch = '', initi
                 // Monitoring may not be installed for this deployment; don't block deletion on it.
                 console.warn('Failed to uninstall deployment monitoring before delete', monitoringError);
             }
-            await deleteDeploymentExecution(executionId, { deleteNamespace, runId: selected.run_id });
+            await deleteDeploymentExecution(executionId, { deleteNamespace, runId: selected.run_id, clusterId: selected.cluster_id });
             setItems((current) => current.filter((item) => item.execution_id !== executionId));
             setNotice('Deployment deleted');
             closeDialog();

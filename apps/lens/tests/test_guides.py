@@ -97,6 +97,17 @@ def test_expansion_follows_the_shell():
 
 
 @needs_tools
+def test_guide_discovers_the_rendered_proxy_service(llmrepo):
+    stack = find_stack(resolve_source(str(llmrepo)), GUIDE)
+    plan = make_plan(stack, Options(namespace="team-a", instance="r1", skip_admin_parts=True), runner=subprocess_runner)
+    assert not plan.blocking
+    assert plan.inference_endpoint["service"] == "demo-baseline-epp"
+    assert plan.inference_endpoint["portName"] == "http"
+    assert plan.inference_endpoint["port"] == 80
+    assert plan.inference_endpoint["endpointType"] == "router"
+
+
+@needs_tools
 def test_a_guide_renders_what_its_readme_would_apply(llmrepo):
     stack = find_stack(resolve_source(str(llmrepo)), GUIDE)
     rendered = render(stack, runner=subprocess_runner, namespace="team-a")

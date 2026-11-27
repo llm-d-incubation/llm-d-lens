@@ -1239,6 +1239,34 @@ def _stored_cleanup_digest(execution: Any) -> str | None:
     return digest.strip() if isinstance(digest, str) and digest.strip() else None
 
 
+async def _delete_execution_records(
+    context: DeploymentExecutionContext,
+    *,
+    delete_namespace: bool,
+    store: Any | None = None,
+) -> None:
+    from types import SimpleNamespace
+
+    from llm_d_lens.deploy.worker import DeploymentRunWorker
+
+    target_store = store if store is not None else _get_store()
+    if not context.run_id and not delete_namespace:
+        target_store.delete_execution(context.execution_id)
+        DeploymentRunWorker._revoke_execution_shares([context.execution_id])
+        return
+    manager = _get_run_manager()
+    if delete_namespace:
+        worker = manager.worker_for_run(context.run_id)
+    else:
+        local_delete = getattr(manager, "worker_for_local_delete", None)
+        worker = (
+            local_delete(context.run_id, store=target_store)
+            if callable(local_delete)
+            else DeploymentRunWorker(target_store, SimpleNamespace())
+        )
+    await worker.delete_case_execution(context.run_id, context.case_id, delete_namespace=delete_namespace)
+
+
 async def delete_execution(execution_id: str, *, delete_namespace: bool = True) -> None:
     """Remove a deployment's Prism records, optionally cleaning its cluster resources first.
 
@@ -1256,8 +1284,7 @@ async def delete_execution(execution_id: str, *, delete_namespace: bool = True) 
         if reason:
             raise DeploymentExecutionConflictError(reason, code="deployment_in_use")
         try:
-            worker = _get_run_manager().worker_for_run(context.run_id)
-            await worker.delete_case_execution(context.run_id, context.case_id, delete_namespace=delete_namespace)
+            await _delete_execution_records(context, delete_namespace=delete_namespace)
         except auth_errors:
             raise
         except RuntimeConfigurationError as error:
@@ -1291,11 +1318,14 @@ async def verify_execution_cleanup(
             raise DeploymentExecutionConflictError(reason, code="deployment_in_use")
         if not context.namespace or not context.cluster_id:
             if delete_record_on_verify or force_delete_record:
-                if context.run_id:
-                    worker = _get_run_manager().worker_for_run(context.run_id)
-                    await worker.delete_case_execution(context.run_id, context.case_id, delete_namespace=False)
-                else:
-                    store.delete_execution(execution_id)
+                try:
+                    await _delete_execution_records(context, delete_namespace=False, store=store)
+                except auth_errors:
+                    raise
+                except DeploymentInUseError as error:
+                    raise DeploymentExecutionConflictError(str(error), code="deployment_in_use") from error
+                except ValueError as error:
+                    raise DeploymentExecutionConflictError(str(error)) from error
                 _execution_locks.pop(execution_id, None)
                 return {
                     "verified": True,
@@ -1355,13 +1385,11 @@ async def verify_execution_cleanup(
             return {**verification, "deleted": False}
 
         try:
-            if context.run_id:
-                worker = _get_run_manager().worker_for_run(context.run_id)
-                await worker.delete_case_execution(context.run_id, context.case_id, delete_namespace=False)
-            else:
-                store.delete_execution(execution_id)
+            await _delete_execution_records(context, delete_namespace=False, store=store)
         except auth_errors:
             raise
+        except DeploymentInUseError as error:
+            raise DeploymentExecutionConflictError(str(error), code="deployment_in_use") from error
         except ValueError as error:
             raise DeploymentExecutionConflictError(str(error)) from error
     _execution_locks.pop(execution_id, None)

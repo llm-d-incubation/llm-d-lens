@@ -21,17 +21,88 @@ export async function verifyDeploymentExecution(executionId, smoke = false, metr
     return post(`/api/v1/deployments/executions/${encodeURIComponent(executionId)}/verify`, { smoke, metrics_only: metricsOnly });
 }
 
-export async function prepareDeploymentRestart(executionId) {
-    const clusterSessionId = sessionStorage.getItem('prism_cluster_session_id');
-    return post(`/api/v1/deployments/executions/${encodeURIComponent(executionId)}/restart-plan`, clusterSessionId ? { cluster_session_id: clusterSessionId } : null);
+const SESSION_ERROR_STATUSES = new Set([400, 404, 409]);
+const SESSION_ERROR_PHRASES = [
+    'not connected',
+    'no longer active',
+    'does not match',
+    'not found',
+    'no active',
+    'expired',
+];
+
+function readStoredClusterSession() {
+    try {
+        return {
+            sessionId: globalThis.sessionStorage?.getItem?.('prism_cluster_session_id') || '',
+            serverId: globalThis.sessionStorage?.getItem?.('prism_cluster_server_id') || '',
+        };
+    } catch {
+        return { sessionId: '', serverId: '' };
+    }
 }
 
-async function rebindLocalDeploymentRun(runId) {
-    const clusterSessionId = sessionStorage.getItem('prism_cluster_session_id');
-    if (!clusterSessionId) return;
-    await post(`/api/v1/deployments/runs/${encodeURIComponent(runId)}/cluster-session`, {
-        cluster_session_id: clusterSessionId,
-    });
+function isClusterSessionError(error) {
+    if (!SESSION_ERROR_STATUSES.has(error?.status)) return false;
+    const text = `${error?.code || ''} ${error?.message || ''}`.toLowerCase();
+    return text.includes('cluster session') && SESSION_ERROR_PHRASES.some((phrase) => text.includes(phrase));
+}
+
+async function acquireClusterSessionId(clusterId) {
+    if (!clusterId) return '';
+    const payload = await requestJson(`/api/cluster/session?clusterId=${encodeURIComponent(clusterId)}`);
+    return payload?.sessionId || payload?.session_id || '';
+}
+
+async function runWithClusterSession({ clusterId, resolveClusterId, skipWhenNoSession = false }, action) {
+    const { sessionId: storedSessionId, serverId: storedServerId } = readStoredClusterSession();
+    const foreignSession = Boolean(clusterId && storedServerId && storedServerId !== clusterId);
+
+    // Never send a stored session belonging to another cluster; acquire a session for the target cluster instead.
+    if (foreignSession || (clusterId && !storedSessionId)) {
+        const freshSessionId = await acquireClusterSessionId(clusterId);
+        if (!freshSessionId && skipWhenNoSession) return undefined;
+        return action(freshSessionId);
+    }
+
+    if (!storedSessionId && skipWhenNoSession) return undefined;
+
+    try {
+        return await action(storedSessionId);
+    } catch (error) {
+        if (!isClusterSessionError(error)) throw error;
+        const targetClusterId = clusterId || (await resolveClusterId?.());
+        if (!targetClusterId) throw error;
+        const freshSessionId = await acquireClusterSessionId(targetClusterId);
+        if (!freshSessionId || freshSessionId === storedSessionId) throw error;
+        return action(freshSessionId);
+    }
+}
+
+export async function prepareDeploymentRestart(executionId, { clusterId } = {}) {
+    return runWithClusterSession(
+        {
+            clusterId,
+            resolveClusterId: async () => (await getDeploymentExecution(executionId).catch(() => null))?.cluster_id || '',
+        },
+        (clusterSessionId) => post(
+            `/api/v1/deployments/executions/${encodeURIComponent(executionId)}/restart-plan`,
+            clusterSessionId ? { cluster_session_id: clusterSessionId } : null,
+        ),
+    );
+}
+
+async function rebindLocalDeploymentRun(runId, { clusterId } = {}) {
+    return runWithClusterSession(
+        {
+            clusterId,
+            skipWhenNoSession: true,
+            resolveClusterId: async () => (await getLocalDeploymentRun(runId).catch(() => null))?.provenance?.cluster_server_id || '',
+        },
+        (clusterSessionId) => post(`/api/v1/deployments/runs/${encodeURIComponent(runId)}/cluster-session`, {
+            cluster_session_id: clusterSessionId,
+        }),
+    );
 }
 
 export async function listDeploymentNodeLabels(clusterId, signal) {
@@ -90,12 +161,12 @@ export async function scaleDeploymentExecution(executionId, { prefillReplicas, d
     });
 }
 
-export async function deleteDeploymentExecution(executionId, { deleteNamespace, runId } = {}) {
+export async function deleteDeploymentExecution(executionId, { deleteNamespace, runId, clusterId } = {}) {
     // Deleting can clean up cluster resources (see delete_namespace), which needs
     // a live cluster session. Rebind proactively, matching stop/restart/clean below,
     // instead of failing on a stale session bound at deployment-create time.
-    if (runId) {
-        await rebindLocalDeploymentRun(runId);
+    if (runId && deleteNamespace !== false) {
+        await rebindLocalDeploymentRun(runId, { clusterId });
     }
     const params = new URLSearchParams();
     if (deleteNamespace !== undefined) params.set('delete_namespace', deleteNamespace ? 'true' : 'false');
@@ -168,18 +239,18 @@ export async function refreshLocalDeploymentCase(runId, caseId) {
     return post(`/api/v1/deployments/runs/${encodeURIComponent(runId)}/cases/${encodeURIComponent(caseId)}/refresh`, {});
 }
 
-export async function stopLocalDeploymentCase(runId, caseId) {
-    await rebindLocalDeploymentRun(runId);
+export async function stopLocalDeploymentCase(runId, caseId, { clusterId } = {}) {
+    await rebindLocalDeploymentRun(runId, { clusterId });
     return post(`/api/v1/deployments/runs/${encodeURIComponent(runId)}/cases/${encodeURIComponent(caseId)}/stop`, {});
 }
 
-export async function restartLocalDeploymentCase(runId, caseId) {
-    await rebindLocalDeploymentRun(runId);
+export async function restartLocalDeploymentCase(runId, caseId, { clusterId } = {}) {
+    await rebindLocalDeploymentRun(runId, { clusterId });
     return post(`/api/v1/deployments/runs/${encodeURIComponent(runId)}/cases/${encodeURIComponent(caseId)}/restart`, {});
 }
 
-export async function cleanLocalDeploymentCase(runId, caseId, preserveRenderedOverlay = false) {
-    await rebindLocalDeploymentRun(runId);
+export async function cleanLocalDeploymentCase(runId, caseId, preserveRenderedOverlay = false, { clusterId } = {}) {
+    await rebindLocalDeploymentRun(runId, { clusterId });
     return post(`/api/v1/deployments/runs/${encodeURIComponent(runId)}/cases/${encodeURIComponent(caseId)}/clean`, {
         preserve_rendered_overlay: preserveRenderedOverlay,
     });

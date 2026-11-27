@@ -169,6 +169,41 @@ llmd teardown optimized-baseline -n llmd-dev -y
 }
 ```
 
+### `llmd` 推理入口
+
+Lens engine 从渲染资源自动发现推理入口。guide、kustomize 和 manifest stack
+均不需要声明 endpoint，也不需要额外的元数据文件。
+Service selector 用于关联工作负载的 Pod template，包括 LeaderWorkerSet 和 DisaggregatedSet。
+TCP `targetPort` 必须对应已识别的服务容器；模型容器未声明端口时解析 `--port`，
+只有该参数不存在时才默认使用 8000。
+Envoy/agentgateway 路由入口优先于 vLLM/SGLang 模型直连入口，decode 优先于普通模型入口，
+排除 prefill-only 入口。同类候选中优先使用非 headless Service。
+metrics、health、admin 和 EPP gRPC 内部端口不作为推理入口。
+同级候选无法区分时报告歧义，不回退到第一个 Service 或端口。
+缺少或歧义的推理入口会产生警告并返回空的首选入口，但不阻止部署。
+
+`llmd -o json plan STACK -n NAMESPACE` 和 `llmd -o json status INSTANCE -n NAMESPACE`
+返回 `endpointDetails` 和 `inferenceEndpoint`（对象或 `null`）。每个对象包含 `purpose`、
+`service`、`namespace`、`port`、`portName`、`scheme`、`preferred` 和 `url`。
+Python 的 `Plan.summary()` 与 `instance_status()` API 返回相同契约。
+`discoverySource` 和 `reason` 说明发现依据；推断出的入口还包含 `endpointType` 和 `backends`，
+记录工作负载、template、容器及目标端口。结果纳入 plan digest 并随实例保存。
+`portSelector` 保留 Service 端口名或端口号：命名端口可跟随数字端口变化，数字选择器必须精确匹配。
+status 重新验证 UID 匹配的实时资源及可用后端。Service 或后端缺失、被替换、不可读取，
+或目标端口改变时返回 `endpointFindings`，并将推理入口设为 `null`，不会自动改选其他 Service。
+这不代表已验证 HTTP 可达性。
+
+status 保留旧的 `endpoints` URL 列表。无法识别的端口在 `endpointDetails` 中标为 `unknown`。
+旧实例仅从自身 inventory 自动发现，不扫描 namespace 中的无关资源；原有显式 endpoint 声明不再读取。
+workflow 只读取 `inferenceEndpoint.url` 并传给 benchmark；缺失时应失败：
+
+```sh
+llmd -o json status my-instance -n my-namespace > status.json
+INFERENCE_URL=$(jq -er '.inferenceEndpoint.url // empty' status.json) || exit 1
+```
+
+benchmark 必须能够访问该集群内 Service URL，不得回退到旧列表的首个 URL 或选择 metrics 端口。
+
 ---
 
 ## 服务端与运维脚本

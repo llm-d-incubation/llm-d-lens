@@ -170,6 +170,44 @@ llmd teardown optimized-baseline -n llmd-dev -y
 }
 ```
 
+### `llmd` inference endpoints
+
+The Lens engine discovers inference endpoints automatically from rendered resources. Guides,
+kustomize and manifest stacks need no endpoint declarations or extra metadata files.
+Service selectors are matched to workload templates, including LeaderWorkerSets and DisaggregatedSets.
+TCP `targetPort` values must match a recognized serving container. Model containers without declared
+ports use `--port`, or 8000 when absent. Envoy/agentgateway routers are preferred over direct
+vLLM/SGLang model access; decode endpoints are preferred over ordinary model endpoints, and prefill-only
+endpoints are excluded. Within a category, non-headless Services are preferred. Internal metrics,
+health, admin and EPP gRPC ports are excluded. Equally eligible endpoints are ambiguous; there is no
+fallback to the first Service or port. Missing or ambiguous inference endpoints produce warnings and
+a null selected endpoint, without blocking deployment.
+
+`llmd -o json plan STACK -n NAMESPACE` and `llmd -o json status INSTANCE -n NAMESPACE` return
+`endpointDetails` and `inferenceEndpoint` (an object or `null`). Each object contains `purpose`,
+`service`, `namespace`, `port`, `portName`, `scheme`, `preferred` and `url`. The same contract is
+returned by the Python `Plan.summary()` and `instance_status()` APIs. `discoverySource` and `reason`
+explain discovery, while inferred endpoints also include `endpointType` and `backends` with the
+workload, template, container and target port. Results are covered by the plan digest and stored
+with the instance. `portSelector` preserves the Service port name or number. Named ports follow
+numeric Service port changes; numeric selectors must still match exactly. Status validates live,
+UID-matching resources and available backing workloads. A missing, replaced or unreadable Service
+or backend, or a changed target port, returns `endpointFindings` and a null inference endpoint,
+without switching to another Service. This is not an HTTP reachability probe.
+
+Status retains the legacy `endpoints` URL list; unrecognized ports have purpose `unknown` in
+`endpointDetails`. Older instances discover from their own inventory, not unrelated namespace
+resources. Explicit endpoint declarations are no longer read. A workflow should only extract
+`inferenceEndpoint.url` and pass it to the benchmark, failing if it is absent:
+
+```sh
+llmd -o json status my-instance -n my-namespace > status.json
+INFERENCE_URL=$(jq -er '.inferenceEndpoint.url // empty' status.json) || exit 1
+```
+
+The benchmark must be able to reach the cluster-local Service URL. It must not fall back to the
+first legacy endpoint or select a metrics port.
+
 ---
 
 ## Server and Operations Scripts
